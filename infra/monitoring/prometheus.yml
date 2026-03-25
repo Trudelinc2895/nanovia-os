@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: kt-api
+    static_configs:
+      - targets: ["api:8010"]
+    metrics_path: /metrics
+
+  - job_name: kt-orchestrator
+    static_configs:
+      - targets: ["ai-orchestrator:8020"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: caddy
+    static_configs:
+      - targets: ["caddy:2019"]
+    metrics_path: /metrics
