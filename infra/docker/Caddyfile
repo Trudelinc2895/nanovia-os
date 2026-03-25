@@ -1,0 +1,36 @@
+# KT Monetization OS — Caddyfile
+# Auto-HTTPS via Let's Encrypt
+
+{env.DOMAIN}, www.{env.DOMAIN} {
+    redir https://{env.DOMAIN}{uri} permanent
+    reverse_proxy web:3000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options DENY
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+    encode gzip
+    log { output file /var/log/caddy/web.log }
+}
+
+api.{env.DOMAIN} {
+    reverse_proxy api:8010
+    rate_limit {remote_host} 100r/m
+    header X-Frame-Options DENY
+    log { output file /var/log/caddy/api.log }
+}
+
+admin.{env.DOMAIN} {
+    reverse_proxy admin:3020
+    header X-Frame-Options DENY
+    log { output file /var/log/caddy/admin.log }
+}
+
+monitor.{env.DOMAIN} {
+    reverse_proxy grafana:3030
+    basicauth {
+        kevin JDJhJDEwJHhleVpWaFhxZElRZ1lXa1lwa1FuVWVPbEZoVUlnSkJCQW9ISlN4emJ5VW0uc3pYVFhUU2dD
+    }
+}
