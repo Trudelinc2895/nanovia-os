@@ -1,7 +1,7 @@
 """backend/api/config.py — settings via env"""
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
-from typing import list as List
 
 class Settings(BaseSettings):
     APP_ENV: str = "development"
