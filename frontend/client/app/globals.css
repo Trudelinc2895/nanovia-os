@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --brand: #7c3aed; }
+html { scroll-behavior: smooth; }
+body { @apply bg-gray-950 text-white antialiased; }
