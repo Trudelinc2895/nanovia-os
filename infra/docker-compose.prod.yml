@@ -7,7 +7,12 @@ services:
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
-    ports: ["80:80", "443:443", "443:443/udp"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+      - "8020:8020"   # admin panel (HTTP fallback)
+      - "9091:9091"   # grafana  (HTTP fallback)
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}

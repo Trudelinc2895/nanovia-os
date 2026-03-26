@@ -1,0 +1,55 @@
+# KT Monetization OS — Caddyfile HTTPS (activate once tkverse.ca DNS resolves)
+# Replace Caddyfile with this file content once DNS propagates
+# Caddy will auto-obtain Let's Encrypt certs
+
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options DENY
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-XSS-Protection "1; mode=block"
+        -Server
+    }
+}
+
+tkverse.ca, www.tkverse.ca {
+    redir https://tkverse.ca{uri} 308
+    reverse_proxy web:3000
+    import security_headers
+    encode gzip
+    log {
+        output file /var/log/caddy/web.log
+        format json
+    }
+}
+
+api.tkverse.ca {
+    reverse_proxy api:8010
+    import security_headers
+    log {
+        output file /var/log/caddy/api.log
+        format json
+    }
+}
+
+admin.tkverse.ca {
+    reverse_proxy admin:3020
+    import security_headers
+    log {
+        output file /var/log/caddy/admin.log
+        format json
+    }
+}
+
+monitor.tkverse.ca {
+    reverse_proxy grafana:3030
+    import security_headers
+    basic_auth {
+        kevin JDJhJDEwJHhleVpWaFhxZElRZ1lXa1lwa1FuVWVPbEZoVUlnSkJCQW9ISlN4emJ5VW0uc3pYVFhUU2dD
+    }
+    log {
+        output file /var/log/caddy/monitor.log
+        format json
+    }
+}

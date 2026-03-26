@@ -1,34 +1,36 @@
 # KT Monetization OS — Caddyfile
-# Auto-HTTPS via Let's Encrypt
+# MODE: HTTP-only (IP fallback until DNS is configured)
+# Switch to Caddyfile.https once tkverse.ca DNS resolves
 
-tkverse.ca, www.tkverse.ca {
-    redir https://tkverse.ca{uri} permanent
-    reverse_proxy web:3000
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        X-Frame-Options DENY
-        X-Content-Type-Options nosniff
-        Referrer-Policy strict-origin-when-cross-origin
+:80 {
+    # Landing page
+    handle /api/* {
+        reverse_proxy api:8010
+        header X-Frame-Options DENY
+        header X-Content-Type-Options nosniff
     }
-    encode gzip
+
+    handle /health {
+        reverse_proxy api:8010
+    }
+
+    handle {
+        reverse_proxy web:3000
+        encode gzip
+        header X-Frame-Options DENY
+        header X-Content-Type-Options nosniff
+        header Referrer-Policy strict-origin-when-cross-origin
+    }
 }
 
-api.tkverse.ca {
-    reverse_proxy api:8010
-    header X-Frame-Options DENY
-    header X-Content-Type-Options nosniff
-}
-
-admin.tkverse.ca {
+# Admin on dedicated port (HTTP-only)
+:8020 {
     reverse_proxy admin:3020
-    header X-Frame-Options DENY
 }
 
-monitor.tkverse.ca {
+# Grafana on dedicated port (HTTP-only)
+:9091 {
     reverse_proxy grafana:3030
-    basic_auth {
-        kevin JDJhJDEwJHhleVpWaFhxZElRZ1lXa1lwa1FuVWVPbEZoVUlnSkJCQW9ISlN4emJ5VW0uc3pYVFhUU2dD
-    }
 }
 
 
