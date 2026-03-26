@@ -3,18 +3,35 @@
 # Switch to Caddyfile.https once tkverse.ca DNS resolves
 
 :80 {
-    # API — strip /api prefix before proxying
-    handle /api/* {
+    # API docs + openapi.json (strip /api prefix — FastAPI serves at /docs)
+    handle /api/docs* {
         uri strip_prefix /api
+        reverse_proxy api:8010
+    }
+    handle /api/openapi.json {
+        uri strip_prefix /api
+        reverse_proxy api:8010
+    }
+
+    # API health (strip /api prefix — served at /health)
+    handle /api/health {
+        uri strip_prefix /api
+        reverse_proxy api:8010
+    }
+
+    # API versioned routes — NO strip (FastAPI already has /api/v1/... prefix)
+    handle /api/v1/* {
         reverse_proxy api:8010
         header X-Frame-Options DENY
         header X-Content-Type-Options nosniff
     }
 
+    # Direct health (no prefix)
     handle /health {
         reverse_proxy api:8010
     }
 
+    # Landing page
     handle {
         reverse_proxy web:3000
         encode gzip
