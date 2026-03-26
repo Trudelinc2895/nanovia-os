@@ -1,5 +1,6 @@
 """
 backend/api/core/security.py — JWT + password hashing
+Using PyJWT (not python-jose) — cleaner, no PEM misdetection for HS256
 """
 from __future__ import annotations
 
@@ -7,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import DecodeError, ExpiredSignatureError, InvalidTokenError
 
 from api.config import settings
 
@@ -35,8 +37,7 @@ def _make_token(subject: str, expires_delta: timedelta, extra: dict[str, Any] | 
     }
     if extra:
         payload.update(extra)
-    # Pass key as bytes to prevent python-jose from misdetecting it as PEM
-    return jwt.encode(payload, settings.JWT_SECRET_KEY.encode("utf-8"), algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def create_access_token(user_id: str, extra: dict | None = None) -> str:
@@ -56,11 +57,13 @@ def create_refresh_token(user_id: str) -> str:
 
 
 def decode_token(token: str) -> dict[str, Any]:
-    """Raises JWTError on invalid/expired tokens."""
+    """Raises InvalidTokenError subclasses on invalid/expired tokens."""
     return jwt.decode(
         token,
-        settings.JWT_SECRET_KEY.encode("utf-8"),
+        settings.JWT_SECRET_KEY,
         algorithms=[settings.JWT_ALGORITHM],
         audience=settings.JWT_AUDIENCE,
         issuer=settings.JWT_ISSUER,
+        options={"require": ["exp", "iat", "sub"]},
     )
+

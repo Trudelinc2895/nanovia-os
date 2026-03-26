@@ -4,16 +4,15 @@ backend/api/routers/auth.py — Register / Login / Refresh / Me
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from jose import JWTError
+from fastapi import APIRouter, HTTPException, Request, status
+from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
-from api.core.deps import CurrentUser, DB, get_db
+from api.core.deps import CurrentUser, DB
 from api.core.security import (
     create_access_token,
     create_refresh_token,
@@ -21,7 +20,6 @@ from api.core.security import (
     hash_password,
     verify_password,
 )
-from api.database import get_db
 from api.models.audit import AuditLog
 from api.models.user import User
 from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserPublic
@@ -83,7 +81,7 @@ async def refresh(body: RefreshRequest, db: DB):
         if payload.get("type") != "refresh":
             raise ValueError
         user_id = payload["sub"]
-    except (JWTError, ValueError, KeyError):
+    except (InvalidTokenError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
