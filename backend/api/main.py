@@ -8,12 +8,14 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from dotenv import load_dotenv
 load_dotenv(".env")
 
 from api.config import settings
+from api.database import engine, Base
 from api.routers import auth, billing, modules, users, health
+# Import models so Base knows about them before create_all
+import api.models  # noqa: F401
 
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
@@ -25,6 +27,10 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     print(f"[startup] {settings.APP_NAME} v{settings.APP_VERSION} env={settings.APP_ENV}")
+    # Auto-create tables (idempotent — use Alembic for schema changes in prod)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("[startup] DB tables ready")
     yield
     print("[shutdown] clean exit")
 
@@ -41,8 +47,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET","POST","PUT","PATCH","DELETE"],
-    allow_headers=["Authorization","Content-Type","X-Request-ID"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
