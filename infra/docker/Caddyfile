@@ -3,8 +3,9 @@
 # Switch to Caddyfile.https once tkverse.ca DNS resolves
 
 :80 {
-    # Landing page
+    # API — strip /api prefix before proxying
     handle /api/* {
+        uri strip_prefix /api
         reverse_proxy api:8010
         header X-Frame-Options DENY
         header X-Content-Type-Options nosniff
@@ -28,9 +29,9 @@
     reverse_proxy admin:3020
 }
 
-# Grafana on dedicated port (HTTP-only)
+# Grafana on dedicated port — listens on 3000 internally
 :9091 {
-    reverse_proxy grafana:3030
+    reverse_proxy grafana:3000
 }
 
 
