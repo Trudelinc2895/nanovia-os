@@ -35,7 +35,8 @@ def _make_token(subject: str, expires_delta: timedelta, extra: dict[str, Any] | 
     }
     if extra:
         payload.update(extra)
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    # Pass key as bytes to prevent python-jose from misdetecting it as PEM
+    return jwt.encode(payload, settings.JWT_SECRET_KEY.encode("utf-8"), algorithm=settings.JWT_ALGORITHM)
 
 
 def create_access_token(user_id: str, extra: dict | None = None) -> str:
@@ -58,7 +59,7 @@ def decode_token(token: str) -> dict[str, Any]:
     """Raises JWTError on invalid/expired tokens."""
     return jwt.decode(
         token,
-        settings.JWT_SECRET_KEY,
+        settings.JWT_SECRET_KEY.encode("utf-8"),
         algorithms=[settings.JWT_ALGORITHM],
         audience=settings.JWT_AUDIENCE,
         issuer=settings.JWT_ISSUER,
