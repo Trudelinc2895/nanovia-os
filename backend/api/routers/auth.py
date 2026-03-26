@@ -100,3 +100,22 @@ async def refresh(body: RefreshRequest, db: DB):
 async def me(current_user: CurrentUser):
     return UserPublic.model_validate(current_user)
 
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(current_user: CurrentUser, db: DB):
+    """
+    Logout — invalidates device sessions for current user.
+    Access token expires naturally (JWT stateless).
+    Client MUST delete the refresh token from SecureStore/localStorage.
+    """
+    from sqlalchemy import update
+    from api.models.device_session import DeviceSession
+    # Deactivate all device sessions — forces re-auth on all devices
+    # In practice, track specific device_id from request header for single-device logout
+    await db.execute(
+        update(DeviceSession)
+        .where(DeviceSession.user_id == current_user.id)
+        .values(is_active=False)
+    )
+    await db.commit()
+
