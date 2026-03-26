@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
@@ -15,6 +15,14 @@ interface Message {
 }
 
 export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="text-purple-400 animate-pulse">Chargement...</div></div>}>
+      <ChatInner />
+    </Suspense>
+  );
+}
+
+function ChatInner() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
