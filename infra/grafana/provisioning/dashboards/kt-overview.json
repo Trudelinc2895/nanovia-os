@@ -1,260 +1,200 @@
 {
-  "id": null,
-  "uid": "kt-overview-001",
-  "title": "KT Monetization OS — Overview",
-  "schemaVersion": 38,
-  "version": 1,
-  "refresh": "30s",
-  "timezone": "browser",
-  "time": { "from": "now-1h", "to": "now" },
-  "tags": ["kt-os", "production"],
+  "__requires": [{"type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0"}],
+  "annotations": {"list": []},
+  "description": "KT Monetization OS — Production Overview",
+  "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
+  "id": null,
+  "links": [],
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "title": "🖥️ System",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]},
+          "unit": "percent",
+          "min": 0, "max": 100
+        }
+      },
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 1},
       "id": 1,
-      "type": "timeseries",
-      "title": "API Request Rate",
-      "description": "Requests per second across all endpoints (5m rate)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
-      "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(http_requests_total[5m])) by (handler)",
-          "legendFormat": "{{handler}}",
-          "refId": "A"
-        }
-      ]
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "CPU Usage",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %"}]
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]},
+          "unit": "percent",
+          "min": 0, "max": 100
+        }
+      },
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 1},
       "id": 2,
-      "type": "timeseries",
-      "title": "API Latency P95",
-      "description": "95th percentile request duration",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.5 },
-              { "color": "red", "value": 1.0 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler))",
-          "legendFormat": "p95 {{handler}}",
-          "refId": "A"
-        }
-      ]
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "RAM Usage",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "RAM %"}]
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]},
+          "unit": "percent",
+          "min": 0, "max": 100
+        }
+      },
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 1},
       "id": 3,
-      "type": "timeseries",
-      "title": "API Error Rate (5xx)",
-      "description": "Server-side error rate per second",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
-      "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "fixedColor": "#F87171", "mode": "fixed" },
-          "custom": { "lineWidth": 2, "fillOpacity": 20 },
-          "unit": "reqps",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 0.1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) by (handler)",
-          "legendFormat": "5xx {{handler}}",
-          "refId": "A"
-        }
-      ]
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "Disk Usage",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100", "legendFormat": "Disk %"}]
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"}},
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 1},
       "id": 4,
-      "type": "timeseries",
-      "title": "Active DB Connections",
-      "description": "Active PostgreSQL connections (requires postgres_exporter)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
-      "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 80 },
-              { "color": "red", "value": 150 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "pg_stat_activity_count{datname!~\"template.*|postgres\"}",
-          "legendFormat": "{{datname}} — {{state}}",
-          "refId": "A"
-        }
-      ]
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "colorMode": "background"},
+      "title": "Services DOWN",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(up == 0) or vector(0)", "legendFormat": "Down"}]
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "s"}},
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 1},
       "id": 5,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "colorMode": "background"},
+      "title": "VPS Uptime",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "node_time_seconds - node_boot_time_seconds", "legendFormat": "Uptime"}]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6},
+      "id": 101,
+      "title": "🚀 API Performance",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 7},
+      "id": 10,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}},
+      "title": "API Requests/sec",
       "type": "timeseries",
-      "title": "Redis Memory Usage",
-      "description": "Redis used memory in bytes (requires redis_exporter)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
-      "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "list", "placement": "bottom" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "fixedColor": "#A78BFA", "mode": "fixed" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
       "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_memory_used_bytes",
-          "legendFormat": "Used",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "redis_memory_max_bytes",
-          "legendFormat": "Max",
-          "refId": "B"
-        }
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(http_requests_total{job=\"kt-api\"}[5m])", "legendFormat": "{{ method }} {{ status }}"}
       ]
     },
     {
-      "id": 6,
-      "type": "piechart",
-      "title": "HTTP Status Code Distribution",
-      "description": "Breakdown of all responses by status code class (5m window)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
-      "options": {
-        "pieType": "donut",
-        "tooltip": { "mode": "single" },
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "values": ["value", "percent"]
-        }
-      },
-      "fieldConfig": {
-        "defaults": { "unit": "short" },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#34D399", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "3xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#60A5FA", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FBBF24", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#F87171", "mode": "fixed" } }] }
-        ]
-      },
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 7},
+      "id": 11,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}},
+      "title": "API Latency (p50/p95/p99)",
+      "type": "timeseries",
       "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(http_requests_total{status=~\"2..\"}[5m]))",
-          "legendFormat": "2xx",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(http_requests_total{status=~\"3..\"}[5m]))",
-          "legendFormat": "3xx",
-          "refId": "B"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(http_requests_total{status=~\"4..\"}[5m]))",
-          "legendFormat": "4xx",
-          "refId": "C"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(http_requests_total{status=~\"5..\"}[5m]))",
-          "legendFormat": "5xx",
-          "refId": "D"
-        }
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"kt-api\"}[5m]))", "legendFormat": "p50"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"kt-api\"}[5m]))", "legendFormat": "p95"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"kt-api\"}[5m]))", "legendFormat": "p99"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+      "id": 102,
+      "title": "🗄️ Database & Cache",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 15},
+      "id": 20,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list"}},
+      "title": "Postgres Connections",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "pg_stat_database_numbackends", "legendFormat": "{{ datname }}"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "bytes"}},
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 15},
+      "id": 21,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list"}},
+      "title": "Redis Memory",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "redis_memory_used_bytes", "legendFormat": "Used"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "redis_memory_max_bytes", "legendFormat": "Max"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 15},
+      "id": 22,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list"}},
+      "title": "Redis Keys & Commands/sec",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "redis_db_keys", "legendFormat": "Keys"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(redis_commands_processed_total[5m])", "legendFormat": "Cmd/s"}]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 21},
+      "id": 103,
+      "title": "🛡️ Security",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}, "unit": "short"}},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 22},
+      "id": 30,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "title": "fail2ban Bans (total)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(fail2ban_banned_total) or vector(0)", "legendFormat": "Bans"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}},
+      "gridPos": {"h": 5, "w": 18, "x": 6, "y": 22},
+      "id": 31,
+      "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "right"}},
+      "title": "HTTP 4xx/5xx Errors",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(http_requests_total{job=\"kt-api\",status=~\"4..\"}[5m])", "legendFormat": "4xx"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(http_requests_total{job=\"kt-api\",status=~\"5..\"}[5m])", "legendFormat": "5xx"}
       ]
     }
   ],
-  "templating": {
-    "list": [
-      {
-        "hide": 2,
-        "name": "DS_PROMETHEUS",
-        "type": "datasource",
-        "pluginId": "prometheus",
-        "current": {}
-      }
-    ]
-  },
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
-  }
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["kt", "production"],
+  "templating": {"list": []},
+  "time": {"from": "now-3h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "KT Monetization OS — Overview",
+  "uid": "kt-overview",
+  "version": 2
 }
