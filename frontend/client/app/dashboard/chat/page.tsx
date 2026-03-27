@@ -223,6 +223,10 @@ function getAgentIcon(agent: string): string {
     decision_engine: "🧠",
     offer_generator: "🎯",
     knowledge_weapon: "📚",
+    micro_saas: "⚙️",
+    digital_leverage: "📈",
+    reverse_engineering: "🔬",
+    execution_service: "⚡",
   };
   return icons[agent] ?? "⚡";
 }
