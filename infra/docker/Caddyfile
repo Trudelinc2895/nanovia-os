@@ -68,6 +68,7 @@
 api.{$DOMAIN} {
     import security_headers
     import block_attackers
+    import rate_limit_api
 
     reverse_proxy api:8010
 
@@ -84,19 +85,18 @@ admin.{$DOMAIN} {
     import security_headers
     import block_attackers
 
-    # IP whitelist — only allow known IPs (update as needed)
-    @blocked not remote_ip 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12
-    # Comment line above and uncomment below to restrict admin to specific IP:
+    # Allow admin access from anywhere (Grafana handles its own auth)
+    # To restrict to your IP: uncomment below and set YOUR_IP/32
     # @blocked not remote_ip YOUR_HOME_IP/32
+    # abort @blocked
 
     reverse_proxy admin:3020
 }
 
-# ── Monitoring ────────────────────────────────────────────────────────────────
+# ── Monitoring (Grafana) ──────────────────────────────────────────────────────
 monitor.{$DOMAIN} {
     import security_headers
 
-    # Basic auth for Grafana (Grafana has its own auth but double-layer)
     reverse_proxy grafana:3030
 }
 
@@ -104,4 +104,3 @@ monitor.{$DOMAIN} {
 http:// {
     redir https://{host}{uri} permanent
 }
-
