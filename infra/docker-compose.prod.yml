@@ -11,8 +11,8 @@ services:
       - "80:80"
       - "443:443"
       - "443:443/udp"
-      - "8020:8020"   # admin panel (HTTP fallback)
-      - "9091:9091"   # grafana  (HTTP fallback)
+      - "127.0.0.1:8020:8020"
+      - "127.0.0.1:9091:9091"
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}

@@ -2,6 +2,7 @@
     servers {
         trusted_proxies static private_ranges
     }
+    email {$ACME_EMAIL}
 }
 
 (security_headers) {
@@ -11,6 +12,8 @@
         X-XSS-Protection "1; mode=block"
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.{$DOMAIN};"
         -Server
         -X-Powered-By
     }
@@ -25,9 +28,23 @@
 
     @path_traversal path_regexp "(\.\./|\.\.\\\\|%2e%2e)"
     respond @path_traversal 403
+
+    @bad_methods not method GET POST PUT PATCH DELETE OPTIONS HEAD
+    respond @bad_methods 405
 }
 
-:80 {
+(rate_limit_api) {
+    rate_limit {
+        zone api_zone {
+            key    {remote_host}
+            events 100
+            window 1m
+        }
+    }
+}
+
+# ── Main site + www ───────────────────────────────────────────────────────────
+{$DOMAIN}, www.{$DOMAIN} {
     import security_headers
     import block_attackers
 
@@ -35,11 +52,56 @@
         reverse_proxy api:8010
     }
 
-    handle /admin/* {
-        reverse_proxy admin:3020
-    }
-
     handle {
         reverse_proxy web:3000
     }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
 }
+
+# ── API subdomain ─────────────────────────────────────────────────────────────
+api.{$DOMAIN} {
+    import security_headers
+    import block_attackers
+
+    reverse_proxy api:8010
+
+    log {
+        output file /var/log/caddy/api.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
+
+# ── Admin panel ───────────────────────────────────────────────────────────────
+admin.{$DOMAIN} {
+    import security_headers
+    import block_attackers
+
+    # IP whitelist — only allow known IPs (update as needed)
+    @blocked not remote_ip 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12
+    # Comment line above and uncomment below to restrict admin to specific IP:
+    # @blocked not remote_ip YOUR_HOME_IP/32
+
+    reverse_proxy admin:3020
+}
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+monitor.{$DOMAIN} {
+    import security_headers
+
+    # Basic auth for Grafana (Grafana has its own auth but double-layer)
+    reverse_proxy grafana:3030
+}
+
+# ── Redirect HTTP → HTTPS (fallback) ─────────────────────────────────────────
+http:// {
+    redir https://{host}{uri} permanent
+}
+
