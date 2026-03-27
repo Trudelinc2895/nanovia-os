@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     STRIPE_CHECKOUT_CANCEL_URL: str = "https://tkverse.ca/#pricing"
     STRIPE_PORTAL_RETURN_URL: str = "https://tkverse.ca/dashboard"
 
+    RESEND_API_KEY: str = ""
+
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_ADMIN_BASE_URL: str = "http://127.0.0.1:11435"

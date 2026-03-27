@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: KT Monetization OS
+    folder: KT OS
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards

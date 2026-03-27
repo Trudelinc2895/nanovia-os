@@ -6,5 +6,19 @@ from api.models.audit import AuditLog
 from api.models.webhook_event import WebhookEvent
 from api.models.device_session import DeviceSession
 from api.models.notification import UserNotification
+from api.models.ghost_agency import LeadProfile, OutreachCampaign, OutreachMessage
+from api.models.content_clone import ContentClone
 
-__all__ = ["User", "Subscription", "Conversation", "AuditLog", "WebhookEvent", "DeviceSession", "UserNotification"]
+__all__ = [
+    "User",
+    "Subscription",
+    "Conversation",
+    "AuditLog",
+    "WebhookEvent",
+    "DeviceSession",
+    "UserNotification",
+    "LeadProfile",
+    "OutreachCampaign",
+    "OutreachMessage",
+    "ContentClone",
+]

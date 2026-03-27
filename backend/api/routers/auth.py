@@ -3,6 +3,7 @@ backend/api/routers/auth.py — Register / Login / Refresh / Me
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Annotated
 
@@ -23,6 +24,7 @@ from api.core.security import (
 from api.models.audit import AuditLog
 from api.models.user import User
 from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserPublic
+from api.services.email_service import send_welcome_email
 
 router = APIRouter()
 
@@ -50,6 +52,7 @@ async def register(body: RegisterRequest, request: Request, db: DB):
     db.add(user)
     await db.flush()
     await _audit(db, "register", user_id=user.id, ip=request.client.host if request.client else None)
+    asyncio.create_task(send_welcome_email(user.email, user.full_name or user.email))
     return UserPublic.model_validate(user)
 
 

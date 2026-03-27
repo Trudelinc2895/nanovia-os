@@ -18,6 +18,7 @@ SECURITY:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -46,6 +47,7 @@ from api.services.billing_service import (
     mark_event,
     sync_subscription_from_stripe,
 )
+from api.services.email_service import send_billing_confirmation, send_payment_failed
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -238,6 +240,26 @@ async def stripe_webhook(
         ):
             await sync_subscription_from_stripe(data, db)
 
+            if event_type == "customer.subscription.created":
+                # Look up user email to send billing confirmation
+                try:
+                    from sqlalchemy import select as _select
+                    from api.models.user import User as _User
+                    stripe_customer_id = data.get("customer")
+                    result = await db.execute(
+                        _select(_User).where(_User.stripe_customer_id == stripe_customer_id)
+                    )
+                    user = result.scalar_one_or_none()
+                    if user:
+                        plan = data.get("metadata", {}).get("plan", "Pro")
+                        items = data.get("items", {}).get("data", [])
+                        amount = items[0]["price"]["unit_amount"] / 100 if items else 0.0
+                        asyncio.create_task(
+                            send_billing_confirmation(user.email, plan, amount)
+                        )
+                except Exception as _exc:
+                    logger.warning("[webhook] Could not queue billing email: %s", _exc)
+
         elif event_type == "customer.subscription.deleted":
             # Subscription cancelled — sync status, user.plan → free
             await sync_subscription_from_stripe(data, db)
@@ -257,6 +279,20 @@ async def stripe_webhook(
                 f"[webhook] Payment FAILED for customer {data.get('customer')} "
                 f"attempt={data.get('attempt_count')} invoice={data.get('id')}"
             )
+            try:
+                from sqlalchemy import select as _select
+                from api.models.user import User as _User
+                stripe_customer_id = data.get("customer")
+                result = await db.execute(
+                    _select(_User).where(_User.stripe_customer_id == stripe_customer_id)
+                )
+                user = result.scalar_one_or_none()
+                if user:
+                    asyncio.create_task(
+                        send_payment_failed(user.email, user.plan or "Pro")
+                    )
+            except Exception as _exc:
+                logger.warning("[webhook] Could not queue payment-failed email: %s", _exc)
 
         elif event_type == "customer.subscription.trial_will_end":
             logger.info(f"[webhook] Trial ending soon for customer {data.get('customer')}")

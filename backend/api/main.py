@@ -3,17 +3,23 @@ backend/api/main.py
 KT Monetization OS — FastAPI production entry point
 """
 from __future__ import annotations
-import time, uuid
+import base64 as _base64
+import json as _json
+import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+import redis.asyncio as _aioredis
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 load_dotenv(".env")
 
 from api.config import settings
 from api.database import engine, Base
-from api.routers import auth, billing, modules, users, health, mobile, orchestrate
+from api.routers import auth, billing, modules, users, health, mobile, orchestrate, ghost_agency, content_cloner
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -63,6 +69,74 @@ async def request_meta(request: Request, call_next) -> Response:
     return response
 
 
+# ─── Redis rate limiting ───────────────────────────────────────────────────────
+
+_redis_pool: _aioredis.Redis | None = None
+
+
+async def _get_redis() -> _aioredis.Redis:
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = _aioredis.from_url(
+            settings.REDIS_URL, encoding="utf-8", decode_responses=True
+        )
+    return _redis_pool
+
+
+def _extract_sub(authorization: str | None) -> str | None:
+    """Decode JWT payload (no signature check) to extract the sub claim."""
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            return None
+        token = authorization.split(" ", 1)[1]
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = _json.loads(_base64.urlsafe_b64decode(payload_b64))
+        return str(payload["sub"])
+    except Exception:
+        return None
+
+
+_RATE_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
+_AUTH_RATE_PATHS = {"/api/v1/auth/login", "/api/v1/auth/register"}
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next) -> Response:
+    path = request.url.path
+    if any(path.startswith(p) for p in _RATE_SKIP_PREFIXES):
+        return await call_next(request)
+
+    ip = (request.client.host if request.client else "unknown").replace(":", "_")
+
+    if path in _AUTH_RATE_PATHS:
+        key = f"ratelimit:ip:{ip}:auth"
+        limit = 10
+    else:
+        user_id = _extract_sub(request.headers.get("authorization"))
+        if user_id:
+            key = f"ratelimit:user:{user_id}"
+            limit = 100
+        else:
+            key = f"ratelimit:ip:{ip}"
+            limit = 30
+
+    try:
+        redis = await _get_redis()
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 60)
+        if count > limit:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Réessaie dans 60 secondes."},
+            )
+    except Exception:
+        pass  # Redis unavailable — fail open
+
+    return await call_next(request)
+
+
 if HAS_PROMETHEUS:
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -73,3 +147,7 @@ app.include_router(billing.router, prefix="/api/v1/billing", tags=["billing"])
 app.include_router(modules.router, prefix="/api/v1/modules", tags=["modules"])
 app.include_router(mobile.router, prefix="/api/v1", tags=["mobile"])
 app.include_router(orchestrate.router, prefix="/api/v1", tags=["AI orchestrator"])
+app.include_router(content_cloner.router, prefix="/api/v1", tags=["content cloner"])
+
+app.include_router(ghost_agency.router, prefix="/api/v1", tags=["ghost agency"])
+
