@@ -4,6 +4,16 @@
 !.env.example
 stripe/stripe_ids.json
 
+# Secrets — never commit env files with real values
+.env.prod
+.env.local
+.env.*.local
+infra/env/.env.prod
+infra/env/.env.dev
+*.pem
+*.key
+secrets/
+
 # Python
 __pycache__/
 *.py[cod]

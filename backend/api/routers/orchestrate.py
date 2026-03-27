@@ -17,6 +17,7 @@ from api.config import settings
 from api.core.deps import CurrentUser, DB
 from api.models.conversation import Conversation
 from api.services.billing_service import PLANS_CONFIG, get_active_subscription
+from api.services.usage_service import check_usage_limit, record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,11 +48,16 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
     - Persists conversation history
     - Enforces plan limits
     """
-    # Plan limit check
+    # Plan limit check — enforced via Redis monthly counter
     sub = await get_active_subscription(current_user.id, db)
     plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
     limit = plan_cfg["limits"]["ai_messages_per_month"]
-    # TODO: add actual message count check against DB when analytics module is built
+    allowed = await check_usage_limit(current_user.id, current_user.plan, db)
+    if not allowed:
+        raise HTTPException(
+            status_code=402,
+            detail="Limite mensuelle atteinte. Upgrade requis.",
+        )
 
     # Get or create conversation
     conversation_id = body.conversation_id
@@ -110,6 +116,11 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
     })
     conversation.messages = messages
     db.add(conversation)
+
+    # Record usage (rough word-count token estimate)
+    tokens_estimate = len(body.message.split()) + len(data["response"].split())
+    await record_usage(current_user.id, "orchestrator", tokens_estimate, db)
+
     await db.commit()
 
     return OrchestrateResponse(

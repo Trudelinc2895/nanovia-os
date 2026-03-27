@@ -5,6 +5,7 @@ KT Monetization OS — FastAPI production entry point
 from __future__ import annotations
 import base64 as _base64
 import json as _json
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -135,6 +136,19 @@ async def rate_limit(request: Request, call_next) -> Response:
         pass  # Redis unavailable — fail open
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next) -> Response:
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if os.getenv("APP_ENV") == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 if HAS_PROMETHEUS:

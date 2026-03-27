@@ -8,6 +8,7 @@ from api.models.device_session import DeviceSession
 from api.models.notification import UserNotification
 from api.models.ghost_agency import LeadProfile, OutreachCampaign, OutreachMessage
 from api.models.content_clone import ContentClone
+from api.models.usage_record import UsageRecord
 
 __all__ = [
     "User",
@@ -21,4 +22,5 @@ __all__ = [
     "OutreachCampaign",
     "OutreachMessage",
     "ContentClone",
+    "UsageRecord",
 ]

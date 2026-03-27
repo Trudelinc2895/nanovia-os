@@ -186,6 +186,13 @@ async def purchase_credits(
     return CreditPurchaseResponse(url=session.url, credits_to_add=credits_to_add)
 
 
+@router.get("/usage")
+async def get_usage(current_user: CurrentUser, db: DB):
+    """Get current month usage stats for the authenticated user."""
+    from api.services.usage_service import get_monthly_usage
+    return await get_monthly_usage(current_user.id, db)
+
+
 # ─── Stripe webhook — raw body, sig-verified, idempotent ─────────────────────
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
