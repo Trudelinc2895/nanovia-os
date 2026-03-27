@@ -1,19 +1,20 @@
 #!/bin/bash
 # ============================================================
-# KT Monetization OS — Recovery + HTTPS Deploy Script
+# KT Monetization OS — Recovery + HTTPS Deploy Script v3
 # Run ONCE after VPS recovery to restore everything
 # Usage: bash /opt/kt-monetization-os/infra/scripts/recover-and-deploy-https.sh
 # ============================================================
 set -e
 DOMAIN="tkverse.ca"
 APP_DIR="/opt/kt-monetization-os"
+ED25519_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEkMjUt0dkkQgMdlkBc9uhcJ60256s6Dgc6vCHHqoec9 kt-vps-2026"
 
 echo "══════════════════════════════════════════"
-echo "  KT Recovery + HTTPS Deploy"
+echo "  KT Recovery + HTTPS Deploy v3"
 echo "══════════════════════════════════════════"
 
 # ── STEP 1: Kill nftables permanently ───────────────────────
-echo "[1/8] Removing nftables..."
+echo "[1/9] Removing nftables..."
 systemctl stop nftables 2>/dev/null || true
 systemctl disable nftables 2>/dev/null || true
 nft flush ruleset 2>/dev/null || true
@@ -21,7 +22,7 @@ apt-get remove -y nftables 2>/dev/null | tail -1 || true
 echo "  OK nftables removed permanently"
 
 # ── STEP 2: Restore UFW + iptables ──────────────────────────
-echo "[2/8] Restoring firewall..."
+echo "[2/9] Restoring firewall..."
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 ufw --force enable
@@ -33,27 +34,31 @@ ufw deny 9091/tcp
 ufw reload
 echo "  OK UFW restored — SSH/HTTP/HTTPS open"
 
-# ── STEP 3: Restore security services ───────────────────────
-echo "[3/8] Restarting security services..."
+# ── STEP 3: Add SSH key for passwordless access ──────────────
+echo "[3/9] Adding ed25519 SSH key..."
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+grep -v "kt-vps-2026" /root/.ssh/authorized_keys > /tmp/ak 2>/dev/null || true
+mv /tmp/ak /root/.ssh/authorized_keys 2>/dev/null || true
+echo "$ED25519_KEY" >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+echo "  OK ed25519 key added ($(wc -l < /root/.ssh/authorized_keys) keys total)"
+
+# ── STEP 4: Restore security services ───────────────────────
+echo "[4/9] Restarting security services..."
 for svc in fail2ban crowdsec kt-spy-agent kt-watchdog; do
     systemctl start $svc 2>/dev/null && echo "  OK $svc" || echo "  SKIP $svc"
 done
 
-# ── STEP 4: Fix .env for domain-based URLs ──────────────────
-echo "[4/8] Updating .env for https://$DOMAIN..."
+# ── STEP 5: Fix .env for domain-based URLs ──────────────────
+echo "[5/9] Updating .env for https://$DOMAIN..."
 cd $APP_DIR
 
-if grep -q "NEXT_PUBLIC_API_URL" .env; then
-    sed -i "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=https://api.$DOMAIN|g" .env
-else
-    echo "NEXT_PUBLIC_API_URL=https://api.$DOMAIN" >> .env
-fi
-
-if grep -q "^DOMAIN=" .env; then
-    sed -i "s|^DOMAIN=.*|DOMAIN=$DOMAIN|g" .env
-else
-    echo "DOMAIN=$DOMAIN" >> .env
-fi
+for key in "NEXT_PUBLIC_API_URL=https://api.$DOMAIN" "DOMAIN=$DOMAIN" "ACME_EMAIL=admin@$DOMAIN"; do
+    k="${key%%=*}"
+    sed -i "/^$k=/d" .env
+    echo "$key" >> .env
+done
 
 if grep -q "ALLOWED_ORIGINS" .env; then
     sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://$DOMAIN,https://www.$DOMAIN,https://app.$DOMAIN,https://api.$DOMAIN|g" .env
@@ -61,56 +66,63 @@ else
     echo "ALLOWED_ORIGINS=https://$DOMAIN,https://www.$DOMAIN,https://app.$DOMAIN,https://api.$DOMAIN" >> .env
 fi
 
-sed -i '/ACME_EMAIL/d' .env
-echo "ACME_EMAIL=admin@$DOMAIN" >> .env
+# Add monitoring env vars if not present
+for var in "TELEGRAM_BOT_TOKEN=" "TELEGRAM_CHAT_ID=" "GRAFANA_ADMIN_USER=admin" "GRAFANA_ADMIN_PASSWORD="; do
+    k="${var%%=*}"
+    grep -q "^$k=" .env || echo "$var" >> .env
+done
+
 echo "  OK .env updated"
 
-# ── STEP 5: Pull latest code ─────────────────────────────────
-echo "[5/8] Pulling latest code from GitHub..."
+# ── STEP 6: Pull latest code ─────────────────────────────────
+echo "[6/9] Pulling latest code from GitHub..."
 cd $APP_DIR
 git pull origin main 2>&1 | tail -3
 chmod +x infra/scripts/*.sh 2>/dev/null || true
 echo "  OK Code updated ($(git rev-parse --short HEAD))"
 
-# ── STEP 6: Check DNS ────────────────────────────────────────
-echo "[6/8] Checking DNS for $DOMAIN..."
+# ── STEP 7: Check DNS ────────────────────────────────────────
+echo "[7/9] Checking DNS for $DOMAIN..."
 apt-get install -y dnsutils 2>/dev/null | tail -1 || true
 RESOLVED=$(dig +short $DOMAIN @8.8.8.8 2>/dev/null | tail -1)
 if [ "$RESOLVED" = "167.114.155.166" ]; then
     echo "  OK DNS: $DOMAIN -> $RESOLVED"
     DNS_OK=true
 else
-    echo "  WARN DNS not ready ($RESOLVED) — Caddy auto-issues cert once DNS propagates"
+    echo "  WARN DNS not ready ($RESOLVED) — add A records in OVH Manager"
     DNS_OK=false
 fi
 
-# ── STEP 7: Rebuild + restart all containers ────────────────
-echo "[7/8] Rebuilding and restarting containers..."
+# ── STEP 8: Rebuild + restart all containers ────────────────
+echo "[8/9] Rebuilding and restarting containers..."
 cd $APP_DIR
-docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --remove-orphans 2>&1 | tail -8
-sleep 8
+docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --remove-orphans 2>&1 | tail -10
+sleep 10
 echo "  OK Containers started"
 
-# ── STEP 8: Final status ─────────────────────────────────────
-echo "[8/8] Final status..."
+# ── STEP 9: Final status ─────────────────────────────────────
+echo "[9/9] Final status..."
 echo ""
 for svc in ufw fail2ban crowdsec kt-spy-agent kt-watchdog; do
     STATUS=$(systemctl is-active $svc 2>/dev/null || echo "inactive")
-    [ "$STATUS" = "active" ] && echo "  OK $svc" || echo "  ERR $svc"
+    [ "$STATUS" = "active" ] && echo "  OK $svc" || echo "  INFO $svc → $STATUS"
 done
 echo ""
-docker ps --format "  {{.Names}} {{.Status}}" 2>/dev/null
+docker ps --format "  {{.Names}} | {{.Status}}" 2>/dev/null
 echo ""
+echo "  SSH key: $(wc -l < /root/.ssh/authorized_keys) keys in authorized_keys"
 echo "  NEXT_PUBLIC_API_URL=$(grep NEXT_PUBLIC_API_URL .env | cut -d= -f2)"
 echo "  DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)"
 echo ""
 if [ "$DNS_OK" = true ]; then
-    echo "LIVE: https://$DOMAIN"
-    echo "LIVE: https://api.$DOMAIN"
-    echo "LIVE: https://admin.$DOMAIN"
-    echo "LIVE: https://monitor.$DOMAIN"
+    echo "══ LIVE ══════════════════════════════════"
+    echo "  https://$DOMAIN"
+    echo "  https://api.$DOMAIN"
+    echo "  https://admin.$DOMAIN"
+    echo "  https://monitor.$DOMAIN"
+    echo "  SSH: ssh -i ~/.ssh/id_ed25519 root@167.114.155.166"
 else
-    echo "Add A records in OVH DNS:"
+    echo "══ ADD DNS A RECORDS IN OVH MANAGER ═════"
     echo "  tkverse.ca         -> 167.114.155.166"
     echo "  api.tkverse.ca     -> 167.114.155.166"
     echo "  app.tkverse.ca     -> 167.114.155.166"
