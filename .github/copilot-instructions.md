@@ -65,3 +65,47 @@ modules/
 3. Gestion des erreurs toujours présente
 4. Types stricts (pas de `Any` Python, pas de `any` TypeScript)
 5. Commentaires UNIQUEMENT sur la logique non évidente
+
+## Sécurité — RÈGLES ABSOLUES (s appliquent à TOUS les projets)
+
+### Jamais faire
+- ❌ Committer `.env`, clés, tokens, passwords dans le code
+- ❌ `PasswordAuthentication yes` sur SSH
+- ❌ `ports:` sur containers internes (utiliser `expose:`)
+- ❌ `privileged: true` sur containers
+- ❌ Credentials hardcodés (même temporaires)
+- ❌ `origins=["*"]` en CORS production
+- ❌ `|| true` après des scans de sécurité critiques
+- ❌ Installer nftables sur ce VPS (conflit UFW)
+
+### Toujours faire
+- ✅ Secrets via `os.getenv()` ou variables GitHub Actions Secrets
+- ✅ Argon2id pour les passwords (jamais bcrypt seul, jamais MD5)
+- ✅ JWT access ≤ 30min, refresh ≤ 30 jours
+- ✅ Rate limiting sur tous les endpoints auth
+- ✅ Validation Pydantic stricte sur tous les inputs
+- ✅ `restart: unless-stopped` sur tous les containers
+- ✅ Exécuter `bash docs/SECURITY_CHECKLIST.md` avant tout deploy prod
+
+### Pour chaque nouveau projet
+1. Copier `.github/workflows/security.yml` → scanner auto SAST + secrets + containers
+2. Créer `.env.example` avec toutes les variables (valeurs vides)
+3. Ajouter `.env` dans `.gitignore` en premier commit
+4. Générer tous les secrets: `openssl rand -hex 32`
+5. Activer Dependabot via `.github/dependabot.yml`
+
+### Standards secrets (rotation obligatoire tous les 90 jours)
+- `SECRET_KEY` : `openssl rand -hex 32` (256 bits)
+- `POSTGRES_PASSWORD` : `openssl rand -base64 24 | tr -d '=+/'` (176+ bits)
+- `REDIS_PASSWORD` : `openssl rand -base64 24 | tr -d '=+/'`
+- Clés Stripe : renouveler dans Stripe Dashboard → Developers → API Keys
+
+### Commandes audit rapide (copier-coller)
+```bash
+# Sur VPS
+ssh root@167.114.155.166 "docker ps --format '{{.Names}} {{.Status}}' && curl -s localhost/health && fail2ban-client status sshd | grep banned"
+
+# Localement  
+trufflehog git file://. --only-verified
+bandit -r backend/ --severity-level high
+```
