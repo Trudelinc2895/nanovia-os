@@ -16,6 +16,9 @@ argon2-cffi==23.1.0
 httpx==0.28.1
 markupsafe==3.0.2
 prometheus-fastapi-instrumentator==7.0.0
+prometheus-client==0.21.1
 email-validator==2.2.0
 python-multipart==0.0.20
 fastapi-csrf-protect==0.3.4
+pyotp==2.9.0
+qrcode[pil]==8.0

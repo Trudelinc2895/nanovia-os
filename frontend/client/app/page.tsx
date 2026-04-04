@@ -55,6 +55,7 @@ const MODULES = [
 export default function Home() {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [yearly, setYearly] = useState(false);
 
   async function handleCheckout(planKey: string) {
     setErrorMsg("");
@@ -72,7 +73,7 @@ export default function Home() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ plan: planKey, interval: "monthly" }),
+        body: JSON.stringify({ plan: planKey, interval: yearly ? "yearly" : "monthly" }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -178,6 +179,21 @@ export default function Home() {
             <p className="text-gray-400">Commence gratis. Scale quand tu es prêt.</p>
           </div>
 
+          {/* Annual / Monthly toggle */}
+          <div className="flex items-center justify-center gap-4 mb-10">
+            <span className={`text-sm font-medium ${!yearly ? "text-white" : "text-gray-500"}`}>Mensuel</span>
+            <button
+              onClick={() => setYearly(!yearly)}
+              className={`relative w-12 h-6 rounded-full transition-colors ${yearly ? "bg-violet-600" : "bg-gray-700"}`}
+              aria-label="Toggle annual billing"
+            >
+              <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${yearly ? "translate-x-6" : ""}`} />
+            </button>
+            <span className={`text-sm font-medium ${yearly ? "text-white" : "text-gray-500"}`}>
+              Annuel <span className="text-green-400 font-bold">(-17%)</span>
+            </span>
+          </div>
+
           {errorMsg && (
             <div className="max-w-md mx-auto mb-8 bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 text-sm text-center">
               {errorMsg}
@@ -202,9 +218,17 @@ export default function Home() {
                 <h3 className="text-xl font-bold mb-1">{plan.name}</h3>
                 <p className={`text-sm mb-4 ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.desc}</p>
                 <div className="text-4xl font-extrabold mb-1">
-                  {plan.price}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.period}</span>
+                  {yearly && plan.yearlyPrice
+                    ? <>{plan.yearlyPrice.split("/")[0]}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>/an</span></>
+                    : <>{plan.price}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.period}</span></>
+                  }
                 </div>
-                {plan.yearlyPrice && (
+                {yearly && plan.yearlyDiscount && (
+                  <p className={`text-xs mb-5 ${plan.highlight ? "text-green-300" : "text-green-400"} font-semibold`}>
+                    ✓ {plan.yearlyDiscount} — économise 2 mois
+                  </p>
+                )}
+                {!yearly && plan.yearlyPrice && (
                   <p className={`text-xs mb-5 ${plan.highlight ? "text-violet-200" : "text-gray-500"}`}>
                     {plan.yearlyPrice} · <span className="text-green-400">{plan.yearlyDiscount}</span>
                   </p>

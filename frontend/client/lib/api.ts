@@ -77,9 +77,14 @@ async function refreshAccessToken(): Promise<boolean> {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface LoginResponse {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
+  // Standard auth (2FA not required or completed)
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  // 2FA challenge
+  requires_2fa?: boolean;
+  partial_token?: string;
 }
 
 export interface User {
@@ -91,6 +96,7 @@ export interface User {
   is_admin: boolean;
   is_verified: boolean;
   credits: number;
+  totp_enabled: boolean;
   created_at: string;
 }
 
@@ -99,9 +105,51 @@ export async function login(email: string, password: string): Promise<LoginRespo
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  setAccessToken(data.access_token);
-  localStorage.setItem("refresh_token", data.refresh_token);
+  // Only persist tokens if 2FA is NOT required
+  if (!data.requires_2fa && data.access_token) {
+    setAccessToken(data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token ?? "");
+  }
   return data;
+}
+
+export async function verify2FALogin(
+  partialToken: string,
+  totpCode: string
+): Promise<LoginResponse> {
+  const data = await apiFetch<LoginResponse>("/api/v1/auth/2fa/verify-login", {
+    method: "POST",
+    body: JSON.stringify({ partial_token: partialToken, totp_code: totpCode }),
+  });
+  if (data.access_token) {
+    setAccessToken(data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token ?? "");
+  }
+  return data;
+}
+
+// ── 2FA Management ─────────────────────────────────────────────────────────
+export interface TwoFASetupResponse {
+  provisioning_uri: string;
+  secret: string;
+}
+
+export async function setup2FA(): Promise<TwoFASetupResponse> {
+  return apiFetch<TwoFASetupResponse>("/api/v1/auth/2fa/setup", { method: "POST" });
+}
+
+export async function enable2FA(totpCode: string): Promise<void> {
+  await apiFetch<void>("/api/v1/auth/2fa/enable", {
+    method: "POST",
+    body: JSON.stringify({ totp_code: totpCode }),
+  });
+}
+
+export async function disable2FA(totpCode?: string, password?: string): Promise<void> {
+  await apiFetch<void>("/api/v1/auth/2fa/disable", {
+    method: "POST",
+    body: JSON.stringify({ totp_code: totpCode ?? null, password: password ?? null }),
+  });
 }
 
 export async function register(

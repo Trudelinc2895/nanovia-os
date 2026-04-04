@@ -16,6 +16,23 @@ from api.models.user import User
 
 logger = logging.getLogger(__name__)
 
+# ── Prometheus counter (graceful fallback if not installed) ───────────────────
+try:
+    from prometheus_client import Counter
+    _kt_credits_deducted = Counter(
+        "kt_credits_deducted_total",
+        "Overage credits deducted from user balance",
+        ["reason"],
+    )
+    _kt_credits_added = Counter(
+        "kt_credits_added_total",
+        "Credits added to user balance",
+        ["source"],
+    )
+    _HAS_PROM = True
+except Exception:
+    _HAS_PROM = False
+
 
 async def add_credits(
     user_id: uuid.UUID,
@@ -57,6 +74,8 @@ async def add_credits(
     db.add(entry)
     await db.commit()
     logger.info("[credits] +%d for user=%s balance=%d source=%s", amount, user_id, user.credits, source)
+    if _HAS_PROM:
+        _kt_credits_added.labels(source=source).inc(amount)
     return entry
 
 
@@ -84,6 +103,8 @@ async def deduct_credits(
     db.add(entry)
     await db.commit()
     logger.info("[credits] -%d for user=%s balance=%d source=%s", amount, user.id, user.credits, source)
+    if _HAS_PROM:
+        _kt_credits_deducted.labels(reason=source).inc(amount)
     return True
 
 

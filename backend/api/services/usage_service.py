@@ -24,6 +24,23 @@ from api.models.usage_record import UsageRecord
 # Cost per token in USD (gpt-4o-mini blended rate)
 _COST_PER_TOKEN = Decimal("0.000002")
 
+# ── Prometheus counters (graceful fallback if not installed) ──────────────────
+try:
+    from prometheus_client import Counter
+    _kt_messages_total = Counter(
+        "kt_usage_messages_total",
+        "Total AI messages processed",
+        ["plan", "module", "reason"],
+    )
+    _kt_overage_total = Counter(
+        "kt_overage_credits_deducted_total",
+        "Overage credits deducted for usage",
+        ["plan"],
+    )
+    _HAS_PROM = True
+except Exception:
+    _HAS_PROM = False
+
 _redis_pool: aioredis.Redis | None = None
 
 
@@ -84,6 +101,9 @@ async def record_usage(
             await redis.expire(key, 35 * 24 * 3600)
     except Exception:
         pass
+
+    if _HAS_PROM:
+        _kt_messages_total.labels(plan='unknown', module=module, reason='recorded').inc()
 
     return record
 
@@ -218,6 +238,8 @@ async def check_and_charge_usage(
             pass  # Never block on alert failure
 
     if count < limit:
+        if _HAS_PROM:
+            _kt_messages_total.labels(plan=plan, module="gate", reason="within_limit").inc()
         return True, "within_limit"
 
     # ── Over limit — attempt overage credit deduction ────────────────────────
@@ -225,8 +247,13 @@ async def check_and_charge_usage(
         from api.services.credit_service import deduct_credits
         deducted = await deduct_credits(user, source=f"overage:{usage_type}", db=db)
         if deducted:
+            if _HAS_PROM:
+                _kt_messages_total.labels(plan=plan, module="gate", reason="credit_deducted").inc()
+                _kt_overage_total.labels(plan=plan).inc()
             return True, "credit_deducted"
 
+    if _HAS_PROM:
+        _kt_messages_total.labels(plan=plan, module="gate", reason="limit_exceeded").inc()
     return False, "limit_exceeded"
 
 
