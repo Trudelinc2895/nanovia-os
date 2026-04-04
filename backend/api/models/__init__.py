@@ -10,6 +10,7 @@ from api.models.ghost_agency import LeadProfile, OutreachCampaign, OutreachMessa
 from api.models.content_clone import ContentClone
 from api.models.usage_record import UsageRecord
 from api.models.credit_ledger import CreditLedger
+from api.models.team_member import TeamMember
 
 __all__ = [
     "User",
@@ -25,4 +26,5 @@ __all__ = [
     "ContentClone",
     "UsageRecord",
     "CreditLedger",
+    "TeamMember",
 ]

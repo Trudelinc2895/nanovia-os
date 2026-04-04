@@ -23,6 +23,7 @@ from api.database import engine, Base
 from api.routers import auth, billing, modules, users, health, mobile, orchestrate, ghost_agency, content_cloner, analytics
 from api.routers import notifications
 from api.routers import admin
+from api.routers import team
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -178,3 +179,4 @@ app.include_router(ghost_agency.router, prefix="/api/v1", tags=["ghost agency"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+app.include_router(team.router, prefix="/api/v1", tags=["team"])

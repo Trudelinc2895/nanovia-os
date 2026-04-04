@@ -46,6 +46,7 @@ def _build_plans() -> dict[str, dict]:
                 "active_modules": 1,
                 "api_calls_per_day": 0,
                 "storage_gb": 1,
+                "team_seats_max": 1,
             },
             "features": ["1 AI module", "50 messages/month", "Community support"],
             "features_enabled": {
@@ -76,6 +77,7 @@ def _build_plans() -> dict[str, dict]:
                 "active_modules": 5,
                 "api_calls_per_day": 500,
                 "storage_gb": 10,
+                "team_seats_max": 5,
             },
             "features": ["5 AI modules", "1,000 messages/month", "Priority support", "API access", "Data export"],
             "features_enabled": {
@@ -106,6 +108,7 @@ def _build_plans() -> dict[str, dict]:
                 "active_modules": 10,
                 "api_calls_per_day": -1,
                 "storage_gb": 100,
+                "team_seats_max": 25,
             },
             "features": [
                 "All 10 AI modules",
