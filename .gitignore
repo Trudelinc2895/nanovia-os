@@ -14,6 +14,12 @@ infra/env/.env.dev
 *.key
 secrets/
 
+# Database — dev only, never commit (may contain real user data)
+*.db
+*.sqlite
+*.sqlite3
+dev.db
+
 # Python
 __pycache__/
 *.py[cod]

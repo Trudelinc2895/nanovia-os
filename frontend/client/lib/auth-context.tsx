@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         // Refresh to get access token
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://167.114.155.166"}/api/v1/auth/refresh`,
+          `${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/v1/auth/refresh`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },

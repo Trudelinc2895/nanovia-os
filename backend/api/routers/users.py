@@ -33,6 +33,7 @@ async def update_profile(body: UpdateProfileRequest, current_user: CurrentUser, 
     if body.full_name is not None:
         current_user.full_name = body.full_name
     db.add(current_user)
+    await db.commit()
     return UserPublic.model_validate(current_user)
 
 
@@ -42,4 +43,5 @@ async def change_password(body: ChangePasswordRequest, current_user: CurrentUser
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     current_user.password_hash = hash_password(body.new_password)
     db.add(current_user)
+    await db.commit()
 

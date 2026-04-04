@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 _RESEND_URL = "https://api.resend.com/emails"
 _FROM = "KT Monetization OS <noreply@tkverse.ca>"
-_DASHBOARD_URL = "http://167.114.155.166/dashboard"
-_UPDATE_PAYMENT_URL = "http://167.114.155.166/dashboard/billing"
+_DASHBOARD_URL = f"{settings.PUBLIC_WEB_URL}/dashboard"
+_UPDATE_PAYMENT_URL = f"{settings.PUBLIC_WEB_URL}/dashboard/billing"
 
 # ─── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -120,7 +120,27 @@ async def send_welcome_email(to: str, name: str) -> bool:
     return await _send(to, "Bienvenue sur KT Monetization OS ⚡", html)
 
 
-async def send_billing_confirmation(to: str, plan: str, amount: float) -> bool:
+async def send_password_reset_email(to: str, reset_url: str) -> bool:
+    """Send password reset email with a tokenized link."""
+    html = _wrap(f"""
+      <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
+        🔐 Réinitialisation de mot de passe
+      </h1>
+      <p style="margin:0 0 12px;">
+        Tu as demandé à réinitialiser le mot de passe de ton compte KT Monetization OS.
+      </p>
+      <p style="margin:0 0 28px;">
+        Clique sur le bouton ci-dessous. Ce lien expire dans <strong>1 heure</strong>.
+      </p>
+      {_btn(reset_url, "Réinitialiser mon mot de passe →")}
+      <p style="margin:28px 0 0;color:#9CA3AF;font-size:13px;">
+        Si tu n'as pas fait cette demande, ignore cet e-mail — ton compte est en sécurité.
+      </p>
+    """)
+    return await _send(to, "🔐 Réinitialisation de mot de passe", html)
+
+
+async def send_subscription_email(to: str, plan: str, amount: float) -> bool:
     """Send subscription activation confirmation email."""
     plan_display = plan.capitalize()
     amount_str = f"${amount:.2f} USD"
@@ -186,3 +206,7 @@ async def send_payment_failed(to: str, plan: str) -> bool:
       </p>
     """)
     return await _send(to, "⚠️ Échec de paiement — Action requise", html)
+
+
+# Alias for billing router compatibility
+send_billing_confirmation = send_subscription_email
