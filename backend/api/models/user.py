@@ -40,8 +40,14 @@ class User(Base):
     password_reset_token: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Email verification
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    email_verification_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Two-factor authentication (TOTP / RFC 6238)
-    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # String(512) to accommodate Fernet-encrypted base32 secret at rest
+    totp_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -80,6 +86,9 @@ class User(Base):
     team_members: Mapped[list[TeamMember]] = relationship(
         "TeamMember", back_populates="owner", lazy="noload",
         foreign_keys="TeamMember.owner_id",
+    )
+    modules: Mapped[list[UserModule]] = relationship(
+        "UserModule", back_populates="user", lazy="selectin",
     )
 
     def __repr__(self) -> str:

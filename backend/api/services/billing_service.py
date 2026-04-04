@@ -435,6 +435,50 @@ async def sync_subscription_from_stripe(
     return sub
 
 
+async def activate_user_module(
+    user_id: str,
+    module_slug: str,
+    stripe_subscription_id: str | None,
+    stripe_customer_id: str | None,
+    db: AsyncSession,
+) -> None:
+    """
+    Grant a user access to a specific module after successful payment.
+    Uses upsert pattern — safe to call multiple times (idempotent).
+    """
+    import uuid as _uuid
+    from api.models.user_module import UserModule
+    from sqlalchemy import select as _select
+
+    existing = await db.execute(
+        _select(UserModule).where(
+            UserModule.user_id == _uuid.UUID(str(user_id)),
+            UserModule.module_slug == module_slug,
+        )
+    )
+    row = existing.scalar_one_or_none()
+
+    if row:
+        # Update existing row — reactivate if cancelled
+        row.status = "active"
+        row.stripe_subscription_id = stripe_subscription_id or row.stripe_subscription_id
+        row.stripe_customer_id = stripe_customer_id or row.stripe_customer_id
+        row.expires_at = None
+        row.cancel_at_period_end = False
+    else:
+        row = UserModule(
+            user_id=_uuid.UUID(str(user_id)),
+            module_slug=module_slug,
+            stripe_subscription_id=stripe_subscription_id,
+            stripe_customer_id=stripe_customer_id,
+            status="active",
+        )
+        db.add(row)
+
+    await db.commit()
+    logger.info(f"[billing] Module '{module_slug}' activated for user {user_id}")
+
+
 async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -> None:
     """
     Handle checkout.session.completed:
@@ -484,6 +528,19 @@ async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -
             )
             logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
             await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
+
+    # Module à-la-carte purchase
+    checkout_type = metadata.get("type", "")
+    if checkout_type == "module":
+        module_slug = metadata.get("module")
+        if module_slug and user_id_str:
+            await activate_user_module(
+                user_id=user_id_str,
+                module_slug=module_slug,
+                stripe_subscription_id=session.get("subscription"),
+                stripe_customer_id=customer_id,
+                db=db,
+            )
 
     await db.commit()
 

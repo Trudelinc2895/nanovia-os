@@ -132,6 +132,7 @@ export async function verify2FALogin(
 export interface TwoFASetupResponse {
   provisioning_uri: string;
   secret: string;
+  qr_code_base64?: string | null;
 }
 
 export async function setup2FA(): Promise<TwoFASetupResponse> {
@@ -161,8 +162,8 @@ export async function register(
     method: "POST",
     body: JSON.stringify({ email, password, full_name }),
   });
-  setAccessToken(data.access_token);
-  localStorage.setItem("refresh_token", data.refresh_token);
+  setAccessToken(data.access_token ?? null);
+  localStorage.setItem("refresh_token", data.refresh_token ?? "");
   return data;
 }
 

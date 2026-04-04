@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     STRIPE_PRICE_MODULE_OFFER: str = ""
     STRIPE_PRICE_MODULE_EXECUTION: str = ""
 
+    # Security — TOTP encryption key (Fernet, 32-byte URL-safe base64)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # If empty, TOTP secrets are stored as plain base32 (dev-only acceptable)
+    TOTP_ENCRYPTION_KEY: str = ""
+
     # Resend email
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@tkverse.ca"

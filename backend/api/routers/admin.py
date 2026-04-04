@@ -252,3 +252,60 @@ async def admin_metrics(admin: AdminUser, db: DB):
         "subscriptions_by_status": subs,
         "estimated_mrr_usd": (plans.get("pro", 0) * 29) + (plans.get("business", 0) * 99),
     }
+
+
+@router.get("/module-access/{user_id}")
+async def get_module_access(user_id: str, admin: AdminUser, db: DB):
+    """List all module accesses for a user (plan-included + purchased)."""
+    from api.models.user_module import UserModule as _UM
+    from sqlalchemy import select as _sel
+    result = await db.execute(
+        _sel(_UM).where(_UM.user_id == uuid.UUID(user_id))
+    )
+    rows = result.scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "module_slug": r.module_slug,
+            "status": r.status,
+            "stripe_subscription_id": r.stripe_subscription_id,
+            "activated_at": r.activated_at.isoformat() if r.activated_at else None,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/module-access/grant")
+async def admin_grant_module(body: dict, admin: AdminUser, db: DB):
+    """Manually grant a module to a user. Body: {user_id, module_slug}"""
+    from api.services.billing_service import activate_user_module
+    user_id = body.get("user_id")
+    module_slug = body.get("module_slug")
+    if not user_id or not module_slug:
+        raise HTTPException(status_code=400, detail="user_id and module_slug required")
+    await activate_user_module(user_id, module_slug, None, None, db)
+    return {"granted": True, "user_id": user_id, "module_slug": module_slug}
+
+
+@router.post("/module-access/revoke")
+async def admin_revoke_module(body: dict, admin: AdminUser, db: DB):
+    """Manually revoke a module from a user. Body: {user_id, module_slug}"""
+    from api.models.user_module import UserModule as _UM
+    from sqlalchemy import select as _sel
+    user_id = body.get("user_id")
+    module_slug = body.get("module_slug")
+    if not user_id or not module_slug:
+        raise HTTPException(status_code=400, detail="user_id and module_slug required")
+    result = await db.execute(
+        _sel(_UM).where(
+            _UM.user_id == uuid.UUID(user_id),
+            _UM.module_slug == module_slug,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Module access not found")
+    row.status = "cancelled"
+    await db.commit()
+    return {"revoked": True, "user_id": user_id, "module_slug": module_slug}

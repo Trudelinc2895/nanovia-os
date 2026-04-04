@@ -114,6 +114,13 @@ _AUTH_RATE_PATHS = {
     "/api/v1/auth/reset-password",
 }
 
+# Stricter limits for 2FA — prevents TOTP brute force (6-digit = 1M combos)
+_STRICT_RATE_PATHS = {
+    "/api/v1/auth/2fa/verify-login",
+    "/api/v1/auth/2fa/enable",
+    "/api/v1/auth/2fa/disable",
+}
+
 
 @app.middleware("http")
 async def rate_limit(request: Request, call_next) -> Response:
@@ -123,7 +130,24 @@ async def rate_limit(request: Request, call_next) -> Response:
 
     ip = (request.client.host if request.client else "unknown").replace(":", "_")
 
-    if path in _AUTH_RATE_PATHS:
+    if path in _STRICT_RATE_PATHS:
+        # 5 attempts per 15 min per IP — brute force TOTP protection
+        key = f"ratelimit:ip:{ip}:2fa"
+        limit = 5
+        try:
+            redis = await _get_redis()
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, 900)  # 15 minutes
+            if count > limit:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Trop de tentatives. Réessaie dans 15 minutes."},
+                )
+        except Exception:
+            pass  # Redis unavailable — fail open
+        return await call_next(request)
+    elif path in _AUTH_RATE_PATHS:
         key = f"ratelimit:ip:{ip}:auth"
         limit = 10
     else:
@@ -180,3 +204,5 @@ app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(team.router, prefix="/api/v1", tags=["team"])
+from api.routers.contact import router as contact_router
+app.include_router(contact_router, prefix="/api/v1", tags=["contact"])

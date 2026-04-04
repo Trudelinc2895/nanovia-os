@@ -143,15 +143,18 @@ export default function SecurityPage() {
                 <p className="text-sm text-gray-300 mb-4">
                   <strong>1.</strong> Scanne ce QR code dans ton application d&apos;authentification :
                 </p>
-                {/* QR code via Google Charts API (no secret sent to 3rd party — URI only) */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`https://chart.googleapis.com/chart?cht=qr&chs=200x200&chl=${encodeURIComponent(setupData.provisioning_uri)}`}
-                  alt="QR Code 2FA"
-                  className="mx-auto rounded-lg border border-gray-700"
-                  width={200}
-                  height={200}
-                />
+                {setupData.qr_code_base64 ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`data:image/png;base64,${setupData.qr_code_base64}`}
+                    alt="QR Code 2FA"
+                    width={200}
+                    height={200}
+                    className="mx-auto rounded"
+                  />
+                ) : (
+                  <div className="text-sm text-gray-500">QR code unavailable — scan the secret manually</div>
+                )}
                 <div className="mt-4 text-center">
                   <button
                     type="button"

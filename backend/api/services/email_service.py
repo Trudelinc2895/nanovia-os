@@ -286,5 +286,25 @@ async def send_low_credits(to: str, name: str, balance: int) -> bool:
     return await _send(to, "Alerte credits — rechargement requis", html)
 
 
+async def send_verification_email(to_email: str, name: str, verify_url: str) -> None:
+    """Send email verification link after registration."""
+    subject = "Vérifie ton adresse email — TKVerse"
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+      <h2>Confirme ton email</h2>
+      <p>Salut {name or to_email},</p>
+      <p>Clique sur le bouton ci-dessous pour activer ton compte TKVerse :</p>
+      <a href="{verify_url}" style="display:inline-block;padding:12px 28px;background:#4F46E5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">
+        Vérifier mon email
+      </a>
+      <p style="margin-top:24px;color:#666;font-size:12px">
+        Ce lien expire dans 24 heures.<br>
+        Si tu n'as pas créé de compte, ignore ce message.
+      </p>
+    </div>
+    """
+    await _send(to_email, subject, html)
+
+
 # Alias for billing router compatibility
 send_billing_confirmation = send_subscription_email

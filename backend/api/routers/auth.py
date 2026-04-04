@@ -4,6 +4,8 @@ backend/api/routers/auth.py — Register / Login / Refresh / Me / Password Reset
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,11 +29,36 @@ from api.core.security import (
 from api.models.audit import AuditLog
 from api.models.user import User
 from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserPublic, ForgotPasswordRequest, ResetPasswordRequest, TwoFASetupResponse, TwoFAEnableRequest, TwoFADisableRequest, TwoFALoginRequest, LoginResponse
-from api.services.email_service import send_welcome_email, send_password_reset_email
+from api.services.email_service import send_welcome_email, send_password_reset_email, send_verification_email
 
 router = APIRouter()
 
 _ACCESS_EXPIRE_SEC = settings.JWT_ACCESS_EXPIRE_MINUTES * 60
+
+
+def _encrypt_secret(secret: str) -> str:
+    """Encrypt TOTP secret with Fernet if key configured, else return plain."""
+    if not settings.TOTP_ENCRYPTION_KEY:
+        return secret
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(settings.TOTP_ENCRYPTION_KEY.encode())
+        return f.encrypt(secret.encode()).decode()
+    except Exception:
+        return secret
+
+
+def _decrypt_secret(stored: str) -> str:
+    """Decrypt TOTP secret. Returns stored value as-is if not encrypted."""
+    if not settings.TOTP_ENCRYPTION_KEY:
+        return stored
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(settings.TOTP_ENCRYPTION_KEY.encode())
+        return f.decrypt(stored.encode()).decode()
+    except Exception:
+        # Not encrypted (legacy plain-text) — return as-is
+        return stored
 
 
 async def _audit(db: AsyncSession, action: str, user_id=None, ip=None, status="success", detail=None):
@@ -54,9 +81,17 @@ async def register(body: RegisterRequest, request: Request, db: DB):
     )
     db.add(user)
     await db.flush()
+
+    # Generate email verification token
+    verification_token = secrets.token_urlsafe(32)
+    user.email_verification_token = verification_token
+    user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+
     await _audit(db, "register", user_id=user.id, ip=request.client.host if request.client else None)
     await db.commit()
     asyncio.create_task(send_welcome_email(user.email, user.full_name or user.email))
+    verify_url = f"{_FRONTEND_URL}/verify-email?token={verification_token}"
+    asyncio.create_task(send_verification_email(user.email, user.full_name or user.email, verify_url))
     return TokenResponse(
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
         refresh_token=create_refresh_token(str(user.id)),
@@ -205,7 +240,7 @@ def _verify_totp(secret: str, code: str) -> bool:
     """Verify a 6-digit TOTP code. Accepts ±1 time window for clock drift."""
     try:
         import pyotp
-        totp = pyotp.TOTP(secret)
+        totp = pyotp.TOTP(_decrypt_secret(secret))
         return totp.verify(code, valid_window=1)
     except Exception:
         return False
@@ -225,7 +260,7 @@ async def setup_2fa(current_user: CurrentUser, db: DB):
         raise HTTPException(status_code=400, detail="2FA est déjà activé sur ce compte.")
 
     secret = pyotp.random_base32()
-    current_user.totp_secret = secret
+    current_user.totp_secret = _encrypt_secret(secret)
     db.add(current_user)
     await db.commit()
 
@@ -233,7 +268,19 @@ async def setup_2fa(current_user: CurrentUser, db: DB):
     issuer = "KT Monetization OS"
     uri = totp.provisioning_uri(name=current_user.email, issuer_name=issuer)
 
-    return TwoFASetupResponse(provisioning_uri=uri, secret=secret)
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=6, border=4)
+        qr.add_data(uri)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        qr_b64 = None
+
+    return TwoFASetupResponse(provisioning_uri=uri, secret=secret, qr_code_base64=qr_b64)
 
 
 @router.post("/2fa/enable", status_code=status.HTTP_204_NO_CONTENT)
@@ -318,4 +365,53 @@ async def verify_2fa_login(body: TwoFALoginRequest, request: Request, db: DB):
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
         refresh_token=create_refresh_token(str(user.id)),
         expires_in=_ACCESS_EXPIRE_SEC,
+    )
+
+
+# ─── Email Verification Endpoints ─────────────────────────────────────────────
+
+_VERIFY_EMAIL_EXPIRE_HOURS = 24
+
+
+@router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
+async def verify_email(token: str, db: DB):
+    """
+    Verify email address using the token sent on registration.
+    Token is valid for 24 hours.
+    """
+    result = await db.execute(
+        select(User).where(User.email_verification_token == token)
+    )
+    user = result.scalar_one_or_none()
+    if not user or not user.email_verification_expires:
+        raise HTTPException(status_code=400, detail="Lien de vérification invalide.")
+    if user.email_verification_expires < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Lien expiré. Demande un nouveau lien.")
+    if user.email_verified:
+        return  # Already verified — idempotent
+
+    user.email_verified = True
+    user.email_verification_token = None
+    user.email_verification_expires = None
+    await _audit(db, "email_verified", user_id=user.id)
+    await db.commit()
+
+
+@router.post("/resend-verification", status_code=status.HTTP_204_NO_CONTENT)
+async def resend_verification(current_user: CurrentUser, db: DB):
+    """
+    Resend the email verification link. Rate-limited by the global auth limit.
+    Requires authentication — user must be logged in.
+    """
+    if current_user.email_verified:
+        raise HTTPException(status_code=400, detail="Email déjà vérifié.")
+
+    verification_token = secrets.token_urlsafe(32)
+    current_user.email_verification_token = verification_token
+    current_user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=_VERIFY_EMAIL_EXPIRE_HOURS)
+    await db.commit()
+
+    verify_url = f"{_FRONTEND_URL}/verify-email?token={verification_token}"
+    asyncio.create_task(
+        send_verification_email(current_user.email, current_user.full_name or current_user.email, verify_url)
     )

@@ -11,6 +11,7 @@ from api.models.content_clone import ContentClone
 from api.models.usage_record import UsageRecord
 from api.models.credit_ledger import CreditLedger
 from api.models.team_member import TeamMember
+from api.models.user_module import UserModule
 
 __all__ = [
     "User",
@@ -27,4 +28,5 @@ __all__ = [
     "UsageRecord",
     "CreditLedger",
     "TeamMember",
+    "UserModule",
 ]

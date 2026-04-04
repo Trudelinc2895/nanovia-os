@@ -78,6 +78,7 @@ class TwoFASetupResponse(BaseModel):
     """Returned when user initiates 2FA setup. Show QR + secret ONCE."""
     provisioning_uri: str    # otpauth:// URI for QR code apps (Authenticator, Authy)
     secret: str              # Base32 secret — displayed once for manual entry / backup
+    qr_code_base64: str | None = None  # Server-generated QR PNG (base64) — avoids leaking URI to Google
 
 
 class TwoFAEnableRequest(BaseModel):

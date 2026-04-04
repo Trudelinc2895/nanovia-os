@@ -102,6 +102,62 @@ async def list_modules() -> list[ModulePublic]:
     ]
 
 
+@router.get("/my-modules")
+async def get_my_modules(current_user: CurrentUser, db: DB):
+    """
+    Return all modules the user has access to, with their source:
+    - "plan": included in current plan
+    - "purchased": individually purchased
+    - "locked": not available on this plan / not purchased
+    """
+    from api.models.user_module import UserModule as _UserModule
+    from sqlalchemy import select as _select
+
+    # Get individually purchased modules
+    result = await db.execute(
+        _select(_UserModule).where(
+            _UserModule.user_id == current_user.id,
+            _UserModule.status.in_(["active", "trialing"]),
+        )
+    )
+    purchased_slugs = {row.module_slug for row in result.scalars().all()}
+
+    # Define which modules are included in each plan
+    PLAN_INCLUDED_MODULES: dict[str, set[str]] = {
+        "free": {"operator"},
+        "pro": {"operator", "content", "decision", "knowledge", "leverage"},
+        "business": set(MODULES_CONFIG.keys()),  # all 10
+    }
+    plan_modules = PLAN_INCLUDED_MODULES.get(current_user.plan, set())
+
+    modules_status = []
+    for slug, cfg in MODULES_CONFIG.items():
+        if slug in purchased_slugs:
+            source = "purchased"
+            access = True
+        elif slug in plan_modules:
+            source = "plan"
+            access = True
+        else:
+            source = "locked"
+            access = False
+
+        modules_status.append({
+            "slug": slug,
+            "name": cfg["name"],
+            "price_usd": cfg["price_usd"],
+            "description": cfg["description"],
+            "access": access,
+            "source": source,
+            "stripe_price_id_available": bool(cfg.get("stripe_price_id")),
+        })
+
+    return {
+        "plan": current_user.plan,
+        "modules": modules_status,
+    }
+
+
 # ─── Authenticated billing endpoints ─────────────────────────────────────────
 
 @router.get("/subscription")

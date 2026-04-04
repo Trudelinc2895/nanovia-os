@@ -13,13 +13,14 @@ import {
   logout as apiLogout,
   register as apiRegister,
   setAccessToken,
+  type LoginResponse,
   type User,
 } from "@/lib/api";
 
 interface AuthState {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResponse | void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -71,10 +72,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    await apiLogin(email, password);
-    const me = await getMe();
-    setUser(me);
+  const login = useCallback(async (email: string, password: string): Promise<LoginResponse | void> => {
+    const result = await apiLogin(email, password);
+    // Only fetch user if login is fully complete (not a 2FA partial)
+    if (!result?.requires_2fa) {
+      const me = await getMe();
+      setUser(me);
+    }
+    return result;
   }, []);
 
   const register = useCallback(
