@@ -68,6 +68,20 @@ def require_plan(*plans: str):
     return _check
 
 
+def require_feature(feature: str):
+    """Dependency factory: require user's plan to have the given feature flag enabled."""
+    from api.services.billing_service import has_feature
+
+    async def _check(user: Annotated[User, Depends(get_current_active_user)]) -> User:
+        if not has_feature(user.plan, feature):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Fonctionnalité non disponible dans ton plan actuel. Upgrade requis.",
+            )
+        return user
+    return _check
+
+
 # Typed aliases for cleaner route signatures
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
 DB = Annotated[AsyncSession, Depends(get_db)]

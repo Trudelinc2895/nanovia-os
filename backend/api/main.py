@@ -20,7 +20,7 @@ load_dotenv(".env")
 
 from api.config import settings
 from api.database import engine, Base
-from api.routers import auth, billing, modules, users, health, mobile, orchestrate, ghost_agency, content_cloner
+from api.routers import auth, billing, modules, users, health, mobile, orchestrate, ghost_agency, content_cloner, analytics
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -45,8 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    docs_url="/docs",
+    docs_url="/docs" if settings.APP_ENV != "production" else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if settings.APP_ENV != "production" else None,
     lifespan=lifespan,
 )
 
@@ -99,7 +100,12 @@ def _extract_sub(authorization: str | None) -> str | None:
 
 
 _RATE_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
-_AUTH_RATE_PATHS = {"/api/v1/auth/login", "/api/v1/auth/register"}
+_AUTH_RATE_PATHS = {
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+}
 
 
 @app.middleware("http")
@@ -162,6 +168,5 @@ app.include_router(modules.router, prefix="/api/v1/modules", tags=["modules"])
 app.include_router(mobile.router, prefix="/api/v1", tags=["mobile"])
 app.include_router(orchestrate.router, prefix="/api/v1", tags=["AI orchestrator"])
 app.include_router(content_cloner.router, prefix="/api/v1", tags=["content cloner"])
-
 app.include_router(ghost_agency.router, prefix="/api/v1", tags=["ghost agency"])
-
+app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
