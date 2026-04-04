@@ -31,6 +31,11 @@ class UsageRecord(Base):
     cost_usd: Mapped[Decimal] = mapped_column(
         Numeric(10, 6), nullable=False, default=Decimal("0")
     )
+    # Cost in internal credits (1 credit = 1 overage message).
+    # 0 = within plan limit (no credit cost), 1 = 1 credit deducted for overage.
+    # Enables per-account margin analysis and cost attribution.
+    unit_cost_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -45,5 +50,5 @@ class UsageRecord(Base):
     def __repr__(self) -> str:
         return (
             f"<UsageRecord user={self.user_id} module={self.module} "
-            f"tokens={self.tokens_used} cost={self.cost_usd}>"
+            f"tokens={self.tokens_used} cost={self.cost_usd} credits={self.unit_cost_credits}>"
         )
