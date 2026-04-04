@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { createCheckoutSession, getAccessToken } from "@/lib/api";
 
 const PLANS = [
   {
@@ -65,29 +66,21 @@ export default function Home() {
     setErrorMsg("");
     setLoadingPlan(planKey);
     try {
-      const token = typeof window !== "undefined" ? sessionStorage.getItem("access_token") : null;
-      if (!token) {
-        // Not logged in — redirect to register with plan context
+      // Token lives in memory (api.ts _accessToken), not sessionStorage
+      if (!getAccessToken()) {
         window.location.href = `/register?plan=${planKey}`;
         return;
       }
-      const res = await fetch("/api/v1/billing/checkout-session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ plan: planKey, interval: yearly ? "yearly" : "monthly" }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setErrorMsg(data.detail ?? "Erreur lors du paiement. Réessaie.");
-        return;
-      }
-      const data = await res.json();
+      const interval: "monthly" | "yearly" = yearly ? "yearly" : "monthly";
+      const data = await createCheckoutSession(planKey, interval);
       if (data.url) window.location.href = data.url;
-    } catch {
-      setErrorMsg("Erreur réseau. Vérifie ta connexion et réessaie.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erreur lors du paiement.";
+      setErrorMsg(
+        msg.includes("no configured price")
+          ? "Paiement temporairement indisponible — contacte le support."
+          : msg || "Erreur lors du paiement. Réessaie."
+      );
     } finally {
       setLoadingPlan(null);
     }

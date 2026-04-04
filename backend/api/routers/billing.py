@@ -241,10 +241,14 @@ async def create_checkout_session(body: CheckoutRequest, current_user: CurrentUs
     price_key = f"stripe_price_{body.interval}"
     price_id: str | None = plan_cfg.get(price_key)
     if not price_id:
+        logger.error(
+            f"[billing] Missing Stripe price ID for plan={body.plan} interval={body.interval}. "
+            "Run stripe/setup_stripe.py and set STRIPE_PRICE_* in .env"
+        )
         raise HTTPException(
-            status_code=400,
-            detail=f"Plan '{body.plan}' has no configured price for interval '{body.interval}'. "
-                   "Contact support.",
+            status_code=503,
+            detail=f"Paiement temporairement indisponible pour le plan '{body.plan}' ({body.interval}). "
+                   "Contacte le support.",
         )
 
     customer_id = await get_or_create_stripe_customer(current_user, db)

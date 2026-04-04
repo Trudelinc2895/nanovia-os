@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8010";
 
 const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "on" },
@@ -30,6 +31,15 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   // output: "standalone", // enable for Docker deploy
+  async rewrites() {
+    // Proxy /api/v1/* to FastAPI backend (dev + prod when no reverse proxy)
+    return [
+      {
+        source: "/api/v1/:path*",
+        destination: `${BACKEND_URL}/api/v1/:path*`,
+      },
+    ];
+  },
   async headers() {
     return [
       {
