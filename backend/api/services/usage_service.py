@@ -20,11 +20,10 @@ from api.models.usage_record import UsageRecord
 # Cost per token in USD (gpt-4o-mini blended rate)
 _COST_PER_TOKEN = Decimal("0.000002")
 
-# Message limits per plan. -1 = unlimited.
+# Message limits per plan. -1 = unlimited. Must match PLANS_CONFIG in billing_service.
 _PLAN_LIMITS: dict[str, int] = {
     "free": 50,
-    "starter": 500,
-    "pro": 5000,
+    "pro": 1000,
     "business": -1,
 }
 
@@ -143,3 +142,109 @@ async def check_usage_limit(
     except Exception:
         # Redis unavailable — fail open to avoid blocking users
         return True
+
+
+async def check_and_charge_usage(user: object, db: AsyncSession) -> tuple[bool, str]:
+    """
+    Full usage gate with overage credit fallback.
+
+    Returns (allowed: bool, reason: str):
+      "within_limit"     — under plan quota, proceed normally
+      "unlimited"        — business plan, no cap
+      "credit_deducted"  — over quota but 1 credit was deducted (overage billing)
+      "limit_exceeded"   — over quota, no credits or overage not enabled
+      "redis_unavailable"— Redis down, fail-open
+
+    Overage logic (revenue expansion):
+      When a user exceeds their monthly limit AND their plan has overage_allowed=True
+      AND they have at least 1 credit, 1 credit is atomically deducted instead of
+      blocking the request. Each credit = 1 overage message.
+    """
+    from api.services.billing_service import has_feature  # avoid circular import
+
+    plan: str = getattr(user, "plan", "free")
+    user_id: uuid.UUID = getattr(user, "id")
+    limit = _PLAN_LIMITS.get(plan, _PLAN_LIMITS["free"])
+
+    if limit == -1:
+        return True, "unlimited"
+
+    try:
+        redis = await _get_redis()
+        raw = await redis.get(_month_key(user_id))
+        count = int(raw) if raw else 0
+    except Exception:
+        return True, "redis_unavailable"
+
+    if count < limit:
+        return True, "within_limit"
+
+    # Over limit — attempt overage credit deduction
+    if has_feature(plan, "overage_allowed") and (getattr(user, "credits", 0) or 0) > 0:
+        user.credits -= 1  # type: ignore[attr-defined]
+        db.add(user)
+        await db.commit()
+        return True, "credit_deducted"
+
+    return False, "limit_exceeded"
+
+
+async def get_usage_history(
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    days: int = 30,
+    limit: int = 200,
+) -> list[dict]:
+    """
+    Return per-record usage history for the last N days.
+    Used by analytics dashboard (data lock-in feature).
+    """
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.execute(
+        select(UsageRecord)
+        .where(UsageRecord.user_id == user_id, UsageRecord.created_at >= cutoff)
+        .order_by(UsageRecord.created_at.desc())
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "module": r.module,
+            "tokens_used": r.tokens_used,
+            "cost_usd": float(r.cost_usd),
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in records
+    ]
+
+
+async def get_module_breakdown(user_id: uuid.UUID, db: AsyncSession, days: int = 30) -> list[dict]:
+    """
+    Return usage grouped by module for the last N days.
+    Powers the analytics pie chart.
+    """
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.execute(
+        select(
+            UsageRecord.module,
+            func.count(UsageRecord.id).label("message_count"),
+            func.coalesce(func.sum(UsageRecord.tokens_used), 0).label("tokens_total"),
+            func.coalesce(func.sum(UsageRecord.cost_usd), Decimal("0")).label("cost_total"),
+        )
+        .where(UsageRecord.user_id == user_id, UsageRecord.created_at >= cutoff)
+        .group_by(UsageRecord.module)
+        .order_by(func.count(UsageRecord.id).desc())
+    )
+    rows = result.all()
+    return [
+        {
+            "module": r.module,
+            "message_count": r.message_count,
+            "tokens_total": int(r.tokens_total),
+            "cost_usd_total": float(r.cost_total),
+        }
+        for r in rows
+    ]

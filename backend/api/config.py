@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     STRIPE_PRICE_BUSINESS_YEARLY_ID: str = ""
     STRIPE_CREDIT_PRICE_ID: str = ""          # one-time payment price for credit packs
     STRIPE_CREDIT_PACK_SIZE: int = 100         # credits per pack
+    # Add-on price IDs (configure in Stripe dashboard → Products)
+    STRIPE_PRICE_ADDON_API_PACK: str = ""      # one-time, 500 API calls
+    STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""  # one-time, 10 GB storage
+    STRIPE_PRICE_CREDITS_PACK: str = ""        # one-time, 50 credits ($4)
     STRIPE_CHECKOUT_SUCCESS_URL: str = "https://tkverse.ca/dashboard?checkout=success"
     STRIPE_CHECKOUT_CANCEL_URL: str = "https://tkverse.ca/#pricing"
     STRIPE_PORTAL_RETURN_URL: str = "https://tkverse.ca/dashboard"

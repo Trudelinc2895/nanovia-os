@@ -24,6 +24,7 @@ from api.schemas.content_cloner import (
     CloneFormats,
 )
 from api.services.content_cloner_service import clone_content
+from api.services.usage_service import check_and_charge_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,6 +38,22 @@ async def create_clone(body: CloneRequest, current_user: CurrentUser, db: DB):
     Transform original_content into 5 platform-optimised formats via OpenAI.
     Persists the result and returns it immediately.
     """
+    # Enforce feature gate: Content Cloner requires api_access (pro+)
+    from api.services.billing_service import has_feature
+    if not has_feature(current_user.plan, "api_access"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Content Cloner nécessite un plan Pro ou supérieur.",
+        )
+
+    # Enforce usage quota (overage → credit deduction)
+    within_limit, _ = await check_and_charge_usage(current_user, db)
+    if not within_limit:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
+        )
+
     formats = await clone_content(
         original=body.original_content,
         niche=body.niche,

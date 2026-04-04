@@ -17,7 +17,7 @@ from api.config import settings
 from api.core.deps import CurrentUser, DB
 from api.models.conversation import Conversation
 from api.services.billing_service import PLANS_CONFIG, get_active_subscription
-from api.services.usage_service import check_usage_limit, record_usage
+from api.services.usage_service import check_and_charge_usage, record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,15 +48,20 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
     - Persists conversation history
     - Enforces plan limits
     """
-    # Plan limit check — enforced via Redis monthly counter
-    sub = await get_active_subscription(current_user.id, db)
-    plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
-    limit = plan_cfg["limits"]["ai_messages_per_month"]
-    allowed = await check_usage_limit(current_user.id, current_user.plan, db)
+    # Enforce plan usage quota (overage → credit deduction)
+    allowed, reason = await check_and_charge_usage(current_user, db)
     if not allowed:
         raise HTTPException(
-            status_code=402,
-            detail="Limite mensuelle atteinte. Upgrade requis.",
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
+        )
+
+    # Feature gate: orchestrator requires automation feature (pro+)
+    from api.services.billing_service import has_feature
+    if not has_feature(current_user.plan, "automation"):
+        raise HTTPException(
+            status_code=403,
+            detail="L'orchestrateur IA nécessite un plan Pro ou supérieur.",
         )
 
     # Get or create conversation

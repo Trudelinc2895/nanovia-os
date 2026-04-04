@@ -26,6 +26,7 @@ from api.schemas.ghost_agency import (
     OutreachMessageOut,
 )
 from api.services.ghost_agency_service import generate_outreach_message
+from api.services.usage_service import check_and_charge_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -36,6 +37,22 @@ router = APIRouter()
 @router.post("/ghost-agency/generate", response_model=GenerateOutreachResponse, status_code=status.HTTP_201_CREATED)
 async def generate_outreach(body: GenerateOutreachRequest, current_user: CurrentUser, db: DB):
     """Generate a personalized outreach message, save lead profile + message to DB."""
+
+    # Enforce feature gate: Ghost Agency requires pro or higher
+    from api.services.billing_service import has_feature
+    if not has_feature(current_user.plan, "automation"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Ghost Agency nécessite un plan Pro ou supérieur.",
+        )
+
+    # Enforce usage quota (overage → credit deduction)
+    within_limit, _ = await check_and_charge_usage(current_user, db)
+    if not within_limit:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
+        )
 
     # Verify campaign belongs to current user
     result = await db.execute(

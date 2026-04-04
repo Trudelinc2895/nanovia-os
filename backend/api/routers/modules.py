@@ -23,6 +23,7 @@ from api.schemas.modules import (
     OperatorChatResponse,
     ChatMessage,
 )
+from api.services.usage_service import check_and_charge_usage, record_usage
 
 router = APIRouter()
 
@@ -96,6 +97,14 @@ async def _call_ai(messages: list[dict], model: str = "gpt-4o-mini") -> tuple[st
 async def operator_chat(body: OperatorChatRequest, current_user: CurrentUser, db: DB):
     """Send a message to the AI Personal Operator. Maintains conversation history."""
 
+    # Enforce plan usage quota before any AI call (overage → credit deduction)
+    allowed, reason = await check_and_charge_usage(current_user, db)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
+        )
+
     # Load or create conversation
     conv: Conversation | None = None
     if body.conversation_id:
@@ -149,6 +158,7 @@ async def operator_chat(body: OperatorChatRequest, current_user: CurrentUser, db
         conv.title = body.message[:80] + ("…" if len(body.message) > 80 else "")
 
     await db.flush()
+    await record_usage(current_user.id, "operator", tokens, db)
 
     return OperatorChatResponse(
         conversation_id=conv.id,

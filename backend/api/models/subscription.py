@@ -22,6 +22,7 @@ class Subscription(Base):
     )
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     stripe_price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    billing_interval: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "monthly" | "yearly"
     plan: Mapped[str] = mapped_column(String(50), nullable=False, default="free")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="inactive")
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
