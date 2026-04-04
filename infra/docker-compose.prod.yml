@@ -13,12 +13,14 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # CADDYFILE defaults to Caddyfile (HTTPS+domain).
+      # Set CADDYFILE=./docker/Caddyfile.ip in .env for IP-only / no domain.
+      - ${CADDYFILE:-./docker/Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      DOMAIN: ${DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL}
+      DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
     depends_on: [web, admin, api]
     networks: [kt-net]
 

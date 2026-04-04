@@ -1,0 +1,44 @@
+# Caddyfile.ip — HTTP-only, IP mode (no domain, no TLS)
+# Use this when DNS is not configured yet.
+# Switch to Caddyfile once domain points to this VPS.
+
+{
+    auto_https off
+    servers {
+        trusted_proxies static private_ranges
+    }
+}
+
+(security_headers) {
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+        -X-Powered-By
+    }
+}
+
+# ── Port 80 — main entry point ────────────────────────────────────────────────
+:80 {
+    import security_headers
+
+    # API routes → FastAPI
+    handle /api/* {
+        reverse_proxy api:8010
+    }
+
+    # All other traffic → Next.js frontend
+    handle {
+        reverse_proxy web:3000
+    }
+
+    log {
+        output stdout
+    }
+}
+
+# ── Port 8010 — direct API access (useful for testing with curl) ──────────────
+:8010 {
+    reverse_proxy api:8010
+}
