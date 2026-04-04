@@ -1,0 +1,121 @@
+KT Monetization OS — Project Tree
+Root: C:\Users\Alienware\kt-monetization-os\
+Generated: 2026-04-02 | Excludes: node_modules, .git, __pycache__, .next, .venv, dist, build
+
+kt-monetization-os/
+├── .env                          ← Variables d'env actives (NE PAS COMMITTER)
+├── .env.example                  ← Template des variables
+├── MASTER_TRACE.md               ← Source de vérité du projet
+├── SECURITY.md
+│
+├── backend/
+│   ├── requirements.txt          ← Dépendances Python
+│   ├── __init__.py
+│   └── api/
+│       ├── main.py               ← ENTRY POINT FastAPI (:8010)
+│       ├── config.py             ← Settings pydantic-settings
+│       ├── database.py           ← SQLAlchemy async engine
+│       ├── core/
+│       │   ├── security.py       ← JWT + Argon2id + bcrypt
+│       │   └── deps.py           ← DI : CurrentUser, DB session
+│       ├── models/               ← ORM SQLAlchemy (11 tables)
+│       │   ├── user.py
+│       │   ├── subscription.py
+│       │   ├── conversation.py
+│       │   ├── ghost_agency.py
+│       │   ├── content_clone.py
+│       │   ├── usage_record.py
+│       │   ├── audit.py
+│       │   ├── notification.py
+│       │   ├── device_session.py
+│       │   └── webhook_event.py
+│       ├── routers/              ← Endpoints API
+│       │   ├── auth.py           ← /api/v1/auth/*
+│       │   ├── billing.py        ← /api/v1/billing/* (Stripe)
+│       │   ├── users.py          ← /api/v1/users/*
+│       │   ├── modules.py        ← /api/v1/modules/* (Module 1 AI)
+│       │   ├── ghost_agency.py   ← /api/v1/ghost-agency/*
+│       │   ├── content_cloner.py ← /api/v1/content-cloner/*
+│       │   ├── orchestrate.py    ← /api/v1/orchestrate/*
+│       │   ├── mobile.py         ← /api/v1/mobile/*
+│       │   └── health.py         ← /health, /ready
+│       ├── schemas/              ← Pydantic request/response
+│       │   ├── auth.py
+│       │   ├── billing.py
+│       │   ├── ghost_agency.py
+│       │   ├── content_cloner.py
+│       │   └── modules.py
+│       └── services/             ← Business logic
+│           ├── billing_service.py    ← Plans, Stripe sync, entitlements
+│           ├── ghost_agency_service.py
+│           ├── content_cloner_service.py
+│           ├── email_service.py      ← Resend API / SMTP fallback
+│           └── usage_service.py      ← Metering tokens/mois
+│
+├── frontend/
+│   ├── client/                   ← Web app publique Next.js 15 (:3000)
+│   │   ├── app/
+│   │   │   ├── page.tsx          ← Landing page
+│   │   │   ├── layout.tsx
+│   │   │   ├── dashboard/        ← Dashboard utilisateur
+│   │   │   ├── login/
+│   │   │   └── register/
+│   │   ├── components/
+│   │   ├── lib/
+│   │   │   ├── api.ts            ← Client API fetch
+│   │   │   └── auth-context.tsx  ← Auth React context
+│   │   ├── package.json
+│   │   └── .env.local
+│   ├── admin/                    ← Admin Next.js (:3020)
+│   └── mobile/                   ← React Native (Expo)
+│
+├── infra/
+│   ├── docker-compose.prod.yml   ← Stack prod complète
+│   ├── docker/
+│   │   ├── Caddyfile             ← Reverse proxy TLS
+│   │   ├── api.Dockerfile
+│   │   ├── web.Dockerfile
+│   │   └── admin.Dockerfile
+│   └── monitoring/
+│       └── prometheus.yml
+│
+├── modules/                      ← 10 modules business (squelettes)
+│   ├── module-1-ai-operator/
+│   ├── module-2-content-cloner/
+│   ├── module-3-micro-saas/
+│   ├── module-4-ghost-agency/    ← PRIORITAIRE (500-5000$/mois)
+│   ├── module-5-ai-decision/
+│   ├── module-6-knowledge-weapon/
+│   ├── module-7-digital-leverage/
+│   ├── module-8-reverse-engineering/
+│   ├── module-9-offer-generator/
+│   └── module-10-execution-service/ ← PRIORITAIRE (1000-5000$/mois)
+│
+├── scripts/
+│   ├── bootstrap_vps.sh          ← Setup VPS from scratch
+│   ├── deploy_vps.py
+│   ├── check_health.py
+│   └── system_check.py
+│
+├── stripe/
+│   ├── setup_stripe.py           ← Bootstrap Stripe (produits/prix/webhook)
+│   └── stripe_ids.json           ← IDs Stripe générés (TEST)
+│
+├── database/
+│   ├── schema.sql                ← Référence PostgreSQL
+│   └── migrations/               ← Alembic (à compléter)
+│
+├── shared/
+│   ├── prompts/
+│   │   └── module1_system_prompt.md
+│   ├── types/index.ts
+│   └── constants/index.ts
+│
+└── .project-context/             ← CE DOSSIER — contexte de reprise
+    ├── PROJECT_TREE.txt          (ce fichier)
+    ├── PROJECT_MAP.md
+    ├── RUNBOOK.md
+    ├── WORKSTATE.md
+    ├── NEXT_STEPS.md
+    ├── KNOWN_BUGS.md
+    └── COPILOT_PROMPT.md
