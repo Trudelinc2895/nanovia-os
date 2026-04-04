@@ -88,6 +88,7 @@ export interface User {
   full_name: string | null;
   plan: string;
   is_active: boolean;
+  is_admin?: boolean;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
@@ -352,3 +353,144 @@ export async function getModuleCatalog() {
     "/api/v1/modules/catalog"
   );
 }
+
+// ── Admin ─────────────────────────────────────────────────────────────────────
+
+export interface AdminUserSummary {
+  id: string;
+  email: string;
+  full_name: string;
+  plan: string;
+  credits: number;
+  is_active: boolean;
+  is_admin: boolean;
+  stripe_customer_id: string | null;
+  created_at: string;
+}
+
+export interface AdminUsersResponse {
+  total: number;
+  page: number;
+  per_page: number;
+  users: AdminUserSummary[];
+}
+
+export interface AdminUserDetail extends AdminUserSummary {
+  subscription: {
+    plan: string | null;
+    status: string | null;
+    billing_interval: string | null;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean;
+    trial_end: string | null;
+  } | null;
+  credit_ledger: Array<{
+    type: string;
+    amount: number;
+    balance_after: number;
+    source: string | null;
+    note: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface AdminWebhookEvent {
+  id: string;
+  stripe_event_id: string;
+  event_type: string;
+  status: string;
+  error: string | null;
+  processed_at: string | null;
+}
+
+export interface AdminMetrics {
+  total_users: number;
+  users_by_plan: Record<string, number>;
+  active_paid_users: number;
+  subscriptions_by_status: Record<string, number>;
+  estimated_mrr_usd: number;
+}
+
+export async function getAdminUsers(
+  page = 1,
+  per_page = 50,
+  plan?: string,
+): Promise<AdminUsersResponse> {
+  let url = `/api/v1/admin/users?page=${page}&per_page=${per_page}`;
+  if (plan) url += `&plan=${encodeURIComponent(plan)}`;
+  return apiFetch<AdminUsersResponse>(url);
+}
+
+export async function getAdminUser(userId: string): Promise<AdminUserDetail> {
+  return apiFetch<AdminUserDetail>(`/api/v1/admin/users/${userId}`);
+}
+
+export async function adminAdjustCredits(
+  userId: string,
+  amount: number,
+  note?: string,
+): Promise<{ status: string; amount: number; balance_after: number }> {
+  return apiFetch(`/api/v1/admin/users/${userId}/credits`, {
+    method: "POST",
+    body: JSON.stringify({ amount, note }),
+  });
+}
+
+export async function adminOverridePlan(
+  userId: string,
+  plan: string,
+  reason?: string,
+): Promise<{ status: string; old_plan: string; new_plan: string }> {
+  return apiFetch(`/api/v1/admin/users/${userId}/plan`, {
+    method: "PUT",
+    body: JSON.stringify({ plan, reason }),
+  });
+}
+
+export async function getAdminWebhooks(
+  limit = 50,
+): Promise<{ webhooks: AdminWebhookEvent[] }> {
+  return apiFetch<{ webhooks: AdminWebhookEvent[] }>(
+    `/api/v1/admin/webhooks?limit=${limit}`,
+  );
+}
+
+export async function getAdminMetrics(): Promise<AdminMetrics> {
+  return apiFetch<AdminMetrics>("/api/v1/admin/metrics");
+}
+
+// ── Team ──────────────────────────────────────────────────────────────────────
+
+export interface TeamMemberItem {
+  id: string;
+  email: string;
+  role: string;
+  accepted: boolean;
+  invited_at: string;
+  accepted_at: string | null;
+}
+
+export interface TeamMembersResponse {
+  members: TeamMemberItem[];
+  seats_used: number;
+  seats_limit: number;
+}
+
+export async function getTeamMembers(): Promise<TeamMembersResponse> {
+  return apiFetch<TeamMembersResponse>("/api/v1/team/members");
+}
+
+export async function inviteTeamMember(
+  email: string,
+  role: string = "member",
+): Promise<{ id: string; email: string; role: string; status: string }> {
+  return apiFetch("/api/v1/team/invite", {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+}
+
+export async function removeTeamMember(memberId: string): Promise<void> {
+  await apiFetch(`/api/v1/team/members/${memberId}`, { method: "DELETE" });
+}
+
