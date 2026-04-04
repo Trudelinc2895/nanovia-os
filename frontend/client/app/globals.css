@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
 :root { --brand: #7c3aed; }
 html { scroll-behavior: smooth; }
-body { @apply bg-gray-950 text-white antialiased; }
+body { @apply bg-tk-dark text-slate-200 antialiased; font-family: 'Inter', sans-serif; }
+
+@layer components {
+  .btn-primary {
+    @apply bg-gradient-to-r from-tk-blue to-brand text-white font-semibold px-6 py-3 rounded-xl hover:opacity-90 transition-all duration-200 shadow-lg;
+  }
+  .btn-outline {
+    @apply border border-tk-border text-slate-300 font-semibold px-6 py-3 rounded-xl hover:border-tk-blue hover:text-white transition-all duration-200;
+  }
+  .card {
+    @apply bg-tk-card border border-tk-border rounded-2xl p-6;
+  }
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold;
+  }
+}
