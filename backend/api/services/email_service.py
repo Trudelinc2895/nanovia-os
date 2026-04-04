@@ -8,13 +8,13 @@ from __future__ import annotations
 import logging
 
 import httpx
+from markupsafe import escape
 
 from api.config import settings
 
 logger = logging.getLogger(__name__)
 
 _RESEND_URL = "https://api.resend.com/emails"
-_FROM = "KT Monetization OS <noreply@tkverse.ca>"
 _DASHBOARD_URL = f"{settings.PUBLIC_WEB_URL}/dashboard"
 _UPDATE_PAYMENT_URL = f"{settings.PUBLIC_WEB_URL}/dashboard/billing"
 
@@ -75,7 +75,7 @@ async def _send(to: str, subject: str, html: str) -> bool:
         logger.info("[email] RESEND_API_KEY not set — skipping send to %s | %s", to, subject)
         return False
 
-    payload = {"from": _FROM, "to": [to], "subject": subject, "html": html}
+    payload = {"from": settings.RESEND_FROM, "to": [to], "subject": subject, "html": html}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -97,7 +97,7 @@ async def _send(to: str, subject: str, html: str) -> bool:
 
 async def send_welcome_email(to: str, name: str) -> bool:
     """Send onboarding welcome email after successful registration."""
-    display = name or to
+    display = str(escape(name or to))
     html = _wrap(f"""
       <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
         Bienvenue sur KT Monetization OS ⚡

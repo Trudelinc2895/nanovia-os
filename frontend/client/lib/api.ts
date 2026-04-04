@@ -88,7 +88,10 @@ export interface User {
   full_name: string | null;
   plan: string;
   is_active: boolean;
-  is_admin?: boolean;
+  is_admin: boolean;
+  is_verified: boolean;
+  credits: number;
+  created_at: string;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
@@ -176,6 +179,7 @@ export interface PlanLimits {
   active_modules: number;
   api_calls_per_day: number;
   storage_gb: number;
+  team_seats_max: number;
 }
 
 export interface FeatureGates {

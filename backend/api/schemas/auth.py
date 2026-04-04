@@ -64,6 +64,8 @@ class UserPublic(BaseModel):
     full_name: str
     plan: str
     is_verified: bool
+    is_admin: bool = False
+    credits: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}

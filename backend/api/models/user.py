@@ -70,6 +70,13 @@ class User(Base):
     credit_ledger: Mapped[list[CreditLedger]] = relationship(
         "CreditLedger", back_populates="user", lazy="noload"
     )
+    usage_records: Mapped[list[UsageRecord]] = relationship(
+        "UsageRecord", back_populates="user", lazy="noload"
+    )
+    team_members: Mapped[list[TeamMember]] = relationship(
+        "TeamMember", back_populates="owner", lazy="noload",
+        foreign_keys="TeamMember.owner_id",
+    )
 
     def __repr__(self) -> str:
         return f"<User {self.email} plan={self.plan}>"

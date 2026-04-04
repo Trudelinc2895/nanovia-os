@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from api.core.deps import CurrentUser, DB, require_feature
+from api.core.deps import CurrentUser, DB
 from api.models.team_member import TeamMember
-from api.services.billing_service import PLANS_CONFIG
+from api.services.billing_service import PLANS_CONFIG, has_feature
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,7 +69,6 @@ async def invite_member(
     db: DB,
 ):
     """Invite a team member. Requires team_seats feature (Business plan)."""
-    from api.services.billing_service import has_feature
     if not has_feature(current_user.plan, "team_seats"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -80,10 +79,11 @@ async def invite_member(
     plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
     seats_limit = plan_cfg["limits"].get("team_seats_max", 1)
 
+    # Check seat limit using SQL COUNT — avoids loading all rows into memory
     count_result = await db.execute(
-        select(TeamMember).where(TeamMember.owner_id == current_user.id)
+        select(func.count(TeamMember.id)).where(TeamMember.owner_id == current_user.id)
     )
-    current_count = len(count_result.scalars().all())
+    current_count = count_result.scalar_one()
 
     if seats_limit != -1 and current_count >= seats_limit:
         raise HTTPException(

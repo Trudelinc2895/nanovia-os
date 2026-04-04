@@ -17,13 +17,17 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
+from markupsafe import escape
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from api.core.deps import AdminUser, DB
+from api.models.credit_ledger import CreditLedger
 from api.models.subscription import Subscription
 from api.models.user import User
 from api.models.webhook_event import WebhookEvent
+from api.services.billing_service import PLANS_CONFIG
+from api.services.credit_service import adjust_credits
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -104,25 +108,21 @@ async def admin_get_user(
     )
     sub = sub_result.scalar_one_or_none()
 
-    # Credit ledger history
-    try:
-        from api.models.credit_ledger import CreditLedger
-        ledger_result = await db.execute(
-            select(CreditLedger)
-            .where(CreditLedger.user_id == user_id)
-            .order_by(CreditLedger.created_at.desc())
-            .limit(20)
-        )
-        ledger = [
-            {
-                "type": e.type, "amount": e.amount,
-                "balance_after": e.balance_after, "source": e.source,
-                "note": e.note, "created_at": e.created_at.isoformat(),
-            }
-            for e in ledger_result.scalars().all()
-        ]
-    except Exception:
-        ledger = []
+    # Credit ledger history (CreditLedger imported at top of file)
+    ledger_result = await db.execute(
+        select(CreditLedger)
+        .where(CreditLedger.user_id == user_id)
+        .order_by(CreditLedger.created_at.desc())
+        .limit(20)
+    )
+    ledger = [
+        {
+            "type": e.type, "amount": e.amount,
+            "balance_after": e.balance_after, "source": e.source,
+            "note": e.note, "created_at": e.created_at.isoformat(),
+        }
+        for e in ledger_result.scalars().all()
+    ]
 
     return {
         "id": str(user.id),
@@ -155,7 +155,6 @@ async def admin_adjust_credits(
 ):
     """Admin-initiated credit adjustment. Recorded in ledger with admin source."""
     try:
-        from api.services.credit_service import adjust_credits
         entry = await adjust_credits(
             user_id=user_id,
             amount=body.amount,
@@ -169,8 +168,6 @@ async def admin_adjust_credits(
             "amount": body.amount,
             "balance_after": entry.balance_after,
         }
-    except ImportError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Credit service not configured")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -183,7 +180,6 @@ async def admin_override_plan(
     db: DB,
 ):
     """Override user plan directly (admin bypass — use for comps, corrections, etc.)."""
-    from api.services.billing_service import PLANS_CONFIG
     if body.plan not in PLANS_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown plan: {body.plan!r}")
 

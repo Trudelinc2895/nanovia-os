@@ -8,9 +8,9 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.database import Base
 
@@ -22,7 +22,9 @@ class UsageRecord(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
     )
     # Module that generated usage: "orchestrator", "ghost_agency", "content_cloner", etc.
     module: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -41,6 +43,8 @@ class UsageRecord(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+    user: Mapped["User"] = relationship("User", back_populates="usage_records")
 
     __table_args__ = (
         # Fast monthly usage queries: WHERE user_id = ? AND created_at >= ?

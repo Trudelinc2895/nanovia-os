@@ -1,13 +1,16 @@
 """backend/api/config.py — settings via env"""
 from __future__ import annotations
 
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     APP_ENV: str = "development"
     APP_NAME: str = "KT Monetization OS"
     APP_VERSION: str = "1.0.0"
     DOMAIN: str = "tkverse.ca"
+    LOG_LEVEL: str = "INFO"
 
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8010
@@ -33,17 +36,16 @@ class Settings(BaseSettings):
     STRIPE_PRICE_PRO_YEARLY_ID: str = ""
     STRIPE_PRICE_BUSINESS_MONTHLY_ID: str = ""
     STRIPE_PRICE_BUSINESS_YEARLY_ID: str = ""
-    STRIPE_CREDIT_PRICE_ID: str = ""          # one-time payment price for credit packs
-    STRIPE_CREDIT_PACK_SIZE: int = 100         # credits per pack
-    # Add-on price IDs (configure in Stripe dashboard → Products)
-    STRIPE_PRICE_ADDON_API_PACK: str = ""      # one-time, 500 API calls
-    STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""  # one-time, 10 GB storage
-    STRIPE_PRICE_CREDITS_PACK: str = ""        # one-time, 50 credits ($4)
-    STRIPE_CHECKOUT_SUCCESS_URL: str = "https://tkverse.ca/dashboard?checkout=success"
-    STRIPE_CHECKOUT_CANCEL_URL: str = "https://tkverse.ca/#pricing"
-    STRIPE_PORTAL_RETURN_URL: str = "https://tkverse.ca/dashboard"
+    STRIPE_CREDIT_PRICE_ID: str = ""
+    STRIPE_CREDIT_PACK_SIZE: int = Field(default=100, ge=1)
+    STRIPE_PRICE_ADDON_API_PACK: str = ""
+    STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""
+    STRIPE_PRICE_CREDITS_PACK: str = ""
 
+    # Resend email
     RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "noreply@tkverse.ca"
+    RESEND_FROM_NAME: str = "KT Monetization OS"
 
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
@@ -52,9 +54,76 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS_RAW: str = "http://localhost:3000,http://localhost:3020"
 
+    # ── Computed properties ─────────────────────────────────────────────────────
+
     @property
     def ALLOWED_ORIGINS(self) -> list[str]:
-        return [o.strip() for o in self.ALLOWED_ORIGINS_RAW.split(",")]
+        return [o.strip() for o in self.ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
+
+    @property
+    def STRIPE_CHECKOUT_SUCCESS_URL(self) -> str:
+        return f"{self.PUBLIC_WEB_URL}/dashboard?checkout=success"
+
+    @property
+    def STRIPE_CHECKOUT_CANCEL_URL(self) -> str:
+        return f"{self.PUBLIC_WEB_URL}/#pricing"
+
+    @property
+    def STRIPE_PORTAL_RETURN_URL(self) -> str:
+        return f"{self.PUBLIC_WEB_URL}/dashboard"
+
+    @property
+    def RESEND_FROM(self) -> str:
+        return f"{self.RESEND_FROM_NAME} <{self.RESEND_FROM_EMAIL}>"
+
+    # ── Validators ──────────────────────────────────────────────────────────────
+
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def validate_jwt_key(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        return v
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_db_url(cls, v: str) -> str:
+        if not v:
+            raise ValueError("DATABASE_URL is required")
+        allowed = ("postgresql+asyncpg://", "postgresql+psycopg://", "sqlite+aiosqlite://")
+        if not any(v.startswith(p) for p in allowed):
+            raise ValueError(
+                "DATABASE_URL must start with postgresql+asyncpg://, "
+                "postgresql+psycopg://, or sqlite+aiosqlite://"
+            )
+        return v
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper = v.upper()
+        if upper not in valid:
+            raise ValueError(f"LOG_LEVEL must be one of {valid}")
+        return upper
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if self.APP_ENV == "production":
+            errors = []
+            if not self.STRIPE_SECRET_KEY.startswith("stripe_live_"):
+                errors.append("STRIPE_SECRET_KEY must be a live key (stripe_live_...) in production")
+            if not self.STRIPE_WEBHOOK_SECRET.startswith("stripe_webhook_"):
+                errors.append("STRIPE_WEBHOOK_SECRET must start with stripe_webhook_")
+            origins = self.ALLOWED_ORIGINS
+            if "*" in origins:
+                errors.append("Wildcard CORS not allowed in production")
+            for o in origins:
+                if "localhost" in o or "127.0.0.1" in o:
+                    errors.append(f"Dev origin {o!r} not allowed in production ALLOWED_ORIGINS_RAW")
+            if errors:
+                raise ValueError("Production config errors:\n" + "\n".join(f"  - {e}" for e in errors))
+        return self
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
