@@ -23,8 +23,7 @@ import logging
 from typing import Annotated
 
 import stripe
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from api.config import settings
 from api.core.deps import CurrentUser, DB
@@ -52,12 +51,11 @@ from api.services.billing_service import (
     get_or_create_stripe_customer,
     get_upsell_suggestion,
     handle_checkout_completed,
-    has_feature,
     is_event_processed,
     mark_event,
     sync_subscription_from_stripe,
 )
-from api.services.email_service import send_billing_confirmation, send_payment_failed
+from api.services.email_service import send_billing_confirmation
 from api.services.usage_service import get_monthly_usage
 
 logger = logging.getLogger(__name__)
