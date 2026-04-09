@@ -192,8 +192,10 @@ async def admin_override_plan(
     user.plan = body.plan
     db.add(user)
     await db.commit()
+    # Sanitize free-text fields before logging to prevent log injection (CRLF)
+    safe_reason = (body.reason or "").replace("\n", " ").replace("\r", " ")
     logger.info("[admin] Plan override user=%s %s→%s by admin=%s reason=%s",
-                user_id, old_plan, body.plan, admin.email, body.reason)
+                user_id, old_plan, body.plan, admin.email, safe_reason)
     return {"status": "ok", "old_plan": old_plan, "new_plan": body.plan}
 
 
