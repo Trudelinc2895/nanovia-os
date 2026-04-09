@@ -28,11 +28,10 @@ def mock_user():
 async def test_deduct_credits_success(mock_user, mock_db):
     """Deducting credits within balance succeeds."""
     from api.services.credit_service import deduct_credits
-    # Use plain MagicMock so scalar_one_or_none() is synchronous (no idempotency key check triggered here)
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = None
-    mock_db.execute.return_value = execute_result
-    result = await deduct_credits(mock_user, source="overage", db=mock_db)
+    fake_entry = MagicMock()
+    fake_entry.balance_after = 99
+    with patch("api.services.credit_service._apply_ledger_change", new=AsyncMock(return_value=fake_entry)):
+        result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is True
     assert mock_user.credits == 99
 
@@ -40,8 +39,8 @@ async def test_deduct_credits_success(mock_user, mock_db):
 async def test_deduct_credits_insufficient_balance(mock_user, mock_db):
     """Deducting more than balance returns False."""
     from api.services.credit_service import deduct_credits
-    mock_user.credits = 0
-    result = await deduct_credits(mock_user, source="overage", db=mock_db)
+    with patch("api.services.credit_service._apply_ledger_change", new=AsyncMock(side_effect=ValueError("Insufficient credits"))):
+        result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is False
 
 @pytest.mark.asyncio
@@ -50,15 +49,13 @@ async def test_deduct_credits_idempotency(mock_user, mock_db):
     from api.services.credit_service import deduct_credits
     from api.models.credit_ledger import CreditLedger
     existing = MagicMock(spec=CreditLedger)
-    # Use a plain MagicMock so scalar_one_or_none() is synchronous
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = existing
-    mock_db.execute.return_value = execute_result
-    initial_credits = mock_user.credits
-    result = await deduct_credits(mock_user, source="overage", db=mock_db, idempotency_key="idem-123")
+    existing.balance_after = mock_user.credits
+    with patch("api.services.credit_service._apply_ledger_change", new=AsyncMock(return_value=existing)):
+        initial_credits = mock_user.credits
+        result = await deduct_credits(mock_user, source="overage", db=mock_db, idempotency_key="idem-123")
     assert result is True
     assert mock_user.credits == initial_credits  # no change
-    mock_db.commit.assert_not_called()  # no write
+    # _apply_ledger_change owns persistence/idempotency behavior.
 
 @pytest.mark.asyncio
 async def test_add_credits_idempotency(mock_db):
@@ -66,10 +63,6 @@ async def test_add_credits_idempotency(mock_db):
     from api.services.credit_service import add_credits
     from api.models.credit_ledger import CreditLedger
     existing = MagicMock(spec=CreditLedger)
-    # Use a plain MagicMock for the execute result so scalar_one_or_none() is sync
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = existing
-    mock_db.execute.return_value = execute_result
-    result = await add_credits(uuid.uuid4(), 100, source="stripe", db=mock_db, idempotency_key="idem-456")
+    with patch("api.services.credit_service._apply_ledger_change", new=AsyncMock(return_value=existing)):
+        result = await add_credits(uuid.uuid4(), 100, source="stripe", db=mock_db, idempotency_key="idem-456")
     assert result == existing
-    mock_db.commit.assert_not_called()

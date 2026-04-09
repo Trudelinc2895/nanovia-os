@@ -204,8 +204,9 @@ async def admin_override_plan(
     user.plan = body.plan
     db.add(user)
     await db.commit()
+    safe_plan_for_log = str(body.plan).replace("\r", "").replace("\n", "")
     logger.info("[admin] Plan override user=%s %s→%s by admin=%s reason=%s",
-                user_id, old_plan, body.plan, admin.email, body.reason)
+                user_id, old_plan, safe_plan_for_log, admin.email, body.reason)
     return {"status": "ok", "old_plan": old_plan, "new_plan": body.plan}
 
 
@@ -260,7 +261,8 @@ async def admin_force_plan(body: AdminForcePlanRequest, admin: AdminUser, db: DB
     user.plan = body.plan
     db.add(user)
     await db.commit()
-    logger.info("[admin] force-plan user=%s old=%s new=%s admin=%s", user.id, old_plan, body.plan, admin.email)
+    safe_plan_for_log = str(body.plan).replace("\r", "").replace("\n", "")
+    logger.info("[admin] force-plan user=%s old=%s new=%s admin=%s", user.id, old_plan, safe_plan_for_log, admin.email)
     return {"status": "ok", "old_plan": old_plan, "new_plan": body.plan}
 
 
