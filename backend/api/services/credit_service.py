@@ -132,9 +132,19 @@ async def adjust_credits(
     source: str,
     db: AsyncSession,
     note: str | None = None,
+    idempotency_key: str | None = None,
 ) -> CreditLedger:
     """Admin-initiated adjustment. amount can be positive or negative."""
-    result = await db.execute(select(User).where(User.id == user_id))
+    if idempotency_key:
+        result = await db.execute(
+            select(CreditLedger).where(CreditLedger.idempotency_key == idempotency_key)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            logger.info("[credits] Idempotent adjust key=%s — skipping", idempotency_key)
+            return existing
+
+    result = await db.execute(select(User).where(User.id == user_id).with_for_update())
     user = result.scalar_one_or_none()
     if not user:
         raise ValueError(f"adjust_credits: user {user_id} not found")
@@ -146,6 +156,7 @@ async def adjust_credits(
         amount=amount,
         balance_after=user.credits,
         source=source,
+        idempotency_key=idempotency_key,
         note=note,
     )
     db.add(user)

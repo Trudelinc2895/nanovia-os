@@ -38,6 +38,7 @@ router = APIRouter()
 class CreditAdjustRequest(BaseModel):
     amount: int  # positive = add, negative = remove
     note: str | None = None
+    idempotency_key: str | None = None  # optional: prevents double-submit
 
 
 class PlanOverrideRequest(BaseModel):
@@ -161,6 +162,7 @@ async def admin_adjust_credits(
             source=f"admin:{admin.email}",
             db=db,
             note=body.note or f"Admin adjustment by {admin.email}",
+            idempotency_key=body.idempotency_key,
         )
         logger.info("[admin] Credit adjustment %+d for user=%s by admin=%s", body.amount, user_id, admin.email)
         return {

@@ -516,9 +516,13 @@ async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -
             credits_to_add = int(metadata.get("credits", 0))
         except (ValueError, TypeError):
             credits_to_add = 0
+        session_id = session.get("id")
+        if not session_id:
+            logger.error("[billing] checkout.session.completed missing session id — cannot safely credit")
+            return
         if credits_to_add > 0:
             from api.services.credit_service import add_credits
-            idempotency_key = f"stripe_checkout_{session.get('id', '')}_{credits_to_add}"
+            idempotency_key = f"stripe_checkout_{session_id}_{credits_to_add}"
             await add_credits(
                 user_id=user_id,
                 amount=credits_to_add,
