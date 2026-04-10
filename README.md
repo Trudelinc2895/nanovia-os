@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-brightgreen)](https://python.org)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org)
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)](https://fastapi.tiangolo.com)
 
 ---
@@ -54,7 +54,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        CLIENT BROWSER                        │
-│                    Next.js 14 (App Router)                   │
+│                    Next.js 15 (App Router)                   │
 │              Port 3000 (dev) · tkverse.ca (prod)             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ HTTPS / REST
@@ -149,7 +149,7 @@ When a user exceeds their monthly AI message limit:
 ### Frontend
 | Technology | Version | Purpose |
 |-----------|---------|---------|
-| Next.js | 14 | React framework (App Router) |
+| Next.js | 15 | React framework (App Router) |
 | TypeScript | 5 | Type safety |
 | Tailwind CSS | 3 | Styling |
 | React Context | — | Auth state management |
