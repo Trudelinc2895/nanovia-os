@@ -43,4 +43,4 @@ jobs:
           APP_ENV: test
         run: |
           cd backend
-          python -m pytest tests/ -v --tb=short 2>/dev/null || echo "No tests yet — CI passes"
+          python -m pytest tests/ -v --tb=short

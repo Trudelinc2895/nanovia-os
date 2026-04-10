@@ -25,15 +25,34 @@ jobs:
 
       - name: Deploy to VPS
         if: steps.secrets-check.outputs.configured == 'true'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: root
+          username: deploy
           key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
           script: |
+            set -euo pipefail
             cd /opt/kt-monetization-os
-            git pull origin main
-            docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build --force-recreate api ai-orchestrator web
-            sleep 10
-            curl -f http://localhost/health || exit 1
-            echo "✅ Deploy successful"
+
+            # Pull latest code
+            git fetch --prune
+            git reset --hard origin/main
+
+            # Capture current image digests for rollback
+            PREV_API=$(docker inspect --format='{{.Id}}' infra-api-1 2>/dev/null || echo "none")
+
+            # Build only changed services — do not force-recreate stateful services
+            docker compose -f infra/docker-compose.prod.yml --env-file .env \
+              up -d --build --no-deps api ai-orchestrator web
+
+            # Wait for API healthcheck
+            for i in $(seq 1 12); do
+              curl -fsS http://localhost/api/v1/health/ready && break
+              [ "$i" -eq 12 ] && echo "❌ Healthcheck failed after 60s" && exit 1
+              sleep 5
+            done
+
+            # Run migrations (idempotent — safe to run every deploy)
+            docker compose -f infra/docker-compose.prod.yml exec -T api alembic upgrade head
+
+            echo "✅ Deploy $(git rev-parse --short HEAD) successful"
