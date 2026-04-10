@@ -4,19 +4,30 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-:root { --brand: #7c3aed; }
+:root {
+  --brand: #4F8CFF;
+  --bg-base: #0D0F12;
+  --ui-surface: #13151A;
+}
+
 html { scroll-behavior: smooth; }
-body { @apply bg-tk-dark text-slate-200 antialiased; font-family: 'Inter', sans-serif; }
+
+body {
+  background-color: var(--bg-base);
+  @apply text-text-primary antialiased;
+  font-family: 'Inter', sans-serif;
+}
 
 @layer components {
+  /* Alias legacy — rétrocompatibilité pour les pages non encore migrées */
   .btn-primary {
-    @apply bg-gradient-to-r from-tk-blue to-brand text-white font-semibold px-6 py-3 rounded-xl hover:opacity-90 transition-all duration-200 shadow-lg;
+    @apply bg-primary hover:bg-primary-hover text-white font-semibold px-6 py-3 rounded-xl transition-all duration-200 shadow-[0_1px_3px_rgba(79,140,255,0.3)];
   }
   .btn-outline {
-    @apply border border-tk-border text-slate-300 font-semibold px-6 py-3 rounded-xl hover:border-tk-blue hover:text-white transition-all duration-200;
+    @apply border border-ui-border text-text-secondary font-semibold px-6 py-3 rounded-xl hover:border-primary hover:text-text-primary transition-all duration-200;
   }
   .card {
-    @apply bg-tk-card border border-tk-border rounded-2xl p-6;
+    @apply bg-ui-surface border border-ui-border rounded-2xl p-6;
   }
   .badge {
     @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold;

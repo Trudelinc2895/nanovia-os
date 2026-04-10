@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token");
@@ -22,7 +22,7 @@ export default function VerifyEmailPage() {
     const verify = async () => {
       try {
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/v1/auth/verify-email?token=${encodeURIComponent(token)}`,
+          (process.env.NEXT_PUBLIC_API_URL ?? "") + "/api/v1/auth/verify-email?token=" + encodeURIComponent(token),
           { method: "POST" }
         );
         if (res.ok || res.status === 204) {
@@ -44,38 +44,47 @@ export default function VerifyEmailPage() {
   }, [token, router]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950 text-white p-8">
-      <div className="max-w-md w-full text-center space-y-6">
-        {status === "loading" && (
-          <>
+    <div className="max-w-md w-full text-center space-y-6">
+      {status === "loading" && (
+        <>
+          <div className="text-4xl animate-pulse">🔐</div>
+          <h1 className="text-2xl font-bold text-text-primary">Vérification en cours…</h1>
+        </>
+      )}
+      {status === "success" && (
+        <>
+          <div className="text-4xl">✅</div>
+          <h1 className="text-2xl font-bold text-success-text">Email vérifié !</h1>
+          <p className="text-text-secondary">{message}</p>
+          <p className="text-sm text-text-muted">Redirection vers le dashboard dans 3 secondes…</p>
+          <Link href="/dashboard" className="text-primary underline">Aller au dashboard →</Link>
+        </>
+      )}
+      {status === "error" && (
+        <>
+          <div className="text-4xl">❌</div>
+          <h1 className="text-2xl font-bold text-danger-text">Vérification échouée</h1>
+          <p className="text-text-secondary">{message}</p>
+          <Link href="/dashboard" className="block text-primary underline">Retour au dashboard</Link>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function VerifyEmailPage() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-bg-base p-8">
+      <Suspense
+        fallback={
+          <div className="text-center">
             <div className="text-4xl animate-pulse">🔐</div>
-            <h1 className="text-2xl font-bold">Vérification en cours…</h1>
-          </>
-        )}
-        {status === "success" && (
-          <>
-            <div className="text-4xl">✅</div>
-            <h1 className="text-2xl font-bold text-green-400">Email vérifié !</h1>
-            <p className="text-gray-400">{message}</p>
-            <p className="text-sm text-gray-500">Redirection vers le dashboard dans 3 secondes…</p>
-            <Link href="/dashboard" className="text-indigo-400 underline">
-              Aller au dashboard →
-            </Link>
-          </>
-        )}
-        {status === "error" && (
-          <>
-            <div className="text-4xl">❌</div>
-            <h1 className="text-2xl font-bold text-red-400">Vérification échouée</h1>
-            <p className="text-gray-400">{message}</p>
-            <div className="space-y-2">
-              <Link href="/dashboard" className="block text-indigo-400 underline">
-                Retour au dashboard
-              </Link>
-            </div>
-          </>
-        )}
-      </div>
+            <p className="text-text-secondary mt-2">Chargement…</p>
+          </div>
+        }
+      >
+        <VerifyEmailContent />
+      </Suspense>
     </div>
   );
 }
