@@ -47,6 +47,7 @@ async def add_credits(
         raise ValueError(f"add_credits: amount must be positive, got {amount}")
 
     if idempotency_key:
+        # Check idempotency BEFORE acquiring lock to avoid unnecessary locking
         result = await db.execute(
             select(CreditLedger).where(CreditLedger.idempotency_key == idempotency_key)
         )
@@ -55,7 +56,7 @@ async def add_credits(
             logger.info("[credits] Idempotent duplicate key=%s — skipping", idempotency_key)
             return existing
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == user_id).with_for_update())
     user = result.scalar_one_or_none()
     if not user:
         raise ValueError(f"add_credits: user {user_id} not found")
@@ -95,6 +96,13 @@ async def deduct_credits(
         )
         if result.scalar_one_or_none():
             return True  # already processed
+
+    # Re-fetch with row lock to prevent concurrent double-deduction.
+    # The user param may be stale (fetched earlier in the request lifecycle).
+    locked = await db.execute(select(User).where(User.id == user.id).with_for_update())
+    user = locked.scalar_one_or_none()
+    if not user:
+        return False
 
     if (user.credits or 0) < amount:
         return False

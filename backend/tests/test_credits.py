@@ -28,10 +28,10 @@ def mock_user():
 async def test_deduct_credits_success(mock_user, mock_db):
     """Deducting credits within balance succeeds."""
     from api.services.credit_service import deduct_credits
-    # Use plain MagicMock so scalar_one_or_none() is synchronous (no idempotency key check triggered here)
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = None
-    mock_db.execute.return_value = execute_result
+    # Two execute calls: (1) re-fetch user with FOR UPDATE lock
+    user_result = MagicMock()
+    user_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute.side_effect = [user_result]
     result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is True
     assert mock_user.credits == 99
@@ -41,6 +41,10 @@ async def test_deduct_credits_insufficient_balance(mock_user, mock_db):
     """Deducting more than balance returns False."""
     from api.services.credit_service import deduct_credits
     mock_user.credits = 0
+    # Re-fetch returns the locked user with 0 credits
+    user_result = MagicMock()
+    user_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute.side_effect = [user_result]
     result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is False
 

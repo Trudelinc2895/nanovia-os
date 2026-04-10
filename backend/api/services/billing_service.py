@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import stripe
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
@@ -575,7 +576,48 @@ async def _write_audit(
 
 # ─── Webhook idempotency ──────────────────────────────────────────────────────
 
+async def claim_webhook_event(event_id: str, event_type: str, db: AsyncSession) -> bool:
+    """
+    Atomically claim a webhook event for processing.
+    Returns True if claimed (first time). Returns False if already claimed (duplicate).
+
+    Race-safe: uses the DB UNIQUE constraint on stripe_event_id as the
+    synchronization mechanism. Two concurrent requests for the same event_id
+    will both attempt the INSERT; only one succeeds. The loser gets
+    IntegrityError → returns False → caller returns HTTP 200 immediately.
+    """
+    try:
+        we = WebhookEvent(
+            stripe_event_id=event_id,
+            event_type=event_type,
+            processed_at=datetime.now(timezone.utc),
+            status="processing",
+            error=None,
+        )
+        db.add(we)
+        await db.commit()
+        return True
+    except IntegrityError:
+        await db.rollback()
+        logger.info("[webhook] Duplicate event %s — already claimed", event_id)
+        return False
+
+
+async def update_webhook_status(
+    event_id: str, status: str, error: str | None, db: AsyncSession
+) -> None:
+    """Update the status of a previously claimed webhook event. Called after processing."""
+    await db.execute(
+        sql_update(WebhookEvent)
+        .where(WebhookEvent.stripe_event_id == event_id)
+        .values(status=status, error=error)
+    )
+    await db.commit()
+
+
+# ── Legacy aliases — kept for backward compat with any external callers ───────
 async def is_event_processed(event_id: str, db: AsyncSession) -> bool:
+    """Deprecated: use claim_webhook_event instead (not race-safe)."""
     result = await db.execute(
         select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
     )
@@ -589,15 +631,17 @@ async def mark_event(
     error: str | None,
     db: AsyncSession,
 ) -> None:
-    we = WebhookEvent(
-        stripe_event_id=event_id,
-        event_type=event_type,
-        processed_at=datetime.now(timezone.utc),
-        status=status,
-        error=error,
-    )
-    db.add(we)
-    await db.commit()
+    """Deprecated: use update_webhook_status instead. Updates existing row."""
+    try:
+        await db.execute(
+            sql_update(WebhookEvent)
+            .where(WebhookEvent.stripe_event_id == event_id)
+            .values(status=status, error=error)
+        )
+        await db.commit()
+    except Exception:
+        # Row may not exist if called outside claim_webhook_event flow
+        await db.rollback()
 
 
 # ─── Entitlement computation — always from DB, never from client ──────────────

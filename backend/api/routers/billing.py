@@ -53,8 +53,8 @@ from api.services.billing_service import (
     get_upsell_suggestion,
     handle_checkout_completed,
     has_feature,
-    is_event_processed,
-    mark_event,
+    claim_webhook_event,
+    update_webhook_status,
     sync_subscription_from_stripe,
 )
 from api.services.email_service import send_billing_confirmation, send_payment_failed
@@ -486,8 +486,8 @@ async def stripe_webhook(
     event_id = event["id"]
     event_type = event["type"]
 
-    # Idempotency check — return 200 immediately for already-processed events
-    if await is_event_processed(event_id, db):
+    # Atomic idempotency claim — race-safe via DB UNIQUE constraint
+    if not await claim_webhook_event(event_id, event_type, db):
         logger.info(f"[webhook] Duplicate event {event_id} — acknowledged, skipping")
         return {"received": True, "status": "duplicate"}
 
@@ -597,17 +597,17 @@ async def stripe_webhook(
 
         else:
             logger.debug(f"[webhook] Unhandled event type: {event_type}")
-            await mark_event(event_id, event_type, "ignored", None, db)
+            await update_webhook_status(event_id, "ignored", None, db)
             return {"received": True, "status": "ignored"}
 
-        await mark_event(event_id, event_type, "processed", None, db)
+        await update_webhook_status(event_id, "processed", None, db)
 
     except Exception as exc:
         error = str(exc)
         logger.exception("[webhook] Error processing %s id=%s: %s", event_type, event_id, exc)
         if _HAS_PROM:
             _webhook_errors.labels(event_type=event_type).inc()
-        await mark_event(event_id, event_type, "failed", error, db)
+        await update_webhook_status(event_id, "failed", error, db)
         # Return 200 to prevent Stripe from retrying non-retriable errors.
         # For transient DB errors, let it raise (Stripe will retry).
 
