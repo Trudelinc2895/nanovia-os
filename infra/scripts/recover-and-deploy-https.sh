@@ -54,16 +54,22 @@ done
 echo "[5/9] Updating .env for https://$DOMAIN..."
 cd $APP_DIR
 
-for key in "NEXT_PUBLIC_API_URL=https://api.$DOMAIN" "DOMAIN=$DOMAIN" "ACME_EMAIL=admin@$DOMAIN"; do
+for key in \
+    "API_BASE_URL=https://$DOMAIN" \
+    "NEXT_PUBLIC_API_URL=" \
+    "PUBLIC_WEB_URL=https://$DOMAIN" \
+    "PRIVATE_ADMIN_URL=" \
+    "DOMAIN=$DOMAIN" \
+    "ACME_EMAIL=admin@$DOMAIN"; do
     k="${key%%=*}"
     sed -i "/^$k=/d" .env
     echo "$key" >> .env
 done
 
-if grep -q "ALLOWED_ORIGINS" .env; then
-    sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://$DOMAIN,https://www.$DOMAIN,https://app.$DOMAIN,https://api.$DOMAIN|g" .env
+if grep -q "^ALLOWED_ORIGINS_RAW=" .env; then
+    sed -i "s|^ALLOWED_ORIGINS_RAW=.*|ALLOWED_ORIGINS_RAW=https://$DOMAIN|g" .env
 else
-    echo "ALLOWED_ORIGINS=https://$DOMAIN,https://www.$DOMAIN,https://app.$DOMAIN,https://api.$DOMAIN" >> .env
+    echo "ALLOWED_ORIGINS_RAW=https://$DOMAIN" >> .env
 fi
 
 # Add monitoring env vars if not present
@@ -117,16 +123,12 @@ echo ""
 if [ "$DNS_OK" = true ]; then
     echo "══ LIVE ══════════════════════════════════"
     echo "  https://$DOMAIN"
-    echo "  https://api.$DOMAIN"
-    echo "  https://admin.$DOMAIN"
-    echo "  https://monitor.$DOMAIN"
+    echo "  https://$DOMAIN/api/v1"
     echo "  SSH: ssh -i ~/.ssh/id_ed25519 root@167.114.155.166"
 else
     echo "══ ADD DNS A RECORDS IN OVH MANAGER ═════"
     echo "  tkverse.ca         -> 167.114.155.166"
-    echo "  api.tkverse.ca     -> 167.114.155.166"
-    echo "  app.tkverse.ca     -> 167.114.155.166"
-    echo "  admin.tkverse.ca   -> 167.114.155.166"
-    echo "  monitor.tkverse.ca -> 167.114.155.166"
-    echo "  www.tkverse.ca     -> 167.114.155.166"
+    echo "  (optional) www.tkverse.ca     -> 167.114.155.166"
+    echo "  (optional) admin.tkverse.ca   -> 167.114.155.166"
+    echo "  (optional) monitor.tkverse.ca -> 167.114.155.166"
 fi

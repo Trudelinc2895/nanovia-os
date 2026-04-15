@@ -1,7 +1,17 @@
+import path from "path";
 import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8010";
+const PUBLIC_API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+const DEFAULT_BACKEND_URL = isDev ? "http://127.0.0.1:8010" : "http://api:8010";
+const BACKEND_URL = (process.env.BACKEND_INTERNAL_URL ?? process.env.API_BASE_URL ?? DEFAULT_BACKEND_URL).replace(/\/$/, "");
+
+const connectSrc = [
+  "'self'",
+  "https://api.stripe.com",
+  ...(isDev ? ["http://localhost:*", "http://127.0.0.1:*"] : []),
+  ...(PUBLIC_API_URL ? [PUBLIC_API_URL] : []),
+].join(" ");
 
 const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "on" },
@@ -18,7 +28,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self'",
-      "connect-src 'self' https://api.stripe.com " + (isDev ? "http://localhost:* http://127.0.0.1:*" : "https://tkverse.ca"),
+      `connect-src ${connectSrc}`,
       "frame-src https://js.stripe.com https://hooks.stripe.com",
       "object-src 'none'",
       "base-uri 'self'",
@@ -31,6 +41,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   // output: "standalone", // enable for Docker deploy
+  outputFileTracingRoot: path.join(__dirname, "..", "..", ".."),
   async rewrites() {
     // Proxy /api/v1/* to FastAPI backend (dev + prod when no reverse proxy)
     return [

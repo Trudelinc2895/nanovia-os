@@ -54,7 +54,7 @@ jobs:
       - name: Smoke test
         run: |
           sleep 10
-          curl -sf "https://api.${{ secrets.DOMAIN }}/health" || exit 1
+          curl -sf "https://${{ secrets.DOMAIN }}/api/v1/health/ready" || exit 1
 
       - name: Notify Telegram
         if: always()

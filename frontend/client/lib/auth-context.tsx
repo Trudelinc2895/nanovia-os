@@ -12,6 +12,7 @@ import {
   login as apiLogin,
   logout as apiLogout,
   register as apiRegister,
+  resolveApiUrl,
   setAccessToken,
   type LoginResponse,
   type User,
@@ -42,15 +43,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const restoreSession = async () => {
       try {
         // Attempt to refresh using the httpOnly cookie (no localStorage needed)
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/v1/auth/refresh`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include", // sends httpOnly refresh_token cookie
-            body: JSON.stringify({}),
-          }
-        );
+        const res = await fetch(resolveApiUrl("/api/v1/auth/refresh"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include", // sends httpOnly refresh_token cookie
+          body: JSON.stringify({}),
+        });
         if (!res.ok) throw new Error("Session invalide");
         const data = await res.json();
         setAccessToken(data.access_token);

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { resolveApiUrl } from "@/lib/api";
 
 function VerifyEmailContent() {
   const searchParams = useSearchParams();
@@ -22,7 +23,7 @@ function VerifyEmailContent() {
     const verify = async () => {
       try {
         const res = await fetch(
-          (process.env.NEXT_PUBLIC_API_URL ?? "") + "/api/v1/auth/verify-email?token=" + encodeURIComponent(token),
+          resolveApiUrl("/api/v1/auth/verify-email?token=" + encodeURIComponent(token)),
           { method: "POST" }
         );
         if (res.ok || res.status === 204) {

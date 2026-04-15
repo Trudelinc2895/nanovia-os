@@ -2,7 +2,11 @@
  * lib/api.ts — typed API client for frontend web
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+
+export function resolveApiUrl(path: string): string {
+  return API_URL ? `${API_URL}${path}` : path;
+}
 
 let _accessToken: string | null = null;
 
@@ -27,7 +31,7 @@ async function apiFetch<T>(
     headers["Authorization"] = `Bearer ${_accessToken}`;
   }
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers, credentials: "include" });
+  const res = await fetch(resolveApiUrl(path), { ...options, headers, credentials: "include" });
 
   if (res.status === 401 && retry) {
     const refreshed = await refreshAccessToken();
@@ -55,7 +59,7 @@ async function apiFetch<T>(
 async function refreshAccessToken(): Promise<boolean> {
   try {
     // Browser sends httpOnly cookie automatically via credentials: "include"
-    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+    const res = await fetch(resolveApiUrl("/api/v1/auth/refresh"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include", // sends httpOnly refresh_token cookie
@@ -396,7 +400,7 @@ export async function getMilestones(): Promise<MilestonesData> {
 }
 
 export function getExportUrl(): string {
-  return `${API_URL}/api/v1/analytics/export`;
+  return resolveApiUrl("/api/v1/analytics/export");
 }
 
 // ── Modules ───────────────────────────────────────────────────────────────────

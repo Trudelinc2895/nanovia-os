@@ -13,7 +13,7 @@
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.{$DOMAIN};"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self';"
         -Server
         -X-Powered-By
     }
@@ -43,8 +43,8 @@
     }
 }
 
-# ── Main site + www ───────────────────────────────────────────────────────────
-{$DOMAIN}, www.{$DOMAIN} {
+# ── Main site ─────────────────────────────────────────────────────────────────
+{$DOMAIN} {
     import security_headers
     import block_attackers
 
@@ -62,42 +62,6 @@
             roll_keep 5
         }
     }
-}
-
-# ── API subdomain ─────────────────────────────────────────────────────────────
-api.{$DOMAIN} {
-    import security_headers
-    import block_attackers
-    import rate_limit_api
-
-    reverse_proxy api:8010
-
-    log {
-        output file /var/log/caddy/api.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-    }
-}
-
-# ── Admin panel ───────────────────────────────────────────────────────────────
-admin.{$DOMAIN} {
-    import security_headers
-    import block_attackers
-
-    # Restrict to ADMIN_ALLOWED_IP (set in .env, passed via docker-compose).
-    # Default in docker-compose = 127.0.0.1/32 (fail-closed: inaccessible if not set).
-    @admin_blocked not remote_ip {$ADMIN_ALLOWED_IP}
-    abort @admin_blocked
-
-    reverse_proxy admin:3020
-}
-
-# ── Monitoring (Grafana) ──────────────────────────────────────────────────────
-monitor.{$DOMAIN} {
-    import security_headers
-
-    reverse_proxy grafana:3030
 }
 
 # ── Redirect HTTP → HTTPS (fallback) ─────────────────────────────────────────

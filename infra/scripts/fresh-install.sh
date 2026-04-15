@@ -100,15 +100,17 @@ MY_IP=$(curl -s https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $
 # Determine mode
 if [ -n "$DOMAIN" ]; then
     MODE="https"
-    API_URL="https://api.$DOMAIN"
-    ORIGINS="https://$DOMAIN,https://www.$DOMAIN,https://api.$DOMAIN"
+    WEB_URL="https://$DOMAIN"
+    ORIGINS="https://$DOMAIN"
+    PRIVATE_ADMIN_URL=""
     CADDYFILE_PATH="./docker/Caddyfile"
     EMAIL="${ACME_EMAIL:-admin@$DOMAIN}"
 else
     MODE="ip"
     DOMAIN="$MY_IP"
-    API_URL="http://$MY_IP"
+    WEB_URL="http://$MY_IP"
     ORIGINS="http://$MY_IP"
+    PRIVATE_ADMIN_URL=""
     CADDYFILE_PATH="./docker/Caddyfile.ip"
     EMAIL="admin@localhost"
     warn "No domain provided — starting in IP-only mode (HTTP)"
@@ -135,9 +137,11 @@ DOMAIN=$DOMAIN
 ACME_EMAIL=$EMAIL
 
 # App URLs
-NEXT_PUBLIC_API_URL=$API_URL
-PUBLIC_WEB_URL=$API_URL
-ALLOWED_ORIGINS=$ORIGINS
+API_BASE_URL=$WEB_URL
+NEXT_PUBLIC_API_URL=
+PUBLIC_WEB_URL=$WEB_URL
+PRIVATE_ADMIN_URL=$PRIVATE_ADMIN_URL
+ALLOWED_ORIGINS_RAW=$ORIGINS
 APP_ENV=production
 
 # Database (PostgreSQL via Docker)
@@ -162,9 +166,9 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 STRIPE_SECRET_KEY=stripe_test_REPLACE_ME
 STRIPE_PUBLISHABLE_KEY=stripe_public_test_REPLACE_ME
 STRIPE_WEBHOOK_SECRET=stripe_webhook_REPLACE_ME
-STRIPE_CHECKOUT_SUCCESS_URL=$API_URL/dashboard/billing?success=1
-STRIPE_CHECKOUT_CANCEL_URL=$API_URL/dashboard/billing?canceled=1
-STRIPE_PORTAL_RETURN_URL=$API_URL/dashboard/billing
+STRIPE_CHECKOUT_SUCCESS_URL=$WEB_URL/dashboard/billing?success=1
+STRIPE_CHECKOUT_CANCEL_URL=$WEB_URL/dashboard/billing?canceled=1
+STRIPE_PORTAL_RETURN_URL=$WEB_URL/dashboard/billing
 
 # Plan price IDs (run stripe/setup_stripe.py to generate)
 STRIPE_PRICE_PRO_MONTHLY_ID=
@@ -219,7 +223,7 @@ if [ "$MODE" = "https" ]; then
     else
         warn "DNS not pointing here yet (domain resolves to: '${RESOLVED:-none}', this VPS: $MY_IP)"
         warn "OVH Manager → Zone DNS → add A record: $DOMAIN → $MY_IP"
-        warn "Also add: www, api, admin, monitor → $MY_IP"
+        warn "Optional records if you need them: www, admin, monitor → $MY_IP"
         warn "Caddy HTTPS will fail until DNS propagates — containers still starting in HTTP fallback"
         # Force Caddyfile.ip until DNS is ready
         sed -i "s|^CADDYFILE=.*|CADDYFILE=./docker/Caddyfile.ip|" .env
@@ -282,8 +286,7 @@ echo ""
 if [ "$MODE" = "https" ] && [ "$DNS_OK" = "true" ]; then
     echo "══ LIVE (HTTPS) ════════════════════════════════"
     echo "  https://$DOMAIN           → Frontend"
-    echo "  https://api.$DOMAIN       → FastAPI"
-    echo "  https://monitor.$DOMAIN   → Grafana"
+    echo "  https://$DOMAIN/api/v1    → FastAPI"
     echo "  Grafana: admin / $(grep GRAFANA_ADMIN_PASSWORD .env | cut -d= -f2)"
 else
     echo "══ LIVE (HTTP) ══════════════════════════════════"

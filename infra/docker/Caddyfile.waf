@@ -36,6 +36,12 @@
     import security_headers
     import block_scanners
     import block_sql_injection
-    
-    reverse_proxy web:3000
+
+    handle /api/* {
+        reverse_proxy api:8010
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
 }
