@@ -54,6 +54,8 @@ jobs:
 
             # Run migrations before starting the API
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
+              run --rm api python scripts/ensure_alembic_state.py
+            docker compose -f infra/docker-compose.prod.yml --env-file .env \
               run --rm api alembic upgrade head
 
             # Start updated app services after schema is ready

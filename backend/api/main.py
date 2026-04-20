@@ -68,14 +68,16 @@ async def _ensure_expected_schema() -> None:
         except Exception as exc:
             raise RuntimeError(
                 "FATAL: Database schema is not managed by Alembic. "
-                "Run 'alembic upgrade head' before starting the API."
+                "Bootstrap legacy prod DBs with 'python scripts/ensure_alembic_state.py' "
+                "then run 'alembic upgrade head' before starting the API."
             ) from exc
 
     if current_heads != expected_heads:
         raise RuntimeError(
             "FATAL: Database schema is not at Alembic head. "
             f"expected={sorted(expected_heads)} current={sorted(current_heads)}. "
-            "Run 'alembic upgrade head' before starting the API."
+            "Run 'python scripts/ensure_alembic_state.py' if this is a legacy DB, "
+            "then 'alembic upgrade head' before starting the API."
         )
 
 
