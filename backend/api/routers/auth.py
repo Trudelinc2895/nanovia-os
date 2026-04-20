@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Request, Response as FastAPIResponse, status
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
@@ -32,6 +34,7 @@ from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, Toke
 from api.services.email_service import send_welcome_email, send_password_reset_email, send_verification_email
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _ACCESS_EXPIRE_SEC = settings.JWT_ACCESS_EXPIRE_MINUTES * 60
 
@@ -68,8 +71,20 @@ async def _audit(db: AsyncSession, action: str, user_id=None, ip=None, status="s
     ))
 
 
+def _set_refresh_cookie(response: FastAPIResponse, refresh_token: str) -> None:
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="strict",
+        max_age=settings.JWT_REFRESH_EXPIRE_DAYS * 86400,
+        path="/api/v1/auth",
+    )
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(body: RegisterRequest, request: Request, db: DB):
+async def register(body: RegisterRequest, request: Request, response: FastAPIResponse, db: DB):
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Cet email est déjà utilisé")
@@ -85,16 +100,31 @@ async def register(body: RegisterRequest, request: Request, db: DB):
     # Generate email verification token
     verification_token = secrets.token_urlsafe(32)
     user.email_verification_token = verification_token
+    user.email_verified = False
     user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=24)
 
     await _audit(db, "register", user_id=user.id, ip=request.client.host if request.client else None)
-    await db.commit()
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        logger.exception(
+            "[auth] register commit failed email=%s ip=%s",
+            body.email,
+            request.client.host if request.client else None,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur interne lors de la creation du compte.",
+        )
     asyncio.create_task(send_welcome_email(user.email, user.full_name or user.email))
     verify_url = f"{_FRONTEND_URL}/verify-email?token={verification_token}"
     asyncio.create_task(send_verification_email(user.email, user.full_name or user.email, verify_url))
+    refresh_token_value = create_refresh_token(str(user.id))
+    _set_refresh_cookie(response, refresh_token_value)
     return TokenResponse(
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
-        refresh_token=create_refresh_token(str(user.id)),
+        refresh_token=refresh_token_value,
         expires_in=_ACCESS_EXPIRE_SEC,
     )
 
@@ -130,15 +160,7 @@ async def login(body: LoginRequest, request: Request, response: FastAPIResponse,
     await db.commit()
     refresh_token_value = create_refresh_token(str(user.id))
     # Set refresh token as httpOnly cookie (XSS-safe); JSON body kept for mobile backward compat
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token_value,
-        httponly=True,
-        secure=settings.APP_ENV == "production",
-        samesite="strict",
-        max_age=settings.JWT_REFRESH_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth",
-    )
+    _set_refresh_cookie(response, refresh_token_value)
     return LoginResponse(
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
         refresh_token=refresh_token_value,  # kept for mobile backward compat
@@ -147,7 +169,7 @@ async def login(body: LoginRequest, request: Request, response: FastAPIResponse,
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(request: Request, db: DB, body: RefreshRequest | None = None):
+async def refresh(request: Request, response: FastAPIResponse, db: DB, body: RefreshRequest | None = None):
     # Cookie takes priority; fall back to JSON body for mobile backward compat
     token = request.cookies.get("refresh_token")
     if not token and body:
@@ -167,9 +189,11 @@ async def refresh(request: Request, db: DB, body: RefreshRequest | None = None):
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found")
 
+    refresh_token_value = create_refresh_token(str(user.id))
+    _set_refresh_cookie(response, refresh_token_value)
     return TokenResponse(
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
-        refresh_token=create_refresh_token(str(user.id)),
+        refresh_token=refresh_token_value,
         expires_in=_ACCESS_EXPIRE_SEC,
     )
 
@@ -380,15 +404,7 @@ async def verify_2fa_login(body: TwoFALoginRequest, request: Request, response: 
     await db.commit()
     refresh_token_value = create_refresh_token(str(user.id))
     # Set refresh token as httpOnly cookie; JSON body kept for mobile backward compat
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token_value,
-        httponly=True,
-        secure=settings.APP_ENV == "production",
-        samesite="strict",
-        max_age=settings.JWT_REFRESH_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth",
-    )
+    _set_refresh_cookie(response, refresh_token_value)
     return TokenResponse(
         access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
         refresh_token=refresh_token_value,  # kept for mobile backward compat

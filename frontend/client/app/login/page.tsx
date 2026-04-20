@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { AuthApiDiagnostic } from "@/components/auth-api-diagnostic";
+import { AuthEntryWarning } from "@/components/auth-entry-warning";
 import { useAuth } from "@/lib/auth-context";
 import { verify2FALogin } from "@/lib/api";
 import { Button, Card, Input } from "@/components/ui";
@@ -124,16 +126,19 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-bg-base">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <Link href="/" className="inline-block">
-            <div className="text-3xl font-bold text-primary mb-1">⚡ KT OS</div>
-          </Link>
-          <p className="text-gray-400 text-sm">Connexion à votre système</p>
-        </div>
+        <div className="w-full max-w-sm">
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <Link href="/" className="inline-block">
+              <div className="text-3xl font-bold text-primary mb-1">⚡ Nanovia OS</div>
+            </Link>
+            <p className="text-gray-400 text-sm">Connexion a votre espace Nanovia</p>
+          </div>
 
-        <form onSubmit={handleSubmit}>
+          <AuthApiDiagnostic />
+          <AuthEntryWarning />
+
+          <form onSubmit={handleSubmit}>
           <Card variant="outlined" padding="lg" className="space-y-5">
             {error && (
               <div role="alert" className="bg-danger-muted border border-danger/30 text-danger-text rounded-lg px-4 py-3 text-sm flex items-start gap-2">

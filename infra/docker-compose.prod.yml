@@ -23,6 +23,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       # Restrict admin.{DOMAIN} to this IP (CIDR). Default = localhost only (fail-closed).
       ADMIN_ALLOWED_IP: ${ADMIN_ALLOWED_IP:-127.0.0.1/32}
     depends_on: [web, admin, api]
@@ -33,13 +34,26 @@ services:
 
   # ── FRONTEND ───────────────────────────────────────────────────────────────
   web:
-    build: {context: .., dockerfile: infra/docker/web.Dockerfile}
+    build:
+      context: ..
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        BACKEND_INTERNAL_URL: http://api:8010
+        API_BASE_URL: http://api:8010
     restart: unless-stopped
     expose: ["3000"]
     environment:
       NODE_ENV: production
       PORT: 3000
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      BACKEND_INTERNAL_URL: http://api:8010
+      API_BASE_URL: http://api:8010
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     networks: [kt-net]
     logging:
       driver: json-file
@@ -53,6 +67,11 @@ services:
       NODE_ENV: production
       PORT: 3020
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3020').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     networks: [kt-net]
     logging:
       driver: json-file
@@ -70,6 +89,11 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # Explicit URL with password — overrides env_file value
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/health').status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on: [postgres, redis]
     networks: [kt-net]
     logging:

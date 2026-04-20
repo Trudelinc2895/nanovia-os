@@ -1,4 +1,4 @@
-# KT Monetization OS
+# Nanovia OS
 
 > **Production-grade SaaS platform** for AI-powered business automation modules.
 > Built with FastAPI + Next.js · Stripe billing · Argon2id auth · Redis rate limiting
@@ -34,7 +34,7 @@
 
 ## Project Overview
 
-**KT Monetization OS** is a full-stack SaaS platform designed to monetize AI-powered automation modules under the `tkverse.ca` brand.
+**Nanovia OS** is a full-stack SaaS platform designed to monetize AI-powered automation modules under the `nanovia.ca` brand.
 
 **Core value proposition:**
 - AI operator platform with tiered subscription billing
@@ -44,8 +44,8 @@
 - Real-time analytics and gamification milestones
 
 **Owner:** Kevin Trudel — Trudelinc2895  
-**Domain:** tkverse.ca  
-**Status:** ✅ Production-ready core · In active development
+**Domain:** nanovia.ca  
+**Status:** Production hardening in progress
 
 ---
 
@@ -83,9 +83,9 @@
 
 ### Subscription Tiers
 
-| Feature | Free | Pro ($29/mo) | Business ($99/mo) |
+| Feature | Free | Pro ($79/mo) | Business ($149/mo) |
 |---------|------|-------------|-------------------|
-| AI Messages/month | 50 | 2,000 | Unlimited |
+| AI Messages/month | 50 | 1,000 | Unlimited |
 | Storage | 1 GB | 10 GB | 100 GB |
 | Team Seats | 1 | 5 | 25 |
 | API Access | ❌ | ✅ | ✅ |
@@ -94,10 +94,10 @@
 | Custom Modules | ❌ | ❌ | ✅ |
 | Automation | ❌ | ✅ | ✅ |
 | Data Export | ❌ | ✅ | ✅ |
-| Priority Support | ❌ | ❌ | ✅ |
+| Priority Support | ❌ | ✅ | ✅ |
 | Early Access | ❌ | ❌ | ✅ |
-| Annual Discount | — | -20% | -20% |
-| Free Trial | — | 14 days | 7 days |
+| Annual Discount | — | -17% | -17% |
+| Free Trial | — | 14 days | 14 days |
 
 ### Add-ons (One-time)
 

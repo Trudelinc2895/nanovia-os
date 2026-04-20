@@ -8,6 +8,21 @@ export function resolveApiUrl(path: string): string {
   return API_URL ? `${API_URL}${path}` : path;
 }
 
+function getNetworkErrorMessage(path: string): string {
+  if (typeof window === "undefined") {
+    return "Impossible de joindre l'API.";
+  }
+
+  const host = window.location.hostname;
+  const onRawIp = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host);
+  if (onRawIp) {
+    return "Impossible de joindre l'API depuis l'IP brute. Utilise https://nanovia.ca pour la connexion.";
+  }
+
+  const target = API_URL || "same-origin /api";
+  return `Impossible de joindre l'API (${target}) pour ${path}. Verifie le domaine public, le TLS et le reverse proxy.`;
+}
+
 let _accessToken: string | null = null;
 
 export function setAccessToken(token: string | null) {
@@ -31,7 +46,12 @@ async function apiFetch<T>(
     headers["Authorization"] = `Bearer ${_accessToken}`;
   }
 
-  const res = await fetch(resolveApiUrl(path), { ...options, headers, credentials: "include" });
+  let res: Response;
+  try {
+    res = await fetch(resolveApiUrl(path), { ...options, headers, credentials: "include" });
+  } catch {
+    throw new Error(getNetworkErrorMessage(path));
+  }
 
   if (res.status === 401 && retry) {
     const refreshed = await refreshAccessToken();
@@ -251,6 +271,8 @@ export interface FeatureGates {
 export interface Plan {
   slug: string;
   name: string;
+  marketing_description: string;
+  highlight: boolean;
   price_monthly_usd: number;
   price_yearly_usd: number;
   yearly_discount_pct: number;
@@ -259,6 +281,7 @@ export interface Plan {
   limits: PlanLimits;
   features: string[];
   features_enabled: FeatureGates;
+  included_modules: string[];
 }
 
 export interface UpsellSuggestion {
@@ -308,6 +331,30 @@ export interface AddonPublic {
   grants: Record<string, number>;
 }
 
+export interface PublicEntrypointHealth {
+  status: string;
+  app: string;
+  env: string;
+  domain: string;
+  public_web_url: string;
+  api_base_url: string;
+  allowed_origins: string[];
+  canonical_web_url: string;
+  canonical_api_url: string;
+  expected_public_hosts: string[];
+  raw_ip_supported_for_login: boolean;
+  ts: string;
+}
+
+export interface BillingModulePublic {
+  slug: string;
+  name: string;
+  price_usd: number;
+  description: string;
+  available: boolean;
+  included_in_plans: string[];
+}
+
 export async function getPlans(): Promise<Plan[]> {
   return apiFetch<Plan[]>("/api/v1/billing/plans");
 }
@@ -326,6 +373,14 @@ export async function getUpsell(): Promise<UpsellSuggestion | null> {
 
 export async function getAddons(): Promise<AddonPublic[]> {
   return apiFetch<AddonPublic[]>("/api/v1/billing/addons");
+}
+
+export async function getBillingModules(): Promise<BillingModulePublic[]> {
+  return apiFetch<BillingModulePublic[]>("/api/v1/billing/modules");
+}
+
+export async function getPublicEntrypointHealth(): Promise<PublicEntrypointHealth> {
+  return apiFetch<PublicEntrypointHealth>("/api/v1/health/public-entrypoint", {}, false);
 }
 
 export async function createCheckoutSession(plan: string, interval: "monthly" | "yearly") {

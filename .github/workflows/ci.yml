@@ -43,4 +43,5 @@ jobs:
           APP_ENV: test
         run: |
           cd backend
+          pip install pytest pytest-asyncio
           python -m pytest tests/ -v --tb=short

@@ -1,66 +1,51 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { createCheckoutSession, getAccessToken } from "@/lib/api";
+import {
+  createCheckoutSession,
+  getAccessToken,
+  getBillingModules,
+  getPlans,
+  type BillingModulePublic,
+  type Plan,
+} from "@/lib/api";
 
-const PLANS = [
-  {
-    key: "free",
-    name: "Free",
-    price: "$0",
-    period: "",
-    yearlyPrice: null,
-    desc: "Commence gratuitement",
-    features: ["1 module IA", "50 messages/mois", "Support communauté", "Dashboard inclus"],
-    cta: "Commencer gratis",
-    ctaHref: "/register",
-    highlight: false,
-  },
-  {
-    key: "pro",
-    name: "Pro",
-    price: "$79",
-    period: "/mois",
-    yearlyPrice: "$790/an",
-    yearlyDiscount: "17% off",
-    desc: "Pour freelancers & solopreneurs",
-    features: ["5 modules IA", "1 000 messages/mois", "Accès API", "Support prioritaire", "Export données", "Automatisations"],
-    cta: "Démarrer Pro",
-    ctaHref: null,
-    highlight: true,
-  },
-  {
-    key: "business",
-    name: "Business",
-    price: "$149",
-    period: "/mois",
-    yearlyPrice: "$1490/an",
-    yearlyDiscount: "17% off",
-    desc: "Pour agences & équipes",
-    features: ["10 modules IA", "Messages illimités", "White-label", "Support dédié", "Accès anticipé", "Sièges équipe", "API illimitée"],
-    cta: "Démarrer Business",
-    ctaHref: null,
-    highlight: false,
-  },
-];
+const MODULE_ICONS: Record<string, string> = {
+  operator: "🤖",
+  content: "📡",
+  micro_saas: "⚙️",
+  ghost: "👻",
+  decision: "🧠",
+  knowledge: "📚",
+  leverage: "⚡",
+  reverse: "🔍",
+  offer: "🎯",
+  execution: "🚀",
+};
 
-const MODULES = [
-  { icon: "🤖", title: "AI Personal Operator", price: "$19/mo", desc: "Un employé digital qui gère tes emails, décisions et tâches — 24/7." },
-  { icon: "📡", title: "Content Cloner Engine", price: "$15/mo", desc: "Prend le contenu viral → le restructure → publie sur toutes tes plateformes." },
-  { icon: "⚙️", title: "Micro-SaaS Builder", price: "$29/mo", desc: "Lance un outil ultra-spécifique en 24h. Un problème, une solution, des abonnés." },
-  { icon: "👻", title: "Ghost Automation Agency", price: "$39/mo", desc: "Automatise les tâches répétitives de tes clients. Ils paient, tu livres." },
-  { icon: "🧠", title: "AI Decision Engine", price: "$19/mo", desc: "Analyse, structure et recommande. Prends de meilleures décisions plus vite." },
-  { icon: "📚", title: "Knowledge Weapon System", price: "$15/mo", desc: "Transforme livres, vidéos, formations en plans d'action immédiat." },
-  { icon: "⚡", title: "Digital Leverage Engine", price: "$19/mo", desc: "Multiplie ta production sans multiplier tes heures." },
-  { icon: "🔍", title: "Reverse Engineering Module", price: "$25/mo", desc: "Décode ce qui fonctionne chez tes compétiteurs et reproduis-le." },
-  { icon: "🎯", title: "Offer Generator", price: "$15/mo", desc: "Crée des offres irrésistibles en quelques minutes avec l'IA." },
-  { icon: "🚀", title: "Execution Service", price: "$29/mo", desc: "Transforme chaque idée en système exécutable et mesurable." },
-];
+function formatPlanCta(planSlug: string): string {
+  if (planSlug === "free") return "Commencer gratis";
+  if (planSlug === "business") return "Demarrer Business";
+  return "Demarrer Pro";
+}
 
 export default function Home() {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [yearly, setYearly] = useState(false);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [modules, setModules] = useState<BillingModulePublic[]>([]);
+
+  useEffect(() => {
+    Promise.all([getPlans(), getBillingModules()])
+      .then(([plansData, modulesData]) => {
+        setPlans(plansData);
+        setModules(modulesData);
+      })
+      .catch(() => {
+        setErrorMsg("Catalogue temporairement indisponible. Reessaie dans quelques instants.");
+      });
+  }, []);
 
   async function handleCheckout(planKey: string) {
     setErrorMsg("");
@@ -92,7 +77,7 @@ export default function Home() {
       {/* NAV */}
       <nav className="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <span className="text-xl font-bold text-violet-400">KT Monetization OS</span>
+          <span className="text-xl font-bold text-violet-400">Nanovia OS</span>
           <div className="flex items-center gap-3 text-sm">
             <a href="#modules" className="text-gray-400 hover:text-white transition hidden sm:block">Modules</a>
             <a href="#pricing" className="text-gray-400 hover:text-white transition hidden sm:block">Tarifs</a>
@@ -119,8 +104,8 @@ export default function Home() {
           <span className="text-violet-400">Automatisé. Rentable.</span>
         </h1>
         <p className="text-xl text-gray-400 mb-10 max-w-2xl mx-auto">
-          10 modules d&apos;automatisation IA qui génèrent des revenus.
-          Ghost Agency, AI Operator, Micro-SaaS — tout dans un système.
+          Une plateforme SaaS unifiee pour vendre, activer et gerer des modules IA avec
+          une monetiation decidee cote serveur.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <Link
@@ -136,7 +121,7 @@ export default function Home() {
             Voir les tarifs
           </a>
         </div>
-        <p className="text-gray-600 text-sm mt-5">✓ Sans carte · ✓ Annulable à tout moment · ✓ Mode test actif</p>
+        <p className="text-gray-600 text-sm mt-5">✓ Sans carte · ✓ Annulable a tout moment · ✓ Catalogue backend unique</p>
       </section>
 
       {/* SOCIAL PROOF */}
@@ -155,17 +140,17 @@ export default function Home() {
       <section id="modules" className="py-24 px-6 max-w-6xl mx-auto">
         <div className="text-center mb-14">
           <h2 className="text-4xl font-bold mb-4">10 modules. 1 système.</h2>
-          <p className="text-gray-400 text-lg">Chaque module = une source de revenu indépendante.</p>
+          <p className="text-gray-400 text-lg">Tous les prix affiches ici viennent du catalogue billing du backend.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {MODULES.map((m) => (
-            <div key={m.title} className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-violet-500/50 transition group">
-              <div className="text-3xl mb-3">{m.icon}</div>
+          {modules.map((module) => (
+            <div key={module.slug} className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-violet-500/50 transition group">
+              <div className="text-3xl mb-3">{MODULE_ICONS[module.slug] ?? "🔷"}</div>
               <div className="flex items-start justify-between mb-2">
-                <h3 className="font-bold text-lg group-hover:text-violet-400 transition leading-tight">{m.title}</h3>
-                <span className="text-violet-400 font-bold text-sm ml-3 whitespace-nowrap">{m.price}</span>
+                <h3 className="font-bold text-lg group-hover:text-violet-400 transition leading-tight">{module.name}</h3>
+                <span className="text-violet-400 font-bold text-sm ml-3 whitespace-nowrap">${module.price_usd}/mo</span>
               </div>
-              <p className="text-gray-400 text-sm leading-relaxed">{m.desc}</p>
+              <p className="text-gray-400 text-sm leading-relaxed">{module.description}</p>
             </div>
           ))}
         </div>
@@ -201,9 +186,9 @@ export default function Home() {
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {PLANS.map((plan) => (
+            {plans.map((plan) => (
               <div
-                key={plan.key}
+                key={plan.slug}
                 className={`rounded-2xl p-8 border flex flex-col ${
                   plan.highlight
                     ? "bg-violet-600 border-violet-500 scale-105 shadow-xl shadow-violet-900/40"
@@ -216,21 +201,21 @@ export default function Home() {
                   </div>
                 )}
                 <h3 className="text-xl font-bold mb-1">{plan.name}</h3>
-                <p className={`text-sm mb-4 ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.desc}</p>
+                <p className={`text-sm mb-4 ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.marketing_description}</p>
                 <div className="text-4xl font-extrabold mb-1">
-                  {yearly && plan.yearlyPrice
-                    ? <>{plan.yearlyPrice.split("/")[0]}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>/an</span></>
-                    : <>{plan.price}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.period}</span></>
+                  {yearly && plan.price_yearly_usd > 0
+                    ? <>${plan.price_yearly_usd}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>/an</span></>
+                    : <>{plan.price_monthly_usd === 0 ? "$0" : `$${plan.price_monthly_usd}`}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.price_monthly_usd === 0 ? "" : "/mois"}</span></>
                   }
                 </div>
-                {yearly && plan.yearlyDiscount && (
+                {yearly && plan.yearly_discount_pct > 0 && (
                   <p className={`text-xs mb-5 ${plan.highlight ? "text-green-300" : "text-green-400"} font-semibold`}>
-                    ✓ {plan.yearlyDiscount} — économise 2 mois
+                    ✓ -{plan.yearly_discount_pct}% — economie annuelle
                   </p>
                 )}
-                {!yearly && plan.yearlyPrice && (
+                {!yearly && plan.price_yearly_usd > 0 && (
                   <p className={`text-xs mb-5 ${plan.highlight ? "text-violet-200" : "text-gray-500"}`}>
-                    {plan.yearlyPrice} · <span className="text-green-400">{plan.yearlyDiscount}</span>
+                    ${plan.price_yearly_usd}/an · <span className="text-green-400">-{plan.yearly_discount_pct}%</span>
                   </p>
                 )}
                 <ul className="space-y-2 mb-8 flex-1">
@@ -240,20 +225,20 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                {plan.ctaHref ? (
+                {plan.slug === "free" ? (
                   <Link
-                    href={plan.ctaHref}
+                    href="/register"
                     className={`w-full py-3 rounded-xl font-bold text-sm text-center transition block ${
                       plan.highlight
                         ? "bg-white text-violet-700 hover:bg-gray-100"
                         : "bg-gray-800 hover:bg-gray-700 border border-gray-700"
                     }`}
                   >
-                    {plan.cta}
+                    {formatPlanCta(plan.slug)}
                   </Link>
                 ) : (
                   <button
-                    onClick={() => handleCheckout(plan.key)}
+                    onClick={() => handleCheckout(plan.slug)}
                     disabled={!!loadingPlan}
                     className={`w-full py-3 rounded-xl font-bold text-sm transition disabled:opacity-50 ${
                       plan.highlight
@@ -261,7 +246,7 @@ export default function Home() {
                         : "bg-gray-800 hover:bg-gray-700 border border-gray-700"
                     }`}
                   >
-                    {loadingPlan === plan.key ? "⏳ Chargement..." : plan.cta}
+                    {loadingPlan === plan.slug ? "⏳ Chargement..." : formatPlanCta(plan.slug)}
                   </button>
                 )}
               </div>
@@ -272,8 +257,8 @@ export default function Home() {
 
       {/* FOOTER */}
       <footer className="py-12 border-t border-gray-800 text-center text-gray-500 text-sm">
-        <p className="text-violet-400 font-bold text-lg mb-2">KT Monetization OS</p>
-        <p>Propulsé par TKVerse · tkverse.ca</p>
+        <p className="text-violet-400 font-bold text-lg mb-2">Nanovia OS</p>
+        <p>Propulse par Nanovia · nanovia.ca</p>
         <p className="mt-2">© 2026 Kevin Trudel — Tous droits réservés</p>
         <div className="flex justify-center gap-6 mt-4">
           <a href="/privacy" className="hover:text-white transition">Confidentialité</a>

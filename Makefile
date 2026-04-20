@@ -58,7 +58,8 @@ logs-db:
 # ── Database ──────────────────────────────────────────────────────────────────
 migrate:
 	@echo "Running Alembic migrations..."
-	$(COMPOSE) exec -T api alembic upgrade head
+	$(COMPOSE) up -d postgres redis
+	$(COMPOSE) run --rm api alembic upgrade head
 	@echo "Done."
 
 # ── Admin bootstrap ───────────────────────────────────────────────────────────
@@ -83,8 +84,9 @@ pull:
 
 update: pull
 	$(COMPOSE) build --no-cache api web
+	$(COMPOSE) up -d postgres redis
+	$(COMPOSE) run --rm api alembic upgrade head
 	$(COMPOSE) up -d
-	$(COMPOSE) exec -T api alembic upgrade head
 	@echo "✅ Update complete"
 
 # ── Backup ────────────────────────────────────────────────────────────────────

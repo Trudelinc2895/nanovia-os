@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { AuthApiDiagnostic } from "@/components/auth-api-diagnostic";
+import { AuthEntryWarning } from "@/components/auth-entry-warning";
 import { useAuth } from "@/lib/auth-context";
 import { Button, Card, Input } from "@/components/ui";
 
@@ -62,10 +64,13 @@ export default function RegisterPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <Link href="/" className="inline-block">
-            <div className="text-3xl font-bold text-primary mb-1">⚡ KT OS</div>
+            <div className="text-3xl font-bold text-primary mb-1">⚡ Nanovia OS</div>
           </Link>
-          <p className="text-text-secondary text-sm">Créer votre système de monétisation</p>
+          <p className="text-text-secondary text-sm">Creer votre compte Nanovia</p>
         </div>
+
+        <AuthApiDiagnostic />
+        <AuthEntryWarning />
 
         <Card variant="outlined" padding="lg">
           <form onSubmit={handleSubmit} className="space-y-5">

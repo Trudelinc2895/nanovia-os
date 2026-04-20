@@ -16,13 +16,13 @@ jobs:
         with: {python-version: "3.12"}
 
       - name: Install deps
-        run: pip install ruff bandit pytest pytest-asyncio httpx -r backend/api/requirements.txt || true
+        run: pip install ruff bandit pytest pytest-asyncio httpx -r backend/requirements.txt
 
       - name: Lint (ruff)
         run: ruff check backend/ modules/ stripe/ || true
 
       - name: Security scan (bandit)
-        run: bandit -r backend/ modules/ -x backend/**/tests/** -ll || true
+        run: python -m bandit -r backend/ modules/ -x backend/tests/ -ll || true
 
       - name: Tests
         run: pytest backend/ modules/ -x -q --tb=short || true
@@ -36,12 +36,14 @@ jobs:
         with: {node-version: "20", cache: npm}
 
       - name: Install & lint web
+        if: ${{ hashFiles('frontend/client/package.json') != '' && (hashFiles('frontend/client/eslint.config.*') != '' || hashFiles('frontend/client/.eslintrc*') != '') }}
         working-directory: frontend/client
-        run: npm ci && npm run lint || true
+        run: npm ci && npm run lint
 
       - name: Install & lint admin
+        if: ${{ hashFiles('frontend/admin/package.json') != '' && (hashFiles('frontend/admin/eslint.config.*') != '' || hashFiles('frontend/admin/.eslintrc*') != '') }}
         working-directory: frontend/admin
-        run: npm ci && npm run lint || true
+        run: npm ci && npm run lint
 
   docker-build-check:
     runs-on: ubuntu-latest
@@ -50,4 +52,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate docker-compose syntax
-        run: docker compose -f infra/docker-compose.prod.yml config --quiet || true
+        run: docker compose -f infra/docker-compose.prod.yml config --quiet
