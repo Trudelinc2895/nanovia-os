@@ -96,6 +96,8 @@ async def list_plans() -> list[PlanPublic]:
         PlanPublic(
             slug=slug,
             name=cfg["name"],
+            marketing_description=cfg["marketing_description"],
+            highlight=cfg["highlight"],
             price_monthly_usd=cfg["price_monthly_usd"],
             price_yearly_usd=cfg["price_yearly_usd"],
             yearly_discount_pct=cfg["yearly_discount_pct"],
@@ -104,6 +106,7 @@ async def list_plans() -> list[PlanPublic]:
             limits=cfg["limits"],
             features=cfg["features"],
             features_enabled=cfg["features_enabled"],
+            included_modules=cfg["included_modules"],
         )
         for slug, cfg in PLANS_CONFIG.items()
     ]
@@ -119,6 +122,7 @@ async def list_modules() -> list[ModulePublic]:
             price_usd=cfg["price_usd"],
             description=cfg["description"],
             available=bool(cfg.get("stripe_price_id")),
+            included_in_plans=cfg["included_in_plans"],
         )
         for cfg in MODULES_CONFIG.values()
     ]
@@ -144,13 +148,10 @@ async def get_my_modules(current_user: CurrentUser, db: DB):
     )
     purchased_slugs = {row.module_slug for row in result.scalars().all()}
 
-    # Define which modules are included in each plan
-    PLAN_INCLUDED_MODULES: dict[str, set[str]] = {
-        "free": {"operator"},
-        "pro": {"operator", "content", "decision", "knowledge", "leverage"},
-        "business": set(MODULES_CONFIG.keys()),  # all 10
+    plan_modules = {
+        slug for slug, cfg in MODULES_CONFIG.items()
+        if current_user.plan in cfg.get("included_in_plans", [])
     }
-    plan_modules = PLAN_INCLUDED_MODULES.get(current_user.plan, set())
 
     modules_status = []
     for slug, cfg in MODULES_CONFIG.items():
@@ -355,6 +356,7 @@ async def create_module_checkout_session(
     return CheckoutResponse(url=session.url)
 
 
+@router.post("/portal-session", response_model=PortalResponse)
 async def create_portal_session(current_user: CurrentUser, db: DB):
     """Open Stripe Billing Portal so user can manage/cancel their subscription."""
     if not current_user.stripe_customer_id:

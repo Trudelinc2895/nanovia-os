@@ -43,6 +43,16 @@ async def test_plans_config_prices():
     assert PLANS_CONFIG["free"]["price_monthly_usd"] == 0
 
 @pytest.mark.asyncio
+async def test_catalog_module_inclusion_and_prices():
+    """Shared catalog should drive plan inclusion and public module pricing."""
+    from api.services.billing_service import MODULES_CONFIG, PLANS_CONFIG
+    assert MODULES_CONFIG["operator"]["price_usd"] == 19
+    assert MODULES_CONFIG["ghost"]["price_usd"] == 39
+    assert MODULES_CONFIG["operator"]["included_in_plans"] == ["free", "pro", "business"]
+    assert "content" in PLANS_CONFIG["pro"]["included_modules"]
+    assert "ghost" in PLANS_CONFIG["business"]["included_modules"]
+
+@pytest.mark.asyncio
 async def test_feature_gates_by_plan():
     """Verify feature gates per plan."""
     from api.services.billing_service import has_feature

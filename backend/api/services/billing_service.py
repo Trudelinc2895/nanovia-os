@@ -11,9 +11,12 @@ Single source of truth for all monetization logic:
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import stripe
@@ -29,217 +32,83 @@ from api.models.webhook_event import WebhookEvent
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+_MONETIZATION_CATALOG_PATH = (
+    Path(__file__).resolve().parents[3] / "shared" / "catalog" / "monetization.json"
+)
+
+
+def _load_public_catalog() -> dict[str, Any]:
+    with _MONETIZATION_CATALOG_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+_PUBLIC_MONETIZATION = _load_public_catalog()
+
 
 # ─── Plan configuration — server-side ONLY, never from client ────────────────
 def _build_plans() -> dict[str, dict]:
-    return {
-        "free": {
-            "name": "Free",
-            "price_monthly_usd": 0,
-            "price_yearly_usd": 0,
-            "yearly_discount_pct": 0,
-            "trial_days": 0,
-            "support_level": "community",
-            "stripe_price_monthly": None,
-            "stripe_price_yearly": None,
-            "limits": {
-                "ai_messages_per_month": 50,
-                "conversations": 5,
-                "active_modules": 1,
-                "api_calls_per_day": 0,
-                "storage_gb": 1,
-                "team_seats_max": 1,
-            },
-            "features": ["1 AI module", "50 messages/month", "Community support"],
-            "features_enabled": {
-                "api_access": False,
-                "white_label": False,
-                "priority_support": False,
-                "advanced_analytics": False,
-                "custom_modules": False,
-                "automation": False,
-                "team_seats": False,
-                "data_export": False,
-                "overage_allowed": False,
-                "early_access": False,
-            },
-        },
-        "pro": {
-            "name": "Pro",
-            "price_monthly_usd": 79,
-            "price_yearly_usd": 790,
-            "yearly_discount_pct": 17,
-            "trial_days": 14,
-            "support_level": "priority",
-            "stripe_price_monthly": settings.STRIPE_PRICE_PRO_MONTHLY_ID or None,
-            "stripe_price_yearly": settings.STRIPE_PRICE_PRO_YEARLY_ID or None,
-            "limits": {
-                "ai_messages_per_month": 1000,
-                "conversations": 100,
-                "active_modules": 5,
-                "api_calls_per_day": 500,
-                "storage_gb": 10,
-                "team_seats_max": 5,
-            },
-            "features": ["5 AI modules", "1,000 messages/month", "Priority support", "API access", "Data export"],
-            "features_enabled": {
-                "api_access": True,
-                "white_label": False,
-                "priority_support": True,
-                "advanced_analytics": True,
-                "custom_modules": False,
-                "automation": True,
-                "team_seats": False,
-                "data_export": True,
-                "overage_allowed": True,
-                "early_access": False,
-            },
-        },
-        "business": {
-            "name": "Business",
-            "price_monthly_usd": 149,
-            "price_yearly_usd": 1490,
-            "yearly_discount_pct": 17,
-            "trial_days": 14,
-            "support_level": "dedicated",
-            "stripe_price_monthly": settings.STRIPE_PRICE_BUSINESS_MONTHLY_ID or None,
-            "stripe_price_yearly": settings.STRIPE_PRICE_BUSINESS_YEARLY_ID or None,
-            "limits": {
-                "ai_messages_per_month": -1,
-                "conversations": -1,
-                "active_modules": 10,
-                "api_calls_per_day": -1,
-                "storage_gb": 100,
-                "team_seats_max": 25,
-            },
-            "features": [
-                "All 10 AI modules",
-                "Unlimited messages",
-                "Dedicated support",
-                "White-label option",
-                "API access",
-                "Team seats",
-                "Early access features",
-            ],
-            "features_enabled": {
-                "api_access": True,
-                "white_label": True,
-                "priority_support": True,
-                "advanced_analytics": True,
-                "custom_modules": True,
-                "automation": True,
-                "team_seats": True,
-                "data_export": True,
-                "overage_allowed": True,
-                "early_access": True,
-            },
-        },
+    plans = deepcopy(_PUBLIC_MONETIZATION["plans"])
+    stripe_ids = {
+        "free": (None, None),
+        "pro": (
+            settings.STRIPE_PRICE_PRO_MONTHLY_ID or None,
+            settings.STRIPE_PRICE_PRO_YEARLY_ID or None,
+        ),
+        "business": (
+            settings.STRIPE_PRICE_BUSINESS_MONTHLY_ID or None,
+            settings.STRIPE_PRICE_BUSINESS_YEARLY_ID or None,
+        ),
     }
+    for slug, (monthly_id, yearly_id) in stripe_ids.items():
+        plans[slug]["stripe_price_monthly"] = monthly_id
+        plans[slug]["stripe_price_yearly"] = yearly_id
+    return plans
 
 
 PLANS_CONFIG: dict[str, dict] = _build_plans()
 
 # ─── Add-on packs — server-side only, never from client ──────────────────────
-ADDONS_CONFIG: dict[str, dict] = {
-    "api_calls_500": {
-        "name": "API Calls Pack — 500",
-        "description": "+500 API calls for the current month",
-        "price_usd": 5,
-        "stripe_price_id": settings.STRIPE_PRICE_ADDON_API_PACK or None,
-        "type": "one_time",
-        "grants": {"api_calls_extra": 500},
-    },
-    "storage_10gb": {
-        "name": "Storage Pack — 10 GB",
-        "description": "+10 GB storage add-on",
-        "price_usd": 5,
-        "stripe_price_id": settings.STRIPE_PRICE_ADDON_STORAGE_10GB or None,
-        "type": "one_time",
-        "grants": {"storage_gb_extra": 10},
-    },
-    "credits_50": {
-        "name": "Credit Pack — 50 credits",
-        "description": "50 overage credits (1 credit = 1 extra message beyond plan limit)",
-        "price_usd": 4,
-        "stripe_price_id": settings.STRIPE_PRICE_CREDITS_PACK or None,
-        "type": "one_time",
-        "grants": {"credits": 50},
-    },
-}
+def _build_addons() -> dict[str, dict]:
+    addons = deepcopy(_PUBLIC_MONETIZATION["addons"])
+    stripe_ids = {
+        "api_calls_500": settings.STRIPE_PRICE_ADDON_API_PACK or None,
+        "storage_10gb": settings.STRIPE_PRICE_ADDON_STORAGE_10GB or None,
+        "credits_50": settings.STRIPE_PRICE_CREDITS_PACK or None,
+    }
+    for slug, stripe_price_id in stripe_ids.items():
+        addons[slug]["stripe_price_id"] = stripe_price_id
+    return addons
+
+
+ADDONS_CONFIG: dict[str, dict] = _build_addons()
 
 # ─── Per-module à-la-carte pricing ────────────────────────────────────────────
-MODULES_CONFIG: dict[str, dict] = {
-    "operator": {
-        "name": "AI Personal Operator",
-        "slug": "operator",
-        "price_usd": 19,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_OPERATOR or None,
-        "description": "Digital employee managing emails, decisions and tasks 24/7",
-    },
-    "content": {
-        "name": "Content Cloner Engine",
-        "slug": "content",
-        "price_usd": 15,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_CONTENT or None,
-        "description": "Clone viral content and republish across all platforms",
-    },
-    "micro_saas": {
-        "name": "Micro-SaaS Builder",
-        "slug": "micro_saas",
-        "price_usd": 29,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_MICRO_SAAS or None,
-        "description": "Launch a hyper-specific tool in 24h",
-    },
-    "ghost": {
-        "name": "Ghost Automation Agency",
-        "slug": "ghost",
-        "price_usd": 39,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_GHOST or None,
-        "description": "Automate repetitive client tasks — they pay, you deliver",
-    },
-    "decision": {
-        "name": "AI Decision Engine",
-        "slug": "decision",
-        "price_usd": 19,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_DECISION or None,
-        "description": "Analyse, structure and recommend — make better decisions faster",
-    },
-    "knowledge": {
-        "name": "Knowledge Weapon System",
-        "slug": "knowledge",
-        "price_usd": 15,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_KNOWLEDGE or None,
-        "description": "Turn books, videos and courses into immediate action plans",
-    },
-    "leverage": {
-        "name": "Digital Leverage Engine",
-        "slug": "leverage",
-        "price_usd": 19,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_LEVERAGE or None,
-        "description": "Multiply your output without multiplying your hours",
-    },
-    "reverse": {
-        "name": "Reverse Engineering Module",
-        "slug": "reverse",
-        "price_usd": 25,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_REVERSE or None,
-        "description": "Decode what works for competitors and replicate it",
-    },
-    "offer": {
-        "name": "Offer Generator",
-        "slug": "offer",
-        "price_usd": 15,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_OFFER or None,
-        "description": "Create irresistible offers in minutes with AI",
-    },
-    "execution": {
-        "name": "Execution Service",
-        "slug": "execution",
-        "price_usd": 29,
-        "stripe_price_id": settings.STRIPE_PRICE_MODULE_EXECUTION or None,
-        "description": "Turn every idea into an executable and measurable system",
-    },
-}
+def _build_modules() -> dict[str, dict]:
+    modules = deepcopy(_PUBLIC_MONETIZATION["modules"])
+    stripe_ids = {
+        "operator": settings.STRIPE_PRICE_MODULE_OPERATOR or None,
+        "content": settings.STRIPE_PRICE_MODULE_CONTENT or None,
+        "micro_saas": settings.STRIPE_PRICE_MODULE_MICRO_SAAS or None,
+        "ghost": settings.STRIPE_PRICE_MODULE_GHOST or None,
+        "decision": settings.STRIPE_PRICE_MODULE_DECISION or None,
+        "knowledge": settings.STRIPE_PRICE_MODULE_KNOWLEDGE or None,
+        "leverage": settings.STRIPE_PRICE_MODULE_LEVERAGE or None,
+        "reverse": settings.STRIPE_PRICE_MODULE_REVERSE or None,
+        "offer": settings.STRIPE_PRICE_MODULE_OFFER or None,
+        "execution": settings.STRIPE_PRICE_MODULE_EXECUTION or None,
+    }
+    for slug, cfg in modules.items():
+        cfg["slug"] = slug
+        cfg["stripe_price_id"] = stripe_ids[slug]
+        cfg["included_in_plans"] = [
+            plan_slug
+            for plan_slug, plan_cfg in _PUBLIC_MONETIZATION["plans"].items()
+            if slug in plan_cfg.get("included_modules", [])
+        ]
+    return modules
+
+
+MODULES_CONFIG: dict[str, dict] = _build_modules()
 
 # Gamification milestones -- progression system for user engagement / lock-in
 MILESTONES: list[dict] = [

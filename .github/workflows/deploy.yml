@@ -31,6 +31,8 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: deploy
           key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          command_timeout: 20m
           script: |
             set -euo pipefail
             cd /opt/kt-monetization-os
@@ -42,18 +44,57 @@ jobs:
             # Capture current image digests for rollback
             PREV_API=$(docker inspect --format='{{.Id}}' infra-api-1 2>/dev/null || echo "none")
 
-            # Build only changed services — do not force-recreate stateful services
+            # Ensure stateful dependencies are available before running migrations
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              up -d --build --no-deps api ai-orchestrator web
+              up -d postgres redis
 
-            # Wait for API healthcheck
-            for i in $(seq 1 12); do
-              curl -fsS http://localhost/api/v1/health/ready && break
-              [ "$i" -eq 12 ] && echo "❌ Healthcheck failed after 60s" && exit 1
+            # Build updated app services without starting them yet
+            docker compose -f infra/docker-compose.prod.yml --env-file .env \
+              build api ai-orchestrator web
+
+            # Run migrations before starting the API
+            docker compose -f infra/docker-compose.prod.yml --env-file .env \
+              run --rm api alembic upgrade head
+
+            # Start updated app services after schema is ready
+            docker compose -f infra/docker-compose.prod.yml --env-file .env \
+              up -d --no-deps api ai-orchestrator web
+
+            API_CONTAINER=$(docker compose -f infra/docker-compose.prod.yml --env-file .env ps -q api)
+
+            # Wait for the API container health before probing through the edge.
+            for i in $(seq 1 24); do
+              API_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "$API_CONTAINER" 2>/dev/null || echo "unknown")
+              [ "$API_HEALTH" = "healthy" ] && break
+
+              if [ "$i" -eq 24 ]; then
+                echo "❌ API container did not become healthy"
+                docker compose -f infra/docker-compose.prod.yml --env-file .env ps
+                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api
+                exit 1
+              fi
+
               sleep 5
             done
 
-            # Run migrations (idempotent — safe to run every deploy)
-            docker compose -f infra/docker-compose.prod.yml exec -T api alembic upgrade head
+            # Wait for the reverse proxy path once the API is healthy.
+            for i in $(seq 1 12); do
+              curl -fsS http://localhost/api/v1/health/ready && break
+
+              if [ "$i" -eq 12 ]; then
+                echo "❌ Edge healthcheck failed after API became healthy"
+                docker compose -f infra/docker-compose.prod.yml --env-file .env ps
+                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 caddy api web
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            curl -fsS http://localhost/api/v1/health/public-entrypoint >/dev/null || {
+              echo "❌ public-entrypoint smoke test failed"
+              docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
+              exit 1
+            }
 
             echo "✅ Deploy $(git rev-parse --short HEAD) successful"

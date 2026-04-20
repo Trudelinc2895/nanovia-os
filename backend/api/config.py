@@ -7,9 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     APP_ENV: str = "development"
-    APP_NAME: str = "KT Monetization OS"
+    APP_NAME: str = "Nanovia OS"
     APP_VERSION: str = "1.0.0"
-    DOMAIN: str = "tkverse.ca"
+    DOMAIN: str = "nanovia.ca"
     LOG_LEVEL: str = "INFO"
 
     API_HOST: str = "127.0.0.1"
@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 30
-    JWT_ISSUER: str = "tkverse"
-    JWT_AUDIENCE: str = "tkverse-users"
+    JWT_ISSUER: str = "nanovia"
+    JWT_AUDIENCE: str = "nanovia-users"
 
     STRIPE_PUBLIC_KEY: str = ""
     STRIPE_SECRET_KEY: str = ""
@@ -61,8 +61,8 @@ class Settings(BaseSettings):
 
     # Resend email
     RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = "noreply@tkverse.ca"
-    RESEND_FROM_NAME: str = "KT Monetization OS"
+    RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
+    RESEND_FROM_NAME: str = "Nanovia OS"
 
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
@@ -75,7 +75,16 @@ class Settings(BaseSettings):
 
     @property
     def ALLOWED_ORIGINS(self) -> list[str]:
-        return [o.strip() for o in self.ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
+        origins = {
+            origin.rstrip("/")
+            for origin in [
+                *self.ALLOWED_ORIGINS_RAW.split(","),
+                self.PUBLIC_WEB_URL,
+                self.PRIVATE_ADMIN_URL,
+            ]
+            if origin and origin.strip()
+        }
+        return sorted(origins)
 
     @property
     def STRIPE_CHECKOUT_SUCCESS_URL(self) -> str:

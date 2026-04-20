@@ -3,9 +3,13 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
-  title: "KT Monetization OS — Automatisation IA pour entrepreneurs",
-  description: "Systèmes d'automatisation IA qui génèrent des revenus pendant que tu dors. Ghost Agency, AI Operator, SaaS — tout en un.",
-  openGraph: { title: "KT Monetization OS — Automatisation IA", description: "Automatisation IA qui génère des revenus passifs. Ghost Agency, AI Operator, SaaS.", url: "https://tkverse.ca" },
+  title: "Nanovia OS — Automatisation IA pour entrepreneurs",
+  description: "Systemes d'automatisation IA qui generent des revenus avec une plateforme SaaS unifiee.",
+  openGraph: {
+    title: "Nanovia OS — Automatisation IA",
+    description: "Automatisation IA, billing serveur et modules monetisables dans une seule plateforme.",
+    url: "https://nanovia.ca",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

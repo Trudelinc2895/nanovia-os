@@ -43,6 +43,8 @@ class UpsellSuggestion(BaseModel):
 class PlanPublic(BaseModel):
     slug: str
     name: str
+    marketing_description: str
+    highlight: bool
     price_monthly_usd: int
     price_yearly_usd: int
     yearly_discount_pct: int
@@ -51,6 +53,7 @@ class PlanPublic(BaseModel):
     limits: PlanLimits
     features: list[str]
     features_enabled: FeatureGates
+    included_modules: list[str]
 
 
 class CheckoutRequest(BaseModel):
@@ -68,6 +71,8 @@ class ModulePublic(BaseModel):
     price_usd: int
     description: str
     available: bool  # True only if stripe_price_id is configured
+    included_in_plans: list[str]
+    included_in_plans: list[str]
 
 
 class CheckoutResponse(BaseModel):

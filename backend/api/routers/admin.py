@@ -17,7 +17,6 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from markupsafe import escape
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -31,6 +30,11 @@ from api.services.credit_service import adjust_credits
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _sanitize_log_value(value: str | None) -> str:
+    """Prevent CRLF-based log injection in operator-controlled fields."""
+    return (value or "").replace("\n", " ").replace("\r", " ")
 
 
 # ─── Request schemas ──────────────────────────────────────────────────────────
@@ -194,10 +198,11 @@ async def admin_override_plan(
     user.plan = body.plan
     db.add(user)
     await db.commit()
-    # Sanitize free-text fields before logging to prevent log injection (CRLF)
-    safe_reason = (body.reason or "").replace("\n", " ").replace("\r", " ")
+    safe_old_plan = _sanitize_log_value(old_plan)
+    safe_new_plan = _sanitize_log_value(body.plan)
+    safe_reason = _sanitize_log_value(body.reason)
     logger.info("[admin] Plan override user=%s %s→%s by admin=%s reason=%s",
-                user_id, old_plan, body.plan, admin.email, safe_reason)
+                user_id, safe_old_plan, safe_new_plan, admin.email, safe_reason)
     return {"status": "ok", "old_plan": old_plan, "new_plan": body.plan}
 
 

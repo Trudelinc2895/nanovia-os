@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { AuthEntryWarning } from "@/components/auth-entry-warning";
 import { forgotPassword } from "@/lib/api";
 
 export default function ForgotPasswordPage() {
@@ -30,10 +31,12 @@ export default function ForgotPasswordPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <Link href="/" className="inline-block">
-            <div className="text-3xl font-bold text-purple-400 mb-1">⚡ KT OS</div>
+            <div className="text-3xl font-bold text-purple-400 mb-1">⚡ Nanovia OS</div>
           </Link>
           <p className="text-gray-400 text-sm">Réinitialisation de mot de passe</p>
         </div>
+
+        <AuthEntryWarning />
 
         {sent ? (
           <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 text-center space-y-4">

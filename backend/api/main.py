@@ -5,18 +5,22 @@ KT Monetization OS — FastAPI production entry point
 from __future__ import annotations
 import base64 as _base64
 import json as _json
+import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 import redis.asyncio as _aioredis
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 load_dotenv(".env")
+from sqlalchemy import text
 
 from api.config import settings
 from api.database import engine, Base
@@ -38,13 +42,53 @@ except ImportError:
     HAS_PROMETHEUS = False
 
 
+_startup_logger = logging.getLogger("startup")
+
+
+def _get_alembic_config() -> AlembicConfig:
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    alembic_ini = os.path.join(project_root, "alembic.ini")
+    config = AlembicConfig(alembic_ini)
+    config.set_main_option("script_location", os.path.join(project_root, "alembic"))
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    return config
+
+
+async def _ensure_expected_schema() -> None:
+    """Fail fast outside development if the DB is not at Alembic head."""
+    config = _get_alembic_config()
+    expected_heads = set(ScriptDirectory.from_config(config).get_heads())
+    if not expected_heads:
+        raise RuntimeError("FATAL: No Alembic heads found. Migration setup is invalid.")
+
+    async with engine.connect() as conn:
+        try:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            current_heads = {row[0] for row in result.fetchall()}
+        except Exception as exc:
+            raise RuntimeError(
+                "FATAL: Database schema is not managed by Alembic. "
+                "Run 'alembic upgrade head' before starting the API."
+            ) from exc
+
+    if current_heads != expected_heads:
+        raise RuntimeError(
+            "FATAL: Database schema is not at Alembic head. "
+            f"expected={sorted(expected_heads)} current={sorted(current_heads)}. "
+            "Run 'alembic upgrade head' before starting the API."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     print(f"[startup] {settings.APP_NAME} v{settings.APP_VERSION} env={settings.APP_ENV}")
-    # Auto-create tables (idempotent — use Alembic for schema changes in prod)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("[startup] DB tables ready")
+    if settings.APP_ENV == "development":
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        print("[startup] DB tables ready (development create_all)")
+    else:
+        await _ensure_expected_schema()
+        _startup_logger.info("[startup] DB schema validated at Alembic head")
 
     # ── Stripe price ID validation ──────────────────────────────────────────────
     _stripe_fields = {

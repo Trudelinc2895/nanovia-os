@@ -75,6 +75,33 @@ async def readiness():
     )
 
 
+@router.get("/api/v1/health/public-entrypoint")
+async def public_entrypoint():
+    """
+    Public-safe diagnostic for browser-facing entrypoints.
+    Helps confirm the hostname/API strategy expected by production without
+    exposing secrets.
+    """
+    canonical_host = settings.DOMAIN
+    canonical_web = f"https://{canonical_host}"
+    canonical_api = f"https://api.{canonical_host}"
+    expected_hosts = sorted({canonical_web, f"https://www.{canonical_host}", canonical_api})
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "env": settings.APP_ENV,
+        "domain": canonical_host,
+        "public_web_url": settings.PUBLIC_WEB_URL,
+        "api_base_url": settings.API_BASE_URL,
+        "allowed_origins": settings.ALLOWED_ORIGINS,
+        "canonical_web_url": canonical_web,
+        "canonical_api_url": canonical_api,
+        "expected_public_hosts": expected_hosts,
+        "raw_ip_supported_for_login": False,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/")
 async def root():
     return {"message": f"{settings.APP_NAME} — online"}

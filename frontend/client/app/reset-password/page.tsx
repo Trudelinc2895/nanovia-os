@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { AuthEntryWarning } from "@/components/auth-entry-warning";
 import { resetPassword } from "@/lib/api";
 
 const PASSWORD_RULES = [
@@ -172,10 +173,11 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <Link href="/" className="inline-block">
-            <div className="text-3xl font-bold text-purple-400 mb-1">⚡ KT OS</div>
+            <div className="text-3xl font-bold text-purple-400 mb-1">⚡ Nanovia OS</div>
           </Link>
           <p className="text-gray-400 text-sm">Nouveau mot de passe</p>
         </div>
+        <AuthEntryWarning />
         <Suspense fallback={<div className="text-center text-gray-500">Chargement...</div>}>
           <ResetPasswordForm />
         </Suspense>

@@ -59,7 +59,7 @@ export default function DashboardPage() {
       <header className="border-b border-ui-border bg-ui-surface/50 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-primary font-bold text-xl">⚡ KT OS</span>
+            <span className="text-primary font-bold text-xl">⚡ Nanovia OS</span>
             <span className="text-text-muted">|</span>
             <span className="text-sm text-text-secondary">{user.full_name || user.email}</span>
           </div>

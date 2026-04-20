@@ -47,8 +47,9 @@ jobs:
             cd "${DEPLOY_PATH}"
             git pull --ff-only
             docker compose -f infra/docker-compose.prod.yml pull
+            docker compose -f infra/docker-compose.prod.yml up -d postgres redis
+            docker compose -f infra/docker-compose.prod.yml run --rm api python -m alembic upgrade head
             docker compose -f infra/docker-compose.prod.yml up -d --remove-orphans
-            docker compose -f infra/docker-compose.prod.yml exec -T api python -m alembic upgrade head
           ENDSSH
 
       - name: Smoke test

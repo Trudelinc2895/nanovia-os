@@ -121,7 +121,7 @@ export default function BillingPage() {
     <div className="min-h-screen bg-bg-base text-text-primary">
       <header className="border-b border-ui-border bg-ui-surface px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-xl font-bold text-primary">TK Verse</span>
+          <span className="text-xl font-bold text-primary">Nanovia</span>
           <span className="text-text-muted text-sm">/</span>
           <span className="text-text-secondary text-sm">Abonnement</span>
         </div>

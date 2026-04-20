@@ -1,0 +1,212 @@
+{
+  "plans": {
+    "free": {
+      "name": "Free",
+      "marketing_description": "Commence gratuitement",
+      "highlight": false,
+      "price_monthly_usd": 0,
+      "price_yearly_usd": 0,
+      "yearly_discount_pct": 0,
+      "trial_days": 0,
+      "support_level": "community",
+      "limits": {
+        "ai_messages_per_month": 50,
+        "conversations": 5,
+        "active_modules": 1,
+        "api_calls_per_day": 0,
+        "storage_gb": 1,
+        "team_seats_max": 1
+      },
+      "features": [
+        "1 AI module",
+        "50 messages/month",
+        "Community support",
+        "Dashboard included"
+      ],
+      "features_enabled": {
+        "api_access": false,
+        "white_label": false,
+        "priority_support": false,
+        "advanced_analytics": false,
+        "custom_modules": false,
+        "automation": false,
+        "team_seats": false,
+        "data_export": false,
+        "overage_allowed": false,
+        "early_access": false
+      },
+      "included_modules": ["operator"]
+    },
+    "pro": {
+      "name": "Pro",
+      "marketing_description": "Pour freelancers et solopreneurs",
+      "highlight": true,
+      "price_monthly_usd": 79,
+      "price_yearly_usd": 790,
+      "yearly_discount_pct": 17,
+      "trial_days": 14,
+      "support_level": "priority",
+      "limits": {
+        "ai_messages_per_month": 1000,
+        "conversations": 100,
+        "active_modules": 5,
+        "api_calls_per_day": 500,
+        "storage_gb": 10,
+        "team_seats_max": 5
+      },
+      "features": [
+        "5 AI modules",
+        "1,000 messages/month",
+        "Priority support",
+        "API access",
+        "Data export",
+        "Automations"
+      ],
+      "features_enabled": {
+        "api_access": true,
+        "white_label": false,
+        "priority_support": true,
+        "advanced_analytics": true,
+        "custom_modules": false,
+        "automation": true,
+        "team_seats": false,
+        "data_export": true,
+        "overage_allowed": true,
+        "early_access": false
+      },
+      "included_modules": ["operator", "content", "decision", "knowledge", "leverage"]
+    },
+    "business": {
+      "name": "Business",
+      "marketing_description": "Pour agences et equipes",
+      "highlight": false,
+      "price_monthly_usd": 149,
+      "price_yearly_usd": 1490,
+      "yearly_discount_pct": 17,
+      "trial_days": 14,
+      "support_level": "dedicated",
+      "limits": {
+        "ai_messages_per_month": -1,
+        "conversations": -1,
+        "active_modules": 10,
+        "api_calls_per_day": -1,
+        "storage_gb": 100,
+        "team_seats_max": 25
+      },
+      "features": [
+        "All 10 AI modules",
+        "Unlimited messages",
+        "Dedicated support",
+        "White-label option",
+        "API access",
+        "Team seats",
+        "Early access features"
+      ],
+      "features_enabled": {
+        "api_access": true,
+        "white_label": true,
+        "priority_support": true,
+        "advanced_analytics": true,
+        "custom_modules": true,
+        "automation": true,
+        "team_seats": true,
+        "data_export": true,
+        "overage_allowed": true,
+        "early_access": true
+      },
+      "included_modules": [
+        "operator",
+        "content",
+        "micro_saas",
+        "ghost",
+        "decision",
+        "knowledge",
+        "leverage",
+        "reverse",
+        "offer",
+        "execution"
+      ]
+    }
+  },
+  "addons": {
+    "api_calls_500": {
+      "name": "API Calls Pack - 500",
+      "description": "+500 API calls for the current month",
+      "price_usd": 5,
+      "type": "one_time",
+      "grants": {
+        "api_calls_extra": 500
+      }
+    },
+    "storage_10gb": {
+      "name": "Storage Pack - 10 GB",
+      "description": "+10 GB storage add-on",
+      "price_usd": 5,
+      "type": "one_time",
+      "grants": {
+        "storage_gb_extra": 10
+      }
+    },
+    "credits_50": {
+      "name": "Credit Pack - 50 credits",
+      "description": "50 overage credits (1 credit = 1 extra message beyond plan limit)",
+      "price_usd": 4,
+      "type": "one_time",
+      "grants": {
+        "credits": 50
+      }
+    }
+  },
+  "modules": {
+    "operator": {
+      "name": "AI Personal Operator",
+      "price_usd": 19,
+      "description": "Digital employee managing emails, decisions and tasks 24/7"
+    },
+    "content": {
+      "name": "Content Cloner Engine",
+      "price_usd": 15,
+      "description": "Clone viral content and republish across all platforms"
+    },
+    "micro_saas": {
+      "name": "Micro-SaaS Builder",
+      "price_usd": 29,
+      "description": "Launch a hyper-specific tool in 24h"
+    },
+    "ghost": {
+      "name": "Ghost Automation Agency",
+      "price_usd": 39,
+      "description": "Automate repetitive client tasks - they pay, you deliver"
+    },
+    "decision": {
+      "name": "AI Decision Engine",
+      "price_usd": 19,
+      "description": "Analyse, structure and recommend - make better decisions faster"
+    },
+    "knowledge": {
+      "name": "Knowledge Weapon System",
+      "price_usd": 15,
+      "description": "Turn books, videos and courses into immediate action plans"
+    },
+    "leverage": {
+      "name": "Digital Leverage Engine",
+      "price_usd": 19,
+      "description": "Multiply your output without multiplying your hours"
+    },
+    "reverse": {
+      "name": "Reverse Engineering Module",
+      "price_usd": 25,
+      "description": "Decode what works for competitors and replicate it"
+    },
+    "offer": {
+      "name": "Offer Generator",
+      "price_usd": 15,
+      "description": "Create irresistible offers in minutes with AI"
+    },
+    "execution": {
+      "name": "Execution Service",
+      "price_usd": 29,
+      "description": "Turn every idea into an executable and measurable system"
+    }
+  }
+}
