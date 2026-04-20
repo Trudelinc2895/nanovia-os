@@ -112,5 +112,11 @@ jobs:
               exit 1
             }
 
+            echo "PUBLIC_DOMAIN=${PUBLIC_DOMAIN}"
+            echo "localhost title: $(curl -fsS http://localhost/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')"
+            echo "domain title: $(curl -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')"
+            docker compose -f infra/docker-compose.prod.yml --env-file .env ps
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+
             echo "✅ Deploy $(git rev-parse --short HEAD) successful"
           ENDSSH
