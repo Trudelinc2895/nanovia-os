@@ -117,7 +117,7 @@ jobs:
 
             # Wait for the real public host routing once the API is healthy.
             for i in $(seq 1 12); do
-              curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/api/v1/health/ready && break
+              curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/ready && break
 
               if [ "$i" -eq 12 ]; then
                 echo "❌ Edge healthcheck failed after API became healthy for ${PUBLIC_DOMAIN}"
@@ -129,15 +129,15 @@ jobs:
               sleep 5
             done
 
-            curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/api/v1/health/public-entrypoint >/dev/null || {
+            curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/public-entrypoint >/dev/null || {
               echo "❌ public-entrypoint smoke test failed for ${PUBLIC_DOMAIN}"
               docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
               exit 1
             }
 
             printf 'PUBLIC_DOMAIN=%s\n' "${PUBLIC_DOMAIN}" >&2
-            printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://localhost/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
-            printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
+            printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
+            printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
             docker compose -f infra/docker-compose.prod.yml --env-file .env ps >&2
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' >&2
 
