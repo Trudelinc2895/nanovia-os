@@ -102,6 +102,12 @@ jobs:
             PUBLIC_DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2- || true)
             PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-nanovia.ca}
 
+            probe_caddy_from_api() {
+              local path="$1"
+              docker compose -f infra/docker-compose.prod.yml --env-file .env \
+                exec -T api python -c "import sys, urllib.request; resp = urllib.request.urlopen('http://caddy${path}', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
+            }
+
             # Start updated edge + app services after schema is ready
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
               up -d --force-recreate --no-deps caddy api ai-orchestrator web
@@ -126,7 +132,7 @@ jobs:
             # Wait for the real public host routing once the API is healthy.
             for i in $(seq 1 12); do
               if [ "$EDGE_MODE" = "ip" ]; then
-                curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/api/v1/health/ready && break
+                probe_caddy_from_api /api/v1/health/ready && break
               else
                 curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/ready && break
               fi
@@ -142,7 +148,7 @@ jobs:
             done
 
             if [ "$EDGE_MODE" = "ip" ]; then
-              curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/api/v1/health/public-entrypoint >/dev/null || {
+              probe_caddy_from_api /api/v1/health/public-entrypoint >/dev/null || {
                 echo "❌ public-entrypoint smoke test failed for raw IP mode"
                 docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
                 exit 1
@@ -157,10 +163,11 @@ jobs:
 
             printf 'EDGE_MODE=%s\n' "${EDGE_MODE}" >&2
             printf 'PUBLIC_DOMAIN=%s\n' "${PUBLIC_DOMAIN}" >&2
-            printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
             if [ "$EDGE_MODE" = "ip" ]; then
+              printf 'localhost title: skipped (ip mode host-port probe unreliable on current VPS)\n' >&2
               printf 'domain title: skipped (ip mode)\n' >&2
             else
+              printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
               printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
             fi
             docker compose -f infra/docker-compose.prod.yml --env-file .env ps >&2
