@@ -59,7 +59,7 @@ jobs:
               else
                 printf '%s=%s\n' "$key" "$value" >> .env
               fi
-            fi
+            }
 
             # Pull latest code
             git fetch --prune
