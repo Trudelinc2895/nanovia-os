@@ -68,9 +68,12 @@ jobs:
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
               run --rm api alembic upgrade head
 
-            # Start updated app services after schema is ready
+            PUBLIC_DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2- || true)
+            PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-nanovia.ca}
+
+            # Start updated edge + app services after schema is ready
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              up -d --no-deps api ai-orchestrator web
+              up -d --no-deps caddy api ai-orchestrator web
 
             API_CONTAINER=$(docker compose -f infra/docker-compose.prod.yml --env-file .env ps -q api)
 
@@ -89,12 +92,12 @@ jobs:
               sleep 5
             done
 
-            # Wait for the reverse proxy path once the API is healthy.
+            # Wait for the real public host routing once the API is healthy.
             for i in $(seq 1 12); do
-              curl -fsS http://localhost/api/v1/health/ready && break
+              curl -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/api/v1/health/ready && break
 
               if [ "$i" -eq 12 ]; then
-                echo "❌ Edge healthcheck failed after API became healthy"
+                echo "❌ Edge healthcheck failed after API became healthy for ${PUBLIC_DOMAIN}"
                 docker compose -f infra/docker-compose.prod.yml --env-file .env ps
                 docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 caddy api web
                 exit 1
@@ -103,8 +106,8 @@ jobs:
               sleep 5
             done
 
-            curl -fsS http://localhost/api/v1/health/public-entrypoint >/dev/null || {
-              echo "❌ public-entrypoint smoke test failed"
+            curl -fsS -H "Host: ${PUBLIC_DOMAIN}" http://localhost/api/v1/health/public-entrypoint >/dev/null || {
+              echo "❌ public-entrypoint smoke test failed for ${PUBLIC_DOMAIN}"
               docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
               exit 1
             }
