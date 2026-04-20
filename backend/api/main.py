@@ -45,6 +45,32 @@ except ImportError:
 _startup_logger = logging.getLogger("startup")
 
 
+def _validate_billing_startup_config() -> None:
+    """Keep auth/API boot independent from partially configured Stripe catalogs."""
+    _stripe_fields = {
+        "STRIPE_PRICE_PRO_MONTHLY_ID": settings.STRIPE_PRICE_PRO_MONTHLY_ID,
+        "STRIPE_PRICE_PRO_YEARLY_ID": settings.STRIPE_PRICE_PRO_YEARLY_ID,
+        "STRIPE_PRICE_BUSINESS_MONTHLY_ID": settings.STRIPE_PRICE_BUSINESS_MONTHLY_ID,
+        "STRIPE_PRICE_BUSINESS_YEARLY_ID": settings.STRIPE_PRICE_BUSINESS_YEARLY_ID,
+    }
+    _module_fields = {
+        f"STRIPE_PRICE_MODULE_{m.upper()}": getattr(settings, f"STRIPE_PRICE_MODULE_{m.upper()}", "")
+        for m in ["OPERATOR", "CONTENT", "MICRO_SAAS", "GHOST", "DECISION", "KNOWLEDGE", "LEVERAGE", "REVERSE", "OFFER", "EXECUTION"]
+    }
+    _missing_plan = [k for k, v in _stripe_fields.items() if not v]
+    _missing_module = [k for k, v in _module_fields.items() if not v]
+
+    if _missing_plan:
+        if settings.APP_ENV == "production" and not any(_stripe_fields.values()):
+            raise RuntimeError("FATAL: No Stripe plan price IDs configured in production.")
+        _startup_logger.warning(
+            "⚠️  Missing Stripe plan price IDs; affected checkouts will return 503: %s",
+            _missing_plan,
+        )
+    if _missing_module:
+        _startup_logger.info("ℹ️  Missing Stripe module price IDs (module checkout disabled): %s", _missing_module)
+
+
 def _get_alembic_config() -> AlembicConfig:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     alembic_ini = os.path.join(project_root, "alembic.ini")
@@ -93,27 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _startup_logger.info("[startup] DB schema validated at Alembic head")
 
     # ── Stripe price ID validation ──────────────────────────────────────────────
-    _stripe_fields = {
-        "STRIPE_PRICE_PRO_MONTHLY_ID": settings.STRIPE_PRICE_PRO_MONTHLY_ID,
-        "STRIPE_PRICE_PRO_YEARLY_ID": settings.STRIPE_PRICE_PRO_YEARLY_ID,
-        "STRIPE_PRICE_BUSINESS_MONTHLY_ID": settings.STRIPE_PRICE_BUSINESS_MONTHLY_ID,
-        "STRIPE_PRICE_BUSINESS_YEARLY_ID": settings.STRIPE_PRICE_BUSINESS_YEARLY_ID,
-    }
-    _module_fields = {
-        f"STRIPE_PRICE_MODULE_{m.upper()}": getattr(settings, f"STRIPE_PRICE_MODULE_{m.upper()}", "")
-        for m in ["OPERATOR", "CONTENT", "MICRO_SAAS", "GHOST", "DECISION", "KNOWLEDGE", "LEVERAGE", "REVERSE", "OFFER", "EXECUTION"]
-    }
-    _missing_plan = [k for k, v in _stripe_fields.items() if not v]
-    _missing_module = [k for k, v in _module_fields.items() if not v]
-    if _missing_plan:
-        if settings.APP_ENV == "production":
-            raise RuntimeError(f"FATAL: Missing Stripe plan price IDs in production: {_missing_plan}")
-        else:
-            import logging as _log
-            _log.getLogger("startup").warning("⚠️  Missing Stripe plan price IDs (checkout will return 503): %s", _missing_plan)
-    if _missing_module:
-        import logging as _log
-        _log.getLogger("startup").info("ℹ️  Missing Stripe module price IDs (module checkout disabled): %s", _missing_module)
+    _validate_billing_startup_config()
 
     # ── Redis health check ─────────────────────────────────────────────────────
     import logging as _log
