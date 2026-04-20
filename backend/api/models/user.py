@@ -63,7 +63,7 @@ class User(Base):
     )
 
     subscriptions: Mapped[list[Subscription]] = relationship(
-        "Subscription", back_populates="user", lazy="selectin"
+        "Subscription", back_populates="user", lazy="noload"
     )
     conversations: Mapped[list[Conversation]] = relationship(
         "Conversation", back_populates="user", lazy="noload"
@@ -88,7 +88,7 @@ class User(Base):
         foreign_keys="TeamMember.owner_id",
     )
     modules: Mapped[list[UserModule]] = relationship(
-        "UserModule", back_populates="user", lazy="selectin",
+        "UserModule", back_populates="user", lazy="noload",
     )
 
     def __repr__(self) -> str:
