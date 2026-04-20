@@ -1,7 +1,7 @@
 """backend/api/config.py — settings via env"""
 from __future__ import annotations
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,14 +22,17 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     VAULT_ADDR: str = "http://127.0.0.1:8200"
 
-    JWT_SECRET_KEY: str
+    JWT_SECRET_KEY: str = Field(validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET"))
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 30
     JWT_ISSUER: str = "nanovia"
     JWT_AUDIENCE: str = "nanovia-users"
 
-    STRIPE_PUBLIC_KEY: str = ""
+    STRIPE_PUBLIC_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
+    )
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_PRO_MONTHLY_ID: str = ""

@@ -35,7 +35,7 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg://ktuser:testpass@localhost:5432/kttest
           REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET: testsecret
+          JWT_SECRET_KEY: testsecretkeyminimum32characters
           SECRET_KEY: testsecretkey
           JWT_ALGORITHM: HS256
           STRIPE_SECRET_KEY: stripe_test_fake
