@@ -13,7 +13,7 @@
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.{$DOMAIN} https://api.stripe.com; frame-src https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self';"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self';"
         -Server
         -X-Powered-By
     }
@@ -72,37 +72,9 @@
     }
 }
 
-# ── Dedicated API host ────────────────────────────────────────────────────────
-api.{$DOMAIN} {
-    import security_headers
-    import block_attackers
-
-    handle {
-        reverse_proxy api:8010
-    }
-}
-
-# ── Dedicated admin host ──────────────────────────────────────────────────────
-admin.{$DOMAIN} {
-    import security_headers
-    import block_attackers
-    import admin_ip_allow
-
-    handle {
-        reverse_proxy admin:3020
-    }
-}
-
-# ── Dedicated monitoring host ────────────────────────────────────────────────
-monitor.{$DOMAIN} {
-    import security_headers
-    import block_attackers
-    import admin_ip_allow
-
-    handle {
-        reverse_proxy grafana:3030
-    }
-}
+# Dedicated api/admin/monitor hosts stay disabled in the default production
+# Caddyfile until their DNS records are confirmed live. The public app runs in
+# same-origin mode through {$DOMAIN} with /api/* proxied to FastAPI.
 
 # ── Raw IP behavior ────────────────────────────────────────────────────────────
 http://{$PUBLIC_IP} {
