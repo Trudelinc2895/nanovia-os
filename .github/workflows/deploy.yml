@@ -96,7 +96,7 @@ jobs:
 
             # Start updated edge + app services after schema is ready
             docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              up -d --no-deps caddy api ai-orchestrator web
+              up -d --force-recreate --no-deps caddy api ai-orchestrator web
 
             API_CONTAINER=$(docker compose -f infra/docker-compose.prod.yml --env-file .env ps -q api)
 
