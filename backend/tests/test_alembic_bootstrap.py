@@ -40,3 +40,17 @@ def test_resolve_legacy_revision_detects_head_schema():
         )
         == HEAD_REVISION
     )
+
+
+def test_resolve_legacy_revision_detects_head_from_user_modules_table():
+    assert resolve_legacy_revision({"users", "user_modules"}, {"id", "email"}) == HEAD_REVISION
+
+
+def test_resolve_legacy_revision_detects_head_from_email_verification_columns():
+    assert (
+        resolve_legacy_revision(
+            {"users", "subscriptions"},
+            {"id", "email", "email_verified"},
+        )
+        == HEAD_REVISION
+    )

@@ -25,7 +25,7 @@ def resolve_legacy_revision(
     if "users" not in tables:
         return None
 
-    if "user_modules" in tables and _HEAD_ONLY_COLUMNS.issubset(columns) and _TOTP_COLUMNS.issubset(columns):
+    if "user_modules" in tables or (_HEAD_ONLY_COLUMNS & columns):
         return HEAD_REVISION
 
     if _TOTP_COLUMNS.issubset(columns):
