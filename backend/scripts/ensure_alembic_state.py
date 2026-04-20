@@ -13,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api.config import settings  # noqa: E402
 from api.core.alembic_bootstrap import (  # noqa: E402
-    missing_required_auth_columns,
     resolve_legacy_revision,
     select_revision_to_stamp,
 )
@@ -27,20 +26,31 @@ def _get_alembic_config() -> AlembicConfig:
 
 
 _USER_COLUMN_DDL = {
-    "totp_secret": 'ALTER TABLE users ADD COLUMN totp_secret VARCHAR(512)',
+    "full_name": "ALTER TABLE users ADD COLUMN full_name VARCHAR(255) NOT NULL DEFAULT ''",
+    "plan": "ALTER TABLE users ADD COLUMN plan VARCHAR(50) NOT NULL DEFAULT 'free'",
+    "is_active": "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE",
+    "is_verified": "ALTER TABLE users ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT FALSE",
+    "is_admin": "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE",
+    "stripe_customer_id": "ALTER TABLE users ADD COLUMN stripe_customer_id VARCHAR(255)",
+    "credits": "ALTER TABLE users ADD COLUMN credits INTEGER NOT NULL DEFAULT 0",
+    "password_reset_token": "ALTER TABLE users ADD COLUMN password_reset_token VARCHAR(128)",
+    "password_reset_expires": "ALTER TABLE users ADD COLUMN password_reset_expires TIMESTAMPTZ",
+    "totp_secret": "ALTER TABLE users ADD COLUMN totp_secret VARCHAR(512)",
     "totp_enabled": "ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN NOT NULL DEFAULT FALSE",
     "email_verified": "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE",
     "email_verification_token": "ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(128)",
     "email_verification_expires": "ALTER TABLE users ADD COLUMN email_verification_expires TIMESTAMPTZ",
+    "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+    "updated_at": "ALTER TABLE users ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
 }
 
 
-def _reconcile_user_auth_columns(conn, user_columns: set[str]) -> set[str]:
-    missing = sorted(missing_required_auth_columns(user_columns))
+def _reconcile_user_columns(conn, user_columns: set[str]) -> set[str]:
+    missing = sorted(set(_USER_COLUMN_DDL) - user_columns)
     if not missing:
         return user_columns
 
-    print("Reconciling legacy auth columns on users:", missing)
+    print("Reconciling legacy users columns:", missing)
     for column in missing:
         conn.execute(text(_USER_COLUMN_DDL[column]))
 
@@ -71,7 +81,7 @@ def main() -> int:
         user_columns = set()
         if "users" in table_names:
             user_columns = {column["name"] for column in inspector.get_columns("users")}
-            user_columns = _reconcile_user_auth_columns(conn, user_columns)
+            user_columns = _reconcile_user_columns(conn, user_columns)
 
     detected_revision = resolve_legacy_revision(table_names, user_columns)
     revision = select_revision_to_stamp(current_revisions, detected_revision)
