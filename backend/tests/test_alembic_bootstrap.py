@@ -2,6 +2,7 @@ from api.core.alembic_bootstrap import (
     HEAD_REVISION,
     INITIAL_SCHEMA_REVISION,
     TOTP_REVISION,
+    missing_required_auth_columns,
     resolve_legacy_revision,
     select_revision_to_stamp,
 )
@@ -67,3 +68,12 @@ def test_select_revision_to_stamp_advances_stale_alembic_version():
 
 def test_select_revision_to_stamp_ignores_current_or_newer_revision():
     assert select_revision_to_stamp([HEAD_REVISION], HEAD_REVISION) is None
+
+
+def test_missing_required_auth_columns_reports_partial_legacy_user_schema():
+    assert missing_required_auth_columns({"id", "email", "email_verified"}) == {
+        "totp_secret",
+        "totp_enabled",
+        "email_verification_token",
+        "email_verification_expires",
+    }

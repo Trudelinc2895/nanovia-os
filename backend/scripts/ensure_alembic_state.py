@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api.config import settings  # noqa: E402
 from api.core.alembic_bootstrap import (  # noqa: E402
+    missing_required_auth_columns,
     resolve_legacy_revision,
     select_revision_to_stamp,
 )
@@ -25,10 +26,40 @@ def _get_alembic_config() -> AlembicConfig:
     return config
 
 
+_USER_COLUMN_DDL = {
+    "totp_secret": 'ALTER TABLE users ADD COLUMN totp_secret VARCHAR(512)',
+    "totp_enabled": "ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+    "email_verified": "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+    "email_verification_token": "ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(128)",
+    "email_verification_expires": "ALTER TABLE users ADD COLUMN email_verification_expires TIMESTAMPTZ",
+}
+
+
+def _reconcile_user_auth_columns(conn, user_columns: set[str]) -> set[str]:
+    missing = sorted(missing_required_auth_columns(user_columns))
+    if not missing:
+        return user_columns
+
+    print("Reconciling legacy auth columns on users:", missing)
+    for column in missing:
+        conn.execute(text(_USER_COLUMN_DDL[column]))
+
+    if "totp_secret" in user_columns:
+        conn.execute(text("ALTER TABLE users ALTER COLUMN totp_secret TYPE VARCHAR(512)"))
+
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_users_email_verification_token "
+            "ON users (email_verification_token)"
+        )
+    )
+    return user_columns | set(missing)
+
+
 def main() -> int:
     engine = create_engine(settings.DATABASE_URL.replace("+psycopg", "+psycopg"))
 
-    with engine.connect() as conn:
+    with engine.begin() as conn:
         inspector = inspect(conn)
         table_names = set(inspector.get_table_names())
         current_revisions: list[str] = []
@@ -40,6 +71,7 @@ def main() -> int:
         user_columns = set()
         if "users" in table_names:
             user_columns = {column["name"] for column in inspector.get_columns("users")}
+            user_columns = _reconcile_user_auth_columns(conn, user_columns)
 
     detected_revision = resolve_legacy_revision(table_names, user_columns)
     revision = select_revision_to_stamp(current_revisions, detected_revision)

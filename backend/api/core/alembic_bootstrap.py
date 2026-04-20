@@ -12,6 +12,7 @@ _HEAD_ONLY_COLUMNS = {
     "email_verification_token",
     "email_verification_expires",
 }
+_REQUIRED_AUTH_COLUMNS = _TOTP_COLUMNS | _HEAD_ONLY_COLUMNS
 _REVISION_ORDER = {
     INITIAL_SCHEMA_REVISION: 0,
     TOTP_REVISION: 1,
@@ -55,3 +56,7 @@ def select_revision_to_stamp(
         return detected_revision
 
     return None
+
+
+def missing_required_auth_columns(user_columns: Iterable[str]) -> set[str]:
+    return _REQUIRED_AUTH_COLUMNS - set(user_columns)
