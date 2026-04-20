@@ -51,9 +51,28 @@ jobs:
               "deploy@${VPS_HOST}" 'timeout 900 bash -seuo pipefail' <<'ENDSSH'
             cd /opt/kt-monetization-os
 
+            upsert_env() {
+              key="$1"
+              value="$2"
+              if grep -q "^${key}=" .env 2>/dev/null; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                printf '%s=%s\n' "$key" "$value" >> .env
+              fi
+            }
+
             # Pull latest code
             git fetch --prune
             git reset --hard origin/main
+
+            # Normalize only public, non-secret routing values on the VPS.
+            upsert_env DOMAIN nanovia.ca
+            upsert_env PUBLIC_IP 167.114.155.166
+            upsert_env API_BASE_URL https://nanovia.ca
+            upsert_env NEXT_PUBLIC_API_URL ""
+            upsert_env PUBLIC_WEB_URL https://nanovia.ca
+            upsert_env PRIVATE_ADMIN_URL https://admin.nanovia.ca
+            upsert_env ALLOWED_ORIGINS_RAW "https://nanovia.ca,https://www.nanovia.ca,https://admin.nanovia.ca"
 
             # Capture current image digests for rollback
             PREV_API=$(docker inspect --format='{{.Id}}' infra-api-1 2>/dev/null || echo "none")
