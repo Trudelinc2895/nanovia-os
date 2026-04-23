@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import stripe
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from api.config import get_runtime_settings_snapshot, reload_runtime_settings
 from api.core.monetization import getEntitlements as monetization_get_entitlements
 from api.core.monetization import getUsageSnapshot as monetization_get_usage_snapshot
 from api.core.monetization._workspace import ensure_owner_workspace, get_workspace
@@ -30,7 +32,7 @@ from api.models.credit_ledger import CreditLedger
 from api.models.subscription import Subscription
 from api.models.user import User
 from api.models.webhook_event import WebhookEvent
-from api.models.workspace_billing import CreditBalance, Member, Workspace
+from api.models.workspace_billing import CreditBalance, Invoice, Member, UsageEvent, Workspace
 from api.services.billing_service import (
     PLANS_CONFIG,
     get_webhook_event,
@@ -38,6 +40,7 @@ from api.services.billing_service import (
     update_webhook_status,
 )
 from api.services.credit_service import adjust_credits
+from api.services.subscription_state_machine import is_access_granted
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,6 +76,10 @@ class WorkspaceStatusRequest(BaseModel):
 class WorkspacePlanOverrideRequest(BaseModel):
     plan: str
     reason: str | None = None
+
+
+class RuntimeConfigReloadRequest(BaseModel):
+    dry_run: bool = False
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -229,6 +236,28 @@ async def admin_override_plan(
     logger.info("[admin] Plan override user=%s %s→%s by admin=%s reason=%s",
                 user_id, safe_old_plan, safe_new_plan, admin.email, safe_reason)
     return {"status": "ok", "old_plan": old_plan, "new_plan": body.plan}
+
+
+@router.get("/runtime-config")
+async def admin_get_runtime_config(admin: AdminUser):
+    """Expose the currently reloadable runtime settings without sensitive fields."""
+    return get_runtime_settings_snapshot()
+
+
+@router.post("/runtime-config/reload")
+async def admin_reload_runtime_config(
+    body: RuntimeConfigReloadRequest,
+    admin: AdminUser,
+):
+    """Reload only non-critical runtime settings that are safe to mutate in-process."""
+    result = reload_runtime_settings(dry_run=body.dry_run)
+    logger.info(
+        "[admin] Runtime config reload dry_run=%s changed=%s by admin=%s",
+        body.dry_run,
+        ",".join(sorted(result["changed"])),
+        admin.email,
+    )
+    return result
 
 
 @router.get("/webhooks")
@@ -615,7 +644,7 @@ async def admin_resync_subscription(
 
 @router.get("/metrics")
 async def admin_metrics(admin: AdminUser, db: DB):
-    """Aggregate business metrics: user counts by plan, subscription stats."""
+    """Aggregate business metrics and a lightweight FinOps summary."""
     # Users by plan
     plan_result = await db.execute(
         select(User.plan, func.count(User.id).label("count"))
@@ -635,14 +664,103 @@ async def admin_metrics(admin: AdminUser, db: DB):
     total_result = await db.execute(select(func.count(User.id)))
     total_users = total_result.scalar_one()
 
-    active_paid = plans.get("pro", 0) + plans.get("business", 0)
+    window_start = datetime.now(timezone.utc) - timedelta(days=30)
+
+    subscription_rows = (
+        await db.execute(select(Subscription).where(Subscription.plan.in_(("pro", "business"))))
+    ).scalars().all()
+    active_paid_subscriptions = [sub for sub in subscription_rows if is_access_granted(sub)]
+    active_paid = len(active_paid_subscriptions)
+    estimated_mrr = 0.0
+    for sub in active_paid_subscriptions:
+        plan_cfg = PLANS_CONFIG.get(sub.plan, {})
+        if (sub.billing_interval or "monthly") == "yearly":
+            estimated_mrr += float(plan_cfg.get("price_yearly_usd", 0)) / 12.0
+        else:
+            estimated_mrr += float(plan_cfg.get("price_monthly_usd", 0))
+
+    paid_invoices = (
+        await db.execute(
+            select(Invoice.workspace_id, func.coalesce(func.sum(Invoice.total_cents), 0).label("revenue_cents"))
+            .where(Invoice.status == "paid", Invoice.paid_at.is_not(None), Invoice.paid_at >= window_start)
+            .group_by(Invoice.workspace_id)
+        )
+    ).all()
+    revenue_by_workspace = {
+        str(row.workspace_id): float(row.revenue_cents or 0) / 100.0
+        for row in paid_invoices
+    }
+    trailing_30d_revenue = sum(revenue_by_workspace.values())
+
+    usage_cost_rows = (
+        await db.execute(
+            select(UsageEvent.workspace_id, func.coalesce(func.sum(UsageEvent.cost_usd), 0).label("usage_cost"))
+            .where(UsageEvent.created_at >= window_start)
+            .group_by(UsageEvent.workspace_id)
+        )
+    ).all()
+    usage_cost_by_workspace = {
+        str(row.workspace_id): float(row.usage_cost or 0)
+        for row in usage_cost_rows
+    }
+    trailing_30d_usage_cost = sum(usage_cost_by_workspace.values())
+
+    workspace_rows = (await db.execute(select(Workspace.id, Workspace.name))).all()
+    workspace_names = {str(row.id): row.name for row in workspace_rows}
+    all_workspace_ids = set(workspace_names) | set(revenue_by_workspace) | set(usage_cost_by_workspace)
+    workspace_margin_rows = []
+    for workspace_id in all_workspace_ids:
+        revenue_usd = revenue_by_workspace.get(workspace_id, 0.0)
+        cost_usd = usage_cost_by_workspace.get(workspace_id, 0.0)
+        margin_usd = revenue_usd - cost_usd
+        workspace_margin_rows.append(
+            {
+                "workspace_id": workspace_id,
+                "name": workspace_names.get(workspace_id, "unknown"),
+                "trailing_30d_revenue_usd": round(revenue_usd, 2),
+                "trailing_30d_usage_cost_usd": round(cost_usd, 2),
+                "trailing_30d_margin_usd": round(margin_usd, 2),
+            }
+        )
+    top_unprofitable_workspaces = sorted(
+        (row for row in workspace_margin_rows if row["trailing_30d_margin_usd"] < 0),
+        key=lambda row: row["trailing_30d_margin_usd"],
+    )[:5]
+
+    cancelled_last_30d = (
+        await db.execute(
+            select(func.count(Subscription.id)).where(
+                Subscription.plan.in_(("pro", "business")),
+                Subscription.status.in_(("canceled", "cancelled")),
+                Subscription.updated_at >= window_start,
+            )
+        )
+    ).scalar_one()
+    churn_rate = (
+        round(cancelled_last_30d / active_paid, 4)
+        if active_paid
+        else None
+    )
+    arpu_mrr = (estimated_mrr / active_paid) if active_paid else None
+    ltv_estimate = (
+        round(arpu_mrr / churn_rate, 2)
+        if arpu_mrr is not None and churn_rate not in (None, 0)
+        else None
+    )
 
     return {
         "total_users": total_users,
         "users_by_plan": plans,
         "active_paid_users": active_paid,
         "subscriptions_by_status": subs,
-        "estimated_mrr_usd": (plans.get("pro", 0) * 29) + (plans.get("business", 0) * 99),
+        "estimated_mrr_usd": round(estimated_mrr, 2),
+        "trailing_30d_revenue_usd": round(trailing_30d_revenue, 2),
+        "trailing_30d_usage_cost_usd": round(trailing_30d_usage_cost, 2),
+        "trailing_30d_gross_margin_usd": round(trailing_30d_revenue - trailing_30d_usage_cost, 2),
+        "top_unprofitable_workspaces": top_unprofitable_workspaces,
+        "churn_rate_30d": churn_rate,
+        "ltv_estimate_usd": ltv_estimate,
+        "cac_estimate_usd": None,
     }
 
 

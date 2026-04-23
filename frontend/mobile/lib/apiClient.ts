@@ -14,7 +14,7 @@ export const setAccessToken = (token: string | null) => {
 };
 
 export const apiClient = new APIClient({
-  baseURL: process.env.EXPO_PUBLIC_API_URL ?? "http://167.114.155.166",
+  baseURL: process.env.EXPO_PUBLIC_API_URL ?? "https://nanovia.ca/api",
 
   getAccessToken: () => _accessToken,
 

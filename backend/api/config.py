@@ -13,6 +13,28 @@ from api.core.secret_manager import resolve_secret_value
 
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+RUNTIME_RELOADABLE_FIELDS = (
+    "LOG_LEVEL",
+    "ADMIN_ALLOWED_IPS_RAW",
+    "PRIVATE_ORCHESTRATOR_ENABLED",
+    "NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED",
+    "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+    "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
+    "OLLAMA_CLIENT_BASE_URL",
+    "OLLAMA_ADMIN_BASE_URL",
+    "OLLAMA_DEFAULT_MODEL",
+)
+RUNTIME_NON_RELOADABLE_AREAS = (
+    "DATABASE_*",
+    "REDIS_*",
+    "JWT_*",
+    "STRIPE_*",
+    "POSTGRES_*",
+    "TOTP_*",
+    "RESEND_*",
+    "OPENAI_*",
+    "TELEGRAM_BOT_TOKEN",
+)
 
 
 def _looks_placeholder(value: str) -> bool:
@@ -332,3 +354,48 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_runtime_settings_snapshot() -> dict[str, object]:
+    snapshot = {field: getattr(settings, field) for field in RUNTIME_RELOADABLE_FIELDS}
+    snapshot["ADMIN_ALLOWED_IPS"] = settings.ADMIN_ALLOWED_IPS
+    snapshot["PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"] = settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS
+    return snapshot
+
+
+def reload_runtime_settings(*, dry_run: bool = False) -> dict[str, object]:
+    fresh_settings = Settings()
+    changed: dict[str, dict[str, object]] = {}
+
+    for field in RUNTIME_RELOADABLE_FIELDS:
+        current_value = getattr(settings, field)
+        new_value = getattr(fresh_settings, field)
+        if current_value == new_value:
+            continue
+        changed[field] = {"old": current_value, "new": new_value}
+        if not dry_run:
+            setattr(settings, field, new_value)
+
+    if not dry_run and "LOG_LEVEL" in changed:
+        from api.core.logging import setup_logging
+
+        setup_logging(level=settings.LOG_LEVEL)
+
+    applied_snapshot = get_runtime_settings_snapshot() if not dry_run else {
+        **{field: change["new"] for field, change in changed.items()},
+        **{
+            field: getattr(settings, field)
+            for field in RUNTIME_RELOADABLE_FIELDS
+            if field not in changed
+        },
+        "ADMIN_ALLOWED_IPS": fresh_settings.ADMIN_ALLOWED_IPS,
+        "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS": fresh_settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS,
+    }
+
+    return {
+        "dry_run": dry_run,
+        "changed": changed,
+        "applied": applied_snapshot,
+        "reloadable_fields": list(RUNTIME_RELOADABLE_FIELDS),
+        "non_reloadable_areas": list(RUNTIME_NON_RELOADABLE_AREAS),
+    }

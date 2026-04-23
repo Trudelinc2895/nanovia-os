@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: 'kt-monetization-os'
+    monitor: 'nanovia'
     environment: 'production'
 
 alerting:
@@ -18,12 +18,12 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  - job_name: kt-api
+  - job_name: nanovia-api
     static_configs:
       - targets: ["api:8010"]
     metrics_path: /metrics
 
-  - job_name: kt-orchestrator
+  - job_name: nanovia-orchestrator
     static_configs:
       - targets: ["ai-orchestrator:8020"]
     metrics_path: /metrics
@@ -34,7 +34,7 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
-        replacement: 'kt-vps'
+        replacement: 'nanovia-vps'
 
   - job_name: postgres
     static_configs:

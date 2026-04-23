@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# KT Monetization OS — HashiCorp Vault secrets setup
+# Nanovia OS — HashiCorp Vault secrets setup
 # Run this with your Vault CLI configured (vault login first)
 # ============================================================
 
@@ -8,8 +8,8 @@
 # export VAULT_ADDR="https://your-vault-url"
 # vault login
 
-# Store all KT OS secrets in one path
-vault kv put secret/kt-monetization-os \
+# Store all Nanovia secrets in one path
+vault kv put secret/nanovia \
   JWT_SECRET="REPLACE_WITH_openssl_rand_hex_32" \
   SECRET_KEY="REPLACE_WITH_openssl_rand_hex_32" \
   DATABASE_URL="postgresql+psycopg://ktuser:REPLACE@postgres:5432/ktmonetization" \
@@ -21,4 +21,4 @@ vault kv put secret/kt-monetization-os \
   RESEND_API_KEY="re_REPLACE"
 
 echo "Secrets stored. Verify with:"
-echo "vault kv get secret/kt-monetization-os"
+echo "vault kv get secret/nanovia"

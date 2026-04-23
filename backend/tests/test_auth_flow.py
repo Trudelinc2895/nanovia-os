@@ -378,6 +378,74 @@ def test_admin_workspace_routes_expose_and_block_workspace(monkeypatch):
         assert denied_after_block.status_code == 401, denied_after_block.text
 
 
+def test_admin_runtime_config_reload_only_updates_whitelisted_fields(monkeypatch):
+    fake_redis = _FakeRedis()
+
+    async def _fake_get_redis():
+        return fake_redis
+
+    monkeypatch.setattr(main_module, "_redis_pool", None)
+    monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    email = f"{uuid.uuid4()}@example.com"
+
+    previous_agents_raw = settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW
+    previous_enabled = settings.PRIVATE_ORCHESTRATOR_ENABLED
+    previous_jwt_secret = settings.JWT_SECRET_KEY
+
+    try:
+        with TestClient(app) as client:
+            register = client.post(
+                "/api/v1/auth/register",
+                json={"email": email, "password": "Password1", "full_name": "Runtime Reload"},
+            )
+            assert register.status_code == 201, register.text
+            access_token = register.json()["access_token"]
+
+            with sqlite3.connect("test_auth.db") as conn:
+                conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
+                conn.commit()
+
+            monkeypatch.setenv("PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "operator,planner")
+            monkeypatch.setenv("PRIVATE_ORCHESTRATOR_ENABLED", "true")
+            monkeypatch.setenv(
+                "JWT_SECRET_KEY",
+                "different-secret-key-that-must-not-reload-at-runtime-123456",
+            )
+
+            dry_run = client.post(
+                "/api/v1/admin/runtime-config/reload",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"dry_run": True},
+            )
+            assert dry_run.status_code == 200, dry_run.text
+            assert "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW" in dry_run.json()["changed"]
+            assert "JWT_SECRET_KEY" not in dry_run.json()["changed"]
+            assert settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW == previous_agents_raw
+            assert settings.JWT_SECRET_KEY == previous_jwt_secret
+
+            reloaded = client.post(
+                "/api/v1/admin/runtime-config/reload",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"dry_run": False},
+            )
+            assert reloaded.status_code == 200, reloaded.text
+            assert reloaded.json()["changed"]["PRIVATE_ORCHESTRATOR_ENABLED"]["new"] is True
+            assert settings.PRIVATE_ORCHESTRATOR_ENABLED is True
+            assert settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS == ["operator", "planner"]
+            assert settings.JWT_SECRET_KEY == previous_jwt_secret
+
+            snapshot = client.get(
+                "/api/v1/admin/runtime-config",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            assert snapshot.status_code == 200, snapshot.text
+            assert snapshot.json()["PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"] == ["operator", "planner"]
+    finally:
+        settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW = previous_agents_raw
+        settings.PRIVATE_ORCHESTRATOR_ENABLED = previous_enabled
+        settings.JWT_SECRET_KEY = previous_jwt_secret
+
+
 def test_workspace_blocked_even_when_user_stays_active(monkeypatch):
     fake_redis = _FakeRedis()
 
@@ -414,6 +482,174 @@ def test_workspace_blocked_even_when_user_stays_active(monkeypatch):
         )
         assert blocked.status_code == 403, blocked.text
         assert blocked.json()["detail"] == "Workspace inactive"
+
+
+def test_admin_metrics_expose_finops_summary(monkeypatch):
+    fake_redis = _FakeRedis()
+
+    async def _fake_get_redis():
+        return fake_redis
+
+    monkeypatch.setattr(main_module, "_redis_pool", None)
+    monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    admin_email = f"{uuid.uuid4()}@example.com"
+    churn_email = f"{uuid.uuid4()}@example.com"
+    now = datetime.now(timezone.utc).isoformat()
+
+    with TestClient(app) as client:
+        admin_register = client.post(
+            "/api/v1/auth/register",
+            json={"email": admin_email, "password": "Password1", "full_name": "FinOps Admin"},
+        )
+        assert admin_register.status_code == 201, admin_register.text
+        access_token = admin_register.json()["access_token"]
+
+        churn_register = client.post(
+            "/api/v1/auth/register",
+            json={"email": churn_email, "password": "Password1", "full_name": "Churned Workspace"},
+        )
+        assert churn_register.status_code == 201, churn_register.text
+
+        with sqlite3.connect("test_auth.db") as conn:
+            admin_user_id, admin_workspace_id = conn.execute(
+                """
+                SELECT u.id, w.id
+                FROM users u
+                JOIN workspaces w ON w.owner_user_id = u.id
+                WHERE u.email = ?
+                """,
+                (admin_email,),
+            ).fetchone()
+            churn_user_id, churn_workspace_id = conn.execute(
+                """
+                SELECT u.id, w.id
+                FROM users u
+                JOIN workspaces w ON w.owner_user_id = u.id
+                WHERE u.email = ?
+                """,
+                (churn_email,),
+            ).fetchone()
+
+            conn.execute(
+                "UPDATE users SET is_admin = 1, plan = 'pro' WHERE email = ?",
+                (admin_email,),
+            )
+            conn.execute(
+                "UPDATE users SET plan = 'business' WHERE email = ?",
+                (churn_email,),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    id, user_id, stripe_subscription_id, billing_interval, plan, status,
+                    current_period_start, current_period_end, cancel_at_period_end, trial_end,
+                    seats_allocated, seats_used, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    admin_user_id,
+                    f"sub_{uuid.uuid4().hex}",
+                    "monthly",
+                    "pro",
+                    "active",
+                    now,
+                    now,
+                    0,
+                    None,
+                    1,
+                    1,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    id, user_id, stripe_subscription_id, billing_interval, plan, status,
+                    current_period_start, current_period_end, cancel_at_period_end, trial_end,
+                    seats_allocated, seats_used, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    churn_user_id,
+                    f"sub_{uuid.uuid4().hex}",
+                    "monthly",
+                    "business",
+                    "canceled",
+                    now,
+                    now,
+                    1,
+                    None,
+                    5,
+                    1,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO invoices (
+                    id, workspace_id, subscription_id, provider_invoice_id, invoice_number, status,
+                    currency, subtotal_cents, total_cents, period_start, period_end, issued_at,
+                    paid_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    admin_workspace_id,
+                    None,
+                    f"in_{uuid.uuid4().hex}",
+                    "INV-001",
+                    "paid",
+                    "USD",
+                    12000,
+                    12000,
+                    now,
+                    now,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO usage_events (
+                    id, workspace_id, actor_user_id, request_id, idempotency_key, event_type,
+                    quantity, cost_usd, metadata, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    admin_workspace_id,
+                    admin_user_id,
+                    f"req_{uuid.uuid4().hex}",
+                    f"usage_{uuid.uuid4().hex}",
+                    "ai_usage",
+                    100,
+                    145,
+                    "{}",
+                    now,
+                ),
+            )
+            conn.commit()
+
+        metrics = client.get(
+            "/api/v1/admin/metrics",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert metrics.status_code == 200, metrics.text
+        payload = metrics.json()
+        assert payload["estimated_mrr_usd"] == 79.0
+        assert payload["trailing_30d_revenue_usd"] == 120.0
+        assert payload["trailing_30d_usage_cost_usd"] == 145.0
+        assert payload["trailing_30d_gross_margin_usd"] == -25.0
+        assert payload["churn_rate_30d"] == 1.0
+        assert payload["ltv_estimate_usd"] == 79.0
+        assert payload["cac_estimate_usd"] is None
+        assert uuid.UUID(payload["top_unprofitable_workspaces"][0]["workspace_id"]).hex == admin_workspace_id
+        assert payload["top_unprofitable_workspaces"][0]["trailing_30d_margin_usd"] == -25.0
 
 
 def test_private_orchestrator_admin_routes_are_hidden_when_flag_is_off(monkeypatch):

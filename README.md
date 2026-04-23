@@ -169,7 +169,7 @@ When a user exceeds their monthly AI message limit:
 ## Project Structure
 
 ```
-kt-monetization-os/
+nanovia/
 ├── backend/
 │   ├── api/
 │   │   ├── config.py              # All env vars via pydantic-settings
@@ -259,8 +259,8 @@ kt-monetization-os/
 ### 1. Clone
 
 ```bash
-git clone https://github.com/Trudelinc2895/kt-monetization-os.git
-cd kt-monetization-os
+git clone <nanovia-repo-url>
+cd <nanovia-repo-dir>
 ```
 
 ### 2. Backend Setup
