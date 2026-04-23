@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from cryptography.fernet import Fernet
+
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_auth.db"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-minimum-32-chars-long-for-auth-tests"
 os.environ["APP_ENV"] = "development"
@@ -47,6 +49,69 @@ def test_register_sets_refresh_cookie_and_returns_me():
 
         assert me.status_code == 200, me.text
         assert me.json()["email"] == email
+
+
+def test_register_stores_hashed_email_verification_token():
+    email = f"{uuid.uuid4()}@example.com"
+
+    with TestClient(app) as client:
+        register = client.post(
+            "/api/v1/auth/register",
+            json={"email": email, "password": "Password1", "full_name": "Protected Verify"},
+        )
+        assert register.status_code == 201, register.text
+
+        with sqlite3.connect("test_auth.db") as conn:
+            stored_token = conn.execute(
+                "SELECT email_verification_token FROM users WHERE email = ?",
+                (email,),
+            ).fetchone()[0]
+
+        assert stored_token.startswith("hmac-sha256:")
+
+
+def test_mobile_register_device_encrypts_push_token(monkeypatch):
+    fake_redis = _FakeRedis()
+
+    async def _fake_get_redis():
+        return fake_redis
+
+    previous_key = settings.TOTP_ENCRYPTION_KEY
+    monkeypatch.setattr(main_module, "_redis_pool", None)
+    monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    monkeypatch.setattr(settings, "TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    email = f"{uuid.uuid4()}@example.com"
+
+    try:
+        with TestClient(app) as client:
+            register = client.post(
+                "/api/v1/auth/register",
+                json={"email": email, "password": "Password1", "full_name": "Push Token Protect"},
+            )
+            assert register.status_code == 201, register.text
+            access_token = register.json()["access_token"]
+            response = client.post(
+                "/api/v1/notifications/register-device",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={
+                    "push_token": "ExponentPushToken[abc123secure]",
+                    "device_id": "device-secure-123",
+                    "device_name": "iPhone",
+                    "platform": "ios",
+                },
+            )
+            assert response.status_code == 201, response.text
+
+            with sqlite3.connect("test_auth.db") as conn:
+                stored_token = conn.execute(
+                    "SELECT push_token FROM device_sessions WHERE device_id = ?",
+                    ("device-secure-123",),
+                ).fetchone()[0]
+
+            assert stored_token.startswith("enc::")
+            assert stored_token != "ExponentPushToken[abc123secure]"
+    finally:
+        settings.TOTP_ENCRYPTION_KEY = previous_key
 
 
 def test_refresh_rotates_refresh_cookie():

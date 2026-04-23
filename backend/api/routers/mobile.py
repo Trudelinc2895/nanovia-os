@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from api.core.data_protection import encrypt_at_rest
 from api.core.deps import CurrentUser, DB
 from api.models.device_session import DeviceSession
 from api.models.notification import UserNotification
@@ -131,12 +132,12 @@ async def register_device(body: DeviceRegistrationRequest, current_user: Current
             device_id=body.device_id,
             device_name=body.device_name,
             platform=body.platform,
-            push_token=body.push_token,
+            push_token=encrypt_at_rest(body.push_token),
             ip_address=ip,
         )
         db.add(session)
     else:
-        session.push_token = body.push_token
+        session.push_token = encrypt_at_rest(body.push_token)
         session.device_name = body.device_name
         session.last_seen = datetime.now(timezone.utc)
         session.ip_address = ip
