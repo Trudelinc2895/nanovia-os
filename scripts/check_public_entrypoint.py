@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import ssl
 import sys
@@ -32,8 +33,8 @@ def fetch(url: str, *, verify_tls: bool = True) -> tuple[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check Nanovia public entrypoints.")
-    parser.add_argument("--domain", default="nanovia.ca")
-    parser.add_argument("--ip", default="167.114.155.166")
+    parser.add_argument("--domain", default=os.getenv("APP_DOMAIN", "nanovia.ca"))
+    parser.add_argument("--ip", default=os.getenv("PUBLIC_IP", ""))
     args = parser.parse_args()
 
     checks: list[tuple[str, str, str]] = []
@@ -49,8 +50,9 @@ def main() -> int:
     status, body = fetch(f"https://{args.domain}/api/v1/health/public-entrypoint")
     checks.append(("Public entrypoint diag", status, body[:180]))
 
-    status, body = fetch(f"http://{args.ip}/login", verify_tls=False)
-    checks.append(("Raw IP login", status, body[:180]))
+    if args.ip:
+        status, body = fetch(f"http://{args.ip}/login", verify_tls=False)
+        checks.append(("Raw IP login", status, body[:180]))
 
     print("=== NANOVIA PUBLIC ENTRYPOINT CHECK ===")
     for label, status, detail in checks:
@@ -63,9 +65,9 @@ def main() -> int:
         stale_signals.append("DNS records are unresolved")
     if any(label == "Public entrypoint diag" and status != "200" for label, status, _ in checks):
         stale_signals.append("live API is missing the new public-entrypoint diagnostic")
-    if any(label == "HTTPS login" and "KT Monetization OS" in detail for label, _, detail in checks):
-        stale_signals.append("live frontend still serves old KT branding")
-    if any(label == "Raw IP login" and status == "200" for label, status, _ in checks):
+    if any(label == "HTTPS login" and "Nanovia OS" not in detail for label, _, detail in checks):
+        stale_signals.append("live frontend still serves stale branding")
+    if args.ip and any(label == "Raw IP login" and status == "200" for label, status, _ in checks):
         stale_signals.append("raw IP still serves login directly instead of redirecting")
 
     print("\n=== SUMMARY ===")

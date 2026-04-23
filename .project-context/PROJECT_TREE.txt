@@ -1,8 +1,8 @@
-KT Monetization OS — Project Tree
+Nanovia OS — Project Tree
 Root: C:\Users\Alienware\kt-monetization-os\
 Generated: 2026-04-02 | Excludes: node_modules, .git, __pycache__, .next, .venv, dist, build
 
-kt-monetization-os/
+nanovia-os/
 ├── .env                          ← Variables d'env actives (NE PAS COMMITTER)
 ├── .env.example                  ← Template des variables
 ├── MASTER_TRACE.md               ← Source de vérité du projet

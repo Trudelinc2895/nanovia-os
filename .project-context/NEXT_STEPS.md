@@ -1,4 +1,4 @@
-# NEXT STEPS — KT Monetization OS
+# NEXT STEPS — Nanovia OS
 ## Mis à jour : 2026-04-02
 
 Les étapes sont ordonnées par impact/urgence. Attaquer une à la fois.

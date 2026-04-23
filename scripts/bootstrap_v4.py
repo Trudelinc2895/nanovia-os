@@ -1,40 +1,56 @@
-#!/usr/bin/env python3
-"""Fix git clone + docker compose up sur VPS."""
-import paramiko, time, re, os, base64
+"""Compatibility bootstrap helper for Nanovia VPS provisioning."""
 
-HOST = '167.114.155.166'
-USER = 'root'
-KEY_PATH = r'C:\Users\Alienware\.ssh\id_rsa'
-ENV_PATH = r'C:\Users\Alienware\kt-monetization-os\.env'
+from __future__ import annotations
 
-def run(ssh, cmd, timeout=300, show=True):
+import base64
+import os
+import re
+import time
+from pathlib import Path
+
+import paramiko
+
+HOST = os.getenv("VPS_HOST", "")
+USER = os.getenv("VPS_USER", "root")
+KEY_PATH = os.getenv("VPS_KEY_PATH", str(Path.home() / ".ssh" / "id_rsa"))
+ENV_PATH = os.getenv("APP_ENV_FILE", str(Path(__file__).resolve().parents[1] / ".env"))
+DEPLOY_PATH = os.getenv("DEPLOY_PATH", "")
+REPO_URL = os.getenv("APP_REPO_URL", "")
+PUBLIC_DOMAIN = os.getenv("APP_DOMAIN", "")
+PUBLIC_IP = os.getenv("PUBLIC_IP", "")
+
+if not HOST or not DEPLOY_PATH or not REPO_URL:
+    raise SystemExit("Set VPS_HOST, DEPLOY_PATH and APP_REPO_URL before running bootstrap_v4.py")
+
+
+def run(ssh: paramiko.SSHClient, cmd: str, timeout: int = 600, show: bool = True):
     chan = ssh.get_transport().open_session()
     chan.set_combine_stderr(True)
     chan.exec_command(cmd)
-    out = b''
+    out = b""
     while True:
         if chan.recv_ready():
             chunk = chan.recv(8192)
             out += chunk
             if show:
-                print(re.sub(r'\x1b\[[0-9;]*[mGKHF]|\r','',chunk.decode('utf-8','replace')), end='', flush=True)
+                text = re.sub(r"\x1b\[[0-9;]*[mGKHF]|\r", "", chunk.decode("utf-8", "replace"))
+                print(text.encode("utf-8", "replace").decode("utf-8"), end="", flush=True)
         elif chan.exit_status_ready():
             while chan.recv_ready():
                 out += chan.recv(8192)
             break
         else:
             time.sleep(0.3)
-    rc = chan.recv_exit_status()
-    return rc, re.sub(r'\x1b\[[0-9;]*[mGKHF]|\r','',out.decode('utf-8','replace'))
+    return chan.recv_exit_status(), re.sub(r"\x1b\[[0-9;]*[mGKHF]|\r", "", out.decode("utf-8", "replace"))
+
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 ssh.connect(HOST, username=USER, key_filename=KEY_PATH, timeout=15)
 print(f"=== CONNECTE: {HOST} ===\n")
 
-# Fix SSH service name (Ubuntu 24 = ssh, pas sshd)
 print("[0] Fix sshd_config + reload SSH...")
-SSHD = """Port 22
+sshd_config = """Port 22
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 PubkeyAuthentication yes
@@ -47,66 +63,59 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 Subsystem sftp /usr/lib/openssh/sftp-server
 """
-encoded = base64.b64encode(SSHD.encode()).decode()
+encoded = base64.b64encode(sshd_config.encode()).decode()
 run(ssh, f"echo '{encoded}' | base64 -d > /etc/ssh/sshd_config", show=False)
-rc, out = run(ssh, "sshd -t && systemctl reload ssh && echo SSH_RELOADED || echo SSH_RELOAD_FAILED", show=False)
+_, out = run(ssh, "sshd -t && systemctl reload ssh && echo SSH_RELOADED || echo SSH_RELOAD_FAILED", show=False)
 print(f"  {out.strip()}")
 
-# Git clone — init dans le dossier existant
 print("\n[1] Git clone (dossier existant — git init + pull)...")
 cmds = [
-    "cp /opt/kt-monetization-os/.env /tmp/.env.backup 2>/dev/null || true",
-    "cd /opt/kt-monetization-os && git init",
-    "cd /opt/kt-monetization-os && git remote add origin https://github.com/Trudelinc2895/kt-monetization-os.git 2>/dev/null || git remote set-url origin https://github.com/Trudelinc2895/kt-monetization-os.git",
-    "cd /opt/kt-monetization-os && git fetch origin main",
-    "cd /opt/kt-monetization-os && git reset --hard origin/main",
-    "cp /tmp/.env.backup /opt/kt-monetization-os/.env 2>/dev/null || true",
+    f"cp {DEPLOY_PATH}/.env /tmp/.env.backup 2>/dev/null || true",
+    f"cd {DEPLOY_PATH} && git init",
+    f"cd {DEPLOY_PATH} && git remote add origin {REPO_URL} 2>/dev/null || git remote set-url origin {REPO_URL}",
+    f"cd {DEPLOY_PATH} && git fetch origin main",
+    f"cd {DEPLOY_PATH} && git reset --hard origin/main",
+    f"cp /tmp/.env.backup {DEPLOY_PATH}/.env 2>/dev/null || true",
 ]
 for cmd in cmds:
-    rc, out = run(ssh, cmd, show=False)
-    label = cmd.split('&&')[-1].strip()[:60]
-    status = "✅" if rc == 0 else "⚠️"
-    print(f"  {status} {label}")
+    rc, _ = run(ssh, cmd, show=False)
+    label = cmd.split("&&")[-1].strip()[:60]
+    print(f"  {'✅' if rc == 0 else '⚠️'} {label}")
 
-rc, out = run(ssh, "ls /opt/kt-monetization-os/", show=False)
+_, out = run(ssh, f"ls {DEPLOY_PATH}/", show=False)
 print(f"  Contenu: {out.strip()[:120]}")
 
-# Vérifier .env
 print("\n[2] Vérification .env...")
-rc, out = run(ssh, "wc -l /opt/kt-monetization-os/.env && head -3 /opt/kt-monetization-os/.env", show=False)
+_, out = run(ssh, f"wc -l {DEPLOY_PATH}/.env && head -3 {DEPLOY_PATH}/.env", show=False)
 print(f"  {out.strip()}")
 
-# SSH service fix
 print("\n[3] Fix SSH service (Ubuntu 24 = 'ssh' pas 'sshd')...")
-rc, out = run(ssh, "systemctl status ssh --no-pager -l | head -5", show=False)
+_, out = run(ssh, "systemctl status ssh --no-pager -l | head -5", show=False)
 print(f"  {out.strip()[:200]}")
 
-# Docker Compose up
 print("\n[4] Docker Compose up (peut prendre 3-5 min)...")
 print("  Pull images...\n")
-rc, out = run(ssh, "cd /opt/kt-monetization-os && docker compose -f infra/docker-compose.prod.yml pull 2>&1", timeout=600)
+run(ssh, f"cd {DEPLOY_PATH} && docker compose -f infra/docker-compose.prod.yml pull 2>&1", timeout=600)
 print("\n  Build + up...\n")
-rc2, out2 = run(ssh, "cd /opt/kt-monetization-os && docker compose -f infra/docker-compose.prod.yml up -d --build 2>&1", timeout=600)
+run(ssh, f"cd {DEPLOY_PATH} && docker compose -f infra/docker-compose.prod.yml up -d --build 2>&1", timeout=600)
 
-# Status containers
 print("\n\n=== DOCKER STATUS ===")
-rc3, out3 = run(ssh, "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'", show=False)
-print(out3)
+_, out = run(ssh, "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'", show=False)
+print(out)
 
-# Test API health
 print("\n[5] Test API health...")
 time.sleep(8)
-rc4, out4 = run(ssh, "curl -s http://localhost:8010/health 2>/dev/null || echo 'API pas encore prête'", show=False)
-print(f"  GET /health → {out4.strip()}")
-
-rc5, out5 = run(ssh, "curl -s http://localhost:8010/ 2>/dev/null || echo 'Root pas encore prêt'", show=False)
-print(f"  GET / → {out5.strip()[:100]}")
+_, out = run(ssh, "curl -s http://localhost:8010/health 2>/dev/null || echo 'API pas encore prête'", show=False)
+print(f"  GET /health → {out.strip()}")
+_, out = run(ssh, "curl -s http://localhost:8010/ 2>/dev/null || echo 'Root pas encore prêt'", show=False)
+print(f"  GET / → {out.strip()[:100]}")
 
 print("\n=== RÉSUMÉ VPS ===")
-rc6, out6 = run(ssh, "docker ps --format '{{.Names}}: {{.Status}}' | sort", show=False)
-print(out6)
-print(f"\n  URL publique: http://167.114.155.166")
-print(f"  API publique: http://167.114.155.166:8010/health")
-print(f"\n  NEXT: DNS tkverse.ca → 167.114.155.166 (Caddy prendra le relais)")
+_, out = run(ssh, "docker ps --format '{{.Names}}: {{.Status}}' | sort", show=False)
+print(out)
+print(f"\n  URL publique: http://{HOST}")
+print(f"  API publique: http://{HOST}:8010/health")
+if PUBLIC_DOMAIN and PUBLIC_IP:
+    print(f"\n  NEXT: DNS {PUBLIC_DOMAIN} → {PUBLIC_IP} (Caddy prendra le relais)")
 
 ssh.close()

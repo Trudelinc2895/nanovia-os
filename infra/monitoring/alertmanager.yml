@@ -16,7 +16,7 @@ receivers:
         chat_id: ${TELEGRAM_CHAT_ID}
         send_resolved: true
         message: |
-          {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} *KT Monetization OS*
+          {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} *Nanovia OS*
           *Alert:* {{ .GroupLabels.alertname }}
           *Status:* {{ .Status | toUpper }}
           {{ range .Alerts }}

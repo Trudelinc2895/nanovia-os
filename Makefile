@@ -1,9 +1,12 @@
-# KT Monetization OS — Makefile
+# Nanovia OS — Makefile
 # Usage: make <target>
 # Run from project root on the VPS.
 
-COMPOSE = docker compose -f infra/docker-compose.prod.yml --env-file .env
-APP_DIR  = /opt/kt-monetization-os
+PROJECT_NAME ?= $(or $(COMPOSE_PROJECT),nanovia-os)
+COMPOSE_FILES ?= -f infra/docker-compose.prod.yml
+ENV_FILE ?= .env
+COMPOSE = docker compose -p $(PROJECT_NAME) $(COMPOSE_FILES) --env-file $(ENV_FILE)
+APP_DIR ?= $(or $(DEPLOY_PATH),/opt/nanovia-os)
 
 .PHONY: help up down build logs restart migrate admin shell-api \
         backup update status clean pull test
@@ -11,7 +14,7 @@ APP_DIR  = /opt/kt-monetization-os
 # ── Default ────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  KT Monetization OS — Commands"
+	@echo "  Nanovia OS — Commands"
 	@echo ""
 	@echo "  make up          Start all containers"
 	@echo "  make down        Stop all containers"
@@ -27,6 +30,11 @@ help:
 	@echo "  make backup      Run database backup"
 	@echo "  make test        Run backend tests"
 	@echo "  make clean       Remove stopped containers + old images"
+	@echo ""
+	@echo "  Overrides:"
+	@echo "    ENV_FILE=.env.staging"
+	@echo "    COMPOSE_FILES='-f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml'"
+	@echo "    PROJECT_NAME=nanovia-staging"
 	@echo ""
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────

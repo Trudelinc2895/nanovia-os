@@ -1,4 +1,4 @@
-# WORKSTATE — KT Monetization OS
+# WORKSTATE — Nanovia OS
 ## Mis à jour : 2026-04-10 UTC
 
 ---
@@ -75,10 +75,10 @@
 - **Fix** : Redémarrer uvicorn avec --reload
 - **Fichiers** : aucun à modifier — restart uniquement
 
-### Bug #2 — CRITIQUE (STEP B) — URL hardcodée
+### Bug #2 — CRITIQUE (STEP B) — URL frontend legacy
 - **Fichier** : `backend/api/routers/auth.py` ligne 140
-- **Problème** : `_FRONTEND_URL = "http://167.114.155.166"` hardcodé
-- **Fix** : Utiliser `settings.PUBLIC_WEB_URL`
+- **Problème** : l'ancien flow utilisait une URL frontend figée
+- **Fix** : utiliser `settings.PUBLIC_WEB_URL`
 
 ### Bug #3 — CRITIQUE (STEP C) — api.ts appelle request() inexistant
 - **Fichier** : `frontend/client/lib/api.ts` lignes 118–122
@@ -215,7 +215,7 @@ uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 
 | Dossier | Rôle | À utiliser |
 |---------|------|-----------|
-| `TKVerse/` | Monorepo original (squelette) | Référence architecture seulement |
+| monorepo legacy archivé | Ancien squelette | Référence architecture seulement |
 | `kt-monetization-os/` | OS de monétisation — actif | **C'est celui-ci** |
 | `kt-monetization-os-needed-copy-.../` | Backup identique | Ignorer |
-| `tkverse-clean/` | Extract minimal | Ignorer |
+| clean extract legacy | Extract minimal | Ignorer |

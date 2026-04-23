@@ -43,8 +43,8 @@
 - Feature gating by subscription tier
 - Real-time analytics and gamification milestones
 
-**Owner:** Kevin Trudel — Trudelinc2895  
-**Domain:** nanovia.ca  
+**Owner:** Kevin Trudel — Trudelinc2895
+**Domain:** nanovia.ca
 **Status:** Production hardening in progress
 
 ---
@@ -55,7 +55,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                        CLIENT BROWSER                        │
 │                    Next.js 15 (App Router)                   │
-│              Port 3000 (dev) · tkverse.ca (prod)             │
+│              Port 3000 (dev) · nanovia.ca (prod)             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ HTTPS / REST
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -266,23 +266,18 @@ cd kt-monetization-os
 ### 2. Backend Setup
 
 ```bash
-cd backend
+# From repo root
+python -m venv .venv
+.venv\Scripts\activate         # Windows
+# source .venv/bin/activate    # Linux/Mac
 
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Linux/Mac
+pip install -r backend/requirements.txt
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy env template
+# Copy the root env template
 copy .env.example .env         # Windows
 # cp .env.example .env         # Linux/Mac
 
 # Edit .env with your values (see Environment Variables section)
-
-# Run backend
 $env:PYTHONPATH = "backend"
 uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 ```
@@ -293,17 +288,13 @@ API docs available at: `http://127.0.0.1:8010/docs` *(dev mode only)*
 
 ```bash
 cd frontend/client
-
-# Install dependencies
 npm install
 
-# Copy env template
-copy .env.local.example .env.local   # Windows
-# cp .env.local.example .env.local   # Linux/Mac
+# Create .env.local if you want an explicit local API target.
+# For production, keep NEXT_PUBLIC_API_URL empty and use same-origin /api.
+echo NEXT_PUBLIC_API_URL=http://127.0.0.1:8010 > .env.local
+echo NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false >> .env.local
 
-# Edit .env.local with your values
-
-# Run frontend
 npm run dev
 ```
 
@@ -324,11 +315,16 @@ alembic upgrade head
 
 ### Backend — `.env`
 
+Use `.env.example` for local dev, `infra/env/.env.example` for production, and
+`infra/env/.env.staging.example` for the isolated staging stack.
+
 ```bash
 # App
 APP_ENV=development
-APP_NAME="KT Monetization OS"
+APP_NAME="Nanovia OS"
+APP_RUNTIME_ENV_FILE=../.env
 PUBLIC_WEB_URL=http://localhost:3000
+PRIVATE_ADMIN_URL=http://localhost:3020
 API_BASE_URL=http://127.0.0.1:8010
 
 # Database
@@ -361,6 +357,12 @@ RESEND_API_KEY=re_...
 OPENAI_API_KEY=sk-...
 OLLAMA_CLIENT_BASE_URL=http://127.0.0.1:11434
 
+# Private orchestrator (admin-only, disabled by default)
+PRIVATE_ORCHESTRATOR_ENABLED=false
+PRIVATE_ORCHESTRATOR_UPSTREAM_URL=http://ai-orchestrator:8020
+PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS=operator,ghost_agency,decision_engine
+ADMIN_ALLOWED_IPS=127.0.0.1/32
+
 # CORS (comma-separated)
 ALLOWED_ORIGINS_RAW=http://localhost:3000,http://localhost:3020
 ```
@@ -369,6 +371,7 @@ ALLOWED_ORIGINS_RAW=http://localhost:3000,http://localhost:3020
 
 ```bash
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8010
+NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false
 ```
 
 ### Auto-setup Stripe Products
@@ -422,6 +425,17 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | POST | `/billing/credits/purchase` | Bearer | Buy credit pack |
 | POST | `/billing/webhook` | Stripe sig | Stripe event handler |
 
+### Admin / Operator
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/admin/webhooks` | Admin bearer | Recent Stripe webhook events + status |
+| POST | `/admin/webhooks/{stripe_event_id}/reprocess` | Admin bearer | Re-fetch a stored Stripe event and replay it |
+| GET | `/admin/users/{user_id}/billing-audit` | Admin bearer | Billing audit trail for one user |
+| POST | `/admin/users/{user_id}/resync-subscription` | Admin bearer | Force-sync latest Stripe subscription into local DB |
+| GET | `/admin/orchestrator/overview` | Admin bearer | Private orchestrator status/contract (404 when disabled) |
+| GET | `/admin/orchestrator/agents` | Admin bearer | Allowlisted private orchestrator agent catalog |
+
 ### Analytics
 
 | Method | Endpoint | Auth | Plan |
@@ -462,6 +476,8 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | `/dashboard/billing` | Billing management | ✅ Yes |
 | `/dashboard/analytics` | Usage analytics | ✅ Yes (Pro+) |
 | `/dashboard/chat` | AI chat interface | ✅ Yes |
+| `/admin/webhooks` | Admin Stripe webhook status view | ✅ Admin only |
+| `/admin/orchestrator` | Private orchestrator slice | ✅ Admin only + feature-flagged |
 
 ---
 
@@ -516,7 +532,7 @@ Plans are identified by lowercase strings: `"free"`, `"pro"`, `"business"`
 
 ```python
 "api_access"          # REST API calls allowed
-"white_label"         # Remove KT branding
+"white_label"         # Remove Nanovia branding for client delivery
 "priority_support"    # Priority queue
 "advanced_analytics"  # 30/90 day analytics history
 "custom_modules"      # Build custom AI modules
@@ -539,6 +555,12 @@ Credit packs available via one-time Stripe purchase (add-on).
 - `customer.subscription.updated` — update plan
 - `customer.subscription.deleted` — downgrade to free
 - `invoice.payment_failed` — flag account
+
+### Operator Recovery
+
+- Use `GET /api/v1/admin/webhooks` to inspect recent Stripe processing state.
+- Use `POST /api/v1/admin/webhooks/{stripe_event_id}/reprocess` to replay a stored event.
+- Use `POST /api/v1/admin/users/{user_id}/resync-subscription` to recover a user's latest Stripe state from Stripe when webhook delivery drifted.
 
 ---
 
@@ -573,6 +595,7 @@ All AI module endpoints are protected by:
 | Database | `dev.db` and all `*.db` in `.gitignore` |
 | Webhook | Stripe signature verified before processing |
 | Password reset | 32-byte random token · 1h expiry · single use · generic email response |
+| Private orchestrator | Admin-only + feature-flagged off by default · read-only status/catalog slice only · no terminal/files/browser/user-impersonation |
 
 ### Never Hardcoded
 
@@ -596,13 +619,15 @@ All AI module endpoints are protected by:
 ### Quick Start (Ubuntu 24.04)
 
 ```bash
-# One-shot install (see infra/scripts/)
-bash infra/scripts/install.sh
+# Production (public stack on OVH)
+cp infra/env/.env.example .env.production   # or .env for current production host
+python3 scripts/validate_runtime_env.py --env-file .env.production --target-env production
+docker compose -p nanovia-prod -f infra/docker-compose.prod.yml --env-file .env.production up -d
 
-# Or manually with Docker Compose
-cp .env.example .env
-# Edit .env with prod values
-docker-compose up -d
+# Staging (same VPS, isolated path/project, loopback-only ports)
+cp infra/env/.env.staging.example .env.staging
+python3 scripts/validate_runtime_env.py --env-file .env.staging --target-env staging
+docker compose -p nanovia-staging -f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml --env-file .env.staging up -d
 ```
 
 ### Architecture (Production)
@@ -611,6 +636,35 @@ docker-compose up -d
 Internet → Caddy (TLS) → FastAPI :8010
                        → Next.js :3000
 ```
+
+- The public app stays on `https://nanovia.ca` with same-origin `/api`.
+- The separate admin frontend container exists in the stack, but the default production `Caddyfile` does **not** publish a public `admin.` host yet.
+
+### Staging vs production on one OVH VPS
+
+- `main` keeps the current production flow.
+- `staging` can deploy to a separate `DEPLOY_PATH` with its own `.env.staging`.
+- Production stays on `infra/docker-compose.prod.yml`.
+- Staging reuses the same stack plus `infra/docker-compose.staging.yml`, which publishes app ports on loopback-only high ports and skips Caddy.
+- `APP_RUNTIME_ENV_FILE` should match the chosen runtime env file (`../.env.production`, `../.env.staging`, or legacy `../.env`).
+- Deploys now fail early if the env file still has placeholder secrets, lacks `TOTP_ENCRYPTION_KEY`, or omits the production admin IP allowlist.
+- This is **not** zero-downtime; it is safer environment separation for a single-host Compose setup.
+- Recommended GitHub Environment secrets/vars per target:
+  - secrets: `VPS_HOST`, `VPS_SSH_PRIVATE_KEY`, `DEPLOY_PATH`
+  - vars: `APP_DOMAIN`, `PUBLIC_IP`, `STAGING_BIND_ADDRESS`, `STAGING_WEB_PORT`, `STAGING_ADMIN_PORT`, `STAGING_API_PORT`, `STAGING_AI_PORT`
+
+### Staging access
+
+Use SSH tunnels instead of exposing the shared host publicly:
+
+```bash
+ssh -L 13000:127.0.0.1:13000 -L 13020:127.0.0.1:13020 -L 18010:127.0.0.1:18010 deploy@YOUR_VPS_HOST
+```
+
+- Web: `http://127.0.0.1:13000`
+- Admin: `http://127.0.0.1:13020`
+- API: `http://127.0.0.1:18010`
+- Keep staging on Stripe test keys only.
 
 ### Required Services
 
@@ -661,8 +715,9 @@ npm run lint
 # Setup Stripe products (first time)
 python stripe/setup_stripe.py
 
-# Test API health
-curl http://127.0.0.1:8010/api/v1/health
+# Test API liveness / readiness
+curl http://127.0.0.1:8010/health
+curl http://127.0.0.1:8010/api/v1/health/ready
 ```
 
 ### Code Conventions
@@ -778,7 +833,7 @@ curl http://127.0.0.1:8010/api/v1/analytics/milestones \
 
 ## License
 
-MIT © 2025 Kevin Trudel — [tkverse.ca](https://tkverse.ca)
+MIT © 2025 Kevin Trudel — [nanovia.ca](https://nanovia.ca)
 
 ---
 

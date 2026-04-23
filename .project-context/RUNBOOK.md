@@ -1,4 +1,4 @@
-# RUNBOOK — KT Monetization OS
+# RUNBOOK — Nanovia OS
 
 ## Prérequis Locaux
 
@@ -20,9 +20,13 @@ pip install -r backend/requirements.txt
 
 ### Configurer l'env
 ```powershell
-# Si .env existe déjà, vérifier les variables critiques :
-# DATABASE_URL, JWT_SECRET_KEY, STRIPE_SECRET_KEY
-# Pour dev SQLite rapide, remplacer DATABASE_URL :
+# Copier le template racine si nécessaire :
+# Copy-Item .env.example .env
+#
+# Vérifier surtout :
+# APP_ENV, DATABASE_URL, JWT_SECRET_KEY, STRIPE_SECRET_KEY,
+# PUBLIC_WEB_URL, PRIVATE_ADMIN_URL, ADMIN_ALLOWED_IPS
+# Pour dev SQLite rapide :
 # DATABASE_URL=sqlite+aiosqlite:///./dev.db
 ```
 
@@ -54,8 +58,9 @@ npm install
 
 ### Configurer l'env frontend
 ```powershell
-# Vérifier .env.local :
-# NEXT_PUBLIC_API_URL=http://localhost:8010
+# Créer frontend\client\.env.local si nécessaire :
+# NEXT_PUBLIC_API_URL=http://127.0.0.1:8010
+# NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false
 ```
 
 ### Lancer le frontend
@@ -108,12 +113,50 @@ python stripe/setup_stripe.py
 
 ```powershell
 cd C:\Users\Alienware\kt-monetization-os
-# Dev :
-docker-compose -f infra/docker-compose.prod.yml up -d
+
+# Production public stack
+Copy-Item infra\env\.env.example .env.production
+python scripts\validate_runtime_env.py --env-file .env.production --target-env production
+docker compose -p nanovia-prod -f infra\docker-compose.prod.yml --env-file .env.production up -d
+
+# Staging isolé sur le même VPS (ports loopback + pas de Caddy)
+Copy-Item infra\env\.env.staging.example .env.staging
+python scripts\validate_runtime_env.py --env-file .env.staging --target-env staging
+docker compose -p nanovia-staging -f infra\docker-compose.prod.yml -f infra\docker-compose.staging.yml --env-file .env.staging up -d
 
 # Vérifier :
-docker-compose ps
+docker compose ps
 ```
+
+### Déploiement GitHub Actions (OVH)
+
+- `main` => environnement GitHub `production`
+- `staging` => environnement GitHub `staging`
+- `APP_RUNTIME_ENV_FILE` doit pointer vers le bon fichier (`../.env.production`, `../.env.staging` ou `../.env` legacy)
+- Le préflight `scripts\validate_runtime_env.py` bloque maintenant les placeholders restants, l'absence de `TOTP_ENCRYPTION_KEY` et l'oubli de l'allowlist admin en production.
+- Secrets attendus par environnement :
+  - `VPS_HOST`
+  - `VPS_SSH_PRIVATE_KEY`
+  - `DEPLOY_PATH`
+- Variables utiles :
+  - `APP_DOMAIN`, `PUBLIC_IP`
+  - `STAGING_BIND_ADDRESS`, `STAGING_WEB_PORT`, `STAGING_ADMIN_PORT`, `STAGING_API_PORT`, `STAGING_AI_PORT`
+- Garde-fous actuels du workflow :
+  - `production` exige `STRIPE_SECRET_KEY=stripe_live_...`
+  - `staging` refuse les clés Stripe live
+  - `APP_RUNTIME_ENV_FILE` est réécrit vers `../.env.production` ou `../.env.staging`
+
+### Accès staging recommandé
+
+```powershell
+ssh -L 13000:127.0.0.1:13000 -L 13020:127.0.0.1:13020 -L 18010:127.0.0.1:18010 deploy@VPS_HOST
+```
+
+- Web staging : `http://127.0.0.1:13000`
+- Admin staging : `http://127.0.0.1:13020`
+- API staging : `http://127.0.0.1:18010`
+- Garder Stripe en `stripe_test_...` / `stripe_public_test_...` / `stripe_webhook_...`
+- En production, le frontend admin reste un service séparé mais n'est pas publié publiquement par le `Caddyfile` par défaut.
 
 ---
 
@@ -124,7 +167,7 @@ docker-compose ps
 Invoke-WebRequest -Uri "http://localhost:8010/health" -ErrorAction SilentlyContinue | Select-Object StatusCode, Content
 
 # API ready (check DB + Redis)
-Invoke-WebRequest -Uri "http://localhost:8010/ready" -ErrorAction SilentlyContinue | Select-Object StatusCode, Content
+Invoke-WebRequest -Uri "http://localhost:8010/api/v1/health/ready" -ErrorAction SilentlyContinue | Select-Object StatusCode, Content
 
 # Frontend
 Invoke-WebRequest -Uri "http://localhost:3000" -ErrorAction SilentlyContinue | Select-Object StatusCode
@@ -142,8 +185,16 @@ DATABASE_URL          → doit pointer vers postgres (prod) ou sqlite (dev)
 JWT_SECRET_KEY        → doit être long et aléatoire
 STRIPE_SECRET_KEY     → stripe_test_... (dev) ou stripe_live_... (prod)
 STRIPE_WEBHOOK_SECRET → stripe_webhook_... (obtenu via stripe listen ou dashboard)
+PUBLIC_WEB_URL        → URL publique utilisée pour Stripe/email
+PRIVATE_ADMIN_URL     → URL/admin origin privé
+APP_RUNTIME_ENV_FILE  → ../.env.production ou ../.env.staging en Docker
+ADMIN_ALLOWED_IPS     → CIDR(s) autorisés pour /api/v1/admin/*
+PRIVATE_ORCHESTRATOR_ENABLED      → true uniquement si le slice admin privé doit répondre
+NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED → true uniquement pour afficher l'UI admin
 STRIPE_PRICE_PRO_MONTHLY_ID   → price_1TErAj...
+STRIPE_PRICE_PRO_YEARLY_ID    → price_...
 STRIPE_PRICE_BUSINESS_MONTHLY_ID → price_1TErAj...
+STRIPE_PRICE_BUSINESS_YEARLY_ID  → price_...
 ```
 
 ---
@@ -161,4 +212,32 @@ python -c "import sys; sys.path.insert(0,'backend'); from api.config import sett
 
 # Vérifier les routes disponibles
 python -c "import sys; sys.path.insert(0,'backend'); from api.main import app; [print(r.path) for r in app.routes]"
+
+# Lister les derniers webhooks Stripe (admin token requis)
+curl.exe -H "Authorization: Bearer ADMIN_TOKEN" http://127.0.0.1:8010/api/v1/admin/webhooks
+
+# Rejouer un webhook stocké (forcer si déjà processed)
+curl.exe -X POST -H "Authorization: Bearer ADMIN_TOKEN" -H "Content-Type: application/json" `
+  -d "{\"force\":true}" http://127.0.0.1:8010/api/v1/admin/webhooks/EVENT_ID/reprocess
+
+# Resynchroniser l'abonnement d'un utilisateur depuis Stripe
+curl.exe -X POST -H "Authorization: Bearer ADMIN_TOKEN" `
+  http://127.0.0.1:8010/api/v1/admin/users/USER_ID/resync-subscription
+
+# Vérifier le slice private orchestrator (404 si flag off)
+curl.exe -H "Authorization: Bearer ADMIN_TOKEN" http://127.0.0.1:8010/api/v1/admin/orchestrator/overview
 ```
+
+### Notes opérateur
+
+- Le slice private orchestrator reste **admin-only**, **feature-flagged** et **read-only**.
+- Flags requis pour le rendre visible :
+  - API : `PRIVATE_ORCHESTRATOR_ENABLED=true`
+  - Frontend admin : `NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=true`
+- Endpoints publiés :
+  - `/api/v1/admin/orchestrator/overview`
+  - `/api/v1/admin/orchestrator/agents`
+- Recovery Stripe :
+  - d'abord inspecter `/api/v1/admin/webhooks`
+  - ensuite `reprocess`
+  - si l'état utilisateur reste incohérent, lancer `resync-subscription`
