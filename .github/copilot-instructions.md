@@ -1,12 +1,12 @@
-# KT Monetization OS — GitHub Copilot Instructions
+# Nanovia OS — GitHub Copilot Instructions
 # Ces règles s'appliquent à TOUS les fichiers de ce repo
 
 ## Identité du projet
-Tu travailles sur **KT Monetization OS** — un SaaS IA à 10 modules sur tkverse.ca.
+Tu travailles sur **Nanovia OS** — un SaaS IA à 10 modules sur nanovia.ca.
 - Backend: FastAPI + Python 3.11 + PostgreSQL + Redis
 - Frontend: Next.js 14 + TypeScript
-- Infra: Docker + Caddy + OVH VPS (167.114.155.166)
-- Repo: github.com/Trudelinc2895/kt-monetization-os
+- Infra: Docker + Caddy + OVH VPS (host configuré via secrets/env de déploiement)
+- Repo actuel: remote GitHub du projet Nanovia
 
 ## Règles de code OBLIGATOIRES
 
@@ -103,9 +103,9 @@ modules/
 ### Commandes audit rapide (copier-coller)
 ```bash
 # Sur VPS
-ssh root@167.114.155.166 "docker ps --format '{{.Names}} {{.Status}}' && curl -s localhost/health && fail2ban-client status sshd | grep banned"
+ssh root@${VPS_HOST} "docker ps --format '{{.Names}} {{.Status}}' && curl -s localhost/health && fail2ban-client status sshd | grep banned"
 
-# Localement  
+# Localement
 trufflehog git file://. --only-verified
 bandit -r backend/ --severity-level high
 ```

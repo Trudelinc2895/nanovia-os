@@ -1,7 +1,7 @@
 """
 infra/docker/orchestrator_main.py
 
-KT AI Orchestrator — cerveau central qui route vers les 10 agents spécialisés.
+Nanovia AI Orchestrator — cerveau central qui route vers les 10 agents spécialisés.
 - Analyse l'intention du message (GPT-4 → Ollama fallback)
 - Route vers l'agent approprié
 - Maintient le contexte de session via Redis
@@ -23,7 +23,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KT AI Orchestrator", version="1.0.0")
+app = FastAPI(title="Nanovia AI Orchestrator", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -140,7 +140,7 @@ AGENTS: dict[str, dict] = {
 }
 
 # Routing system prompt — détecte l'intention et route vers l'agent
-ROUTER_SYSTEM_PROMPT = """Tu es le routeur intelligent de KT Monetization OS.
+ROUTER_SYSTEM_PROMPT = """Tu es le routeur intelligent de Nanovia OS.
 Analyse le message de l'utilisateur et détermine quel agent spécialisé doit le traiter.
 
 Agents disponibles et leurs spécialités :
@@ -261,7 +261,7 @@ def health():
 
 @app.get("/")
 def root():
-    return {"service": "KT AI Orchestrator", "status": "running", "agents": list(AGENTS.keys())}
+    return {"service": "Nanovia AI Orchestrator", "status": "running", "agents": list(AGENTS.keys())}
 
 
 @app.get("/agents")

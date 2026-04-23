@@ -1,4 +1,4 @@
-# KNOWN BUGS — KT Monetization OS
+# KNOWN BUGS — Nanovia OS
 ## Mis à jour : 2026-04-02
 
 ---
@@ -59,11 +59,11 @@
 
 ## 🟢 MINEUR / INFORMATIF
 
-### INFO-001 — Deux dépôts locaux confusants
-- `C:\Users\Alienware\TKVerse\` → monorepo original (référence)
-- `C:\Users\Alienware\kt-monetization-os\` → **repo actif**
+### INFO-001 — Plusieurs copies locales confusantes
+- monorepo archivé legacy → référence seulement, ne pas modifier
+- `C:\Users\Alienware\kt-monetization-os\` → **repo Nanovia actif**
 - `C:\Users\Alienware\kt-monetization-os-needed-copy-20260327-112659\` → backup identique (ignorer)
-- **Action :** Toujours travailler dans `kt-monetization-os/`
+- **Action :** Toujours travailler dans le repo Nanovia actif
 
 ### INFO-002 — Stripe en mode TEST
 - Toutes les clés commencent par `sk_test_` / `pk_test_`

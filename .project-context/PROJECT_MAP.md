@@ -1,10 +1,10 @@
-# PROJECT MAP — KT Monetization OS
+# PROJECT MAP — Nanovia OS
 
 ## Identité
-- **Domaine :** tkverse.ca
+- **Domaine :** nanovia.ca
 - **Owner :** Kevin Trudel (trudelinc11@gmail.com)
 - **Mode :** SaaS multi-modules — production-grade, budget < $10/mois
-- **Repo :** https://github.com/Trudelinc2895/kt-monetization-os
+- **Repo actuel :** https://github.com/Trudelinc2895/kt-monetization-os
 
 ---
 
@@ -47,7 +47,7 @@ INTERNET ──HTTPS──► CADDY :443 (TLS auto, rate-limit, security headers
                                    :11434 Ollama (client)
                                    :11435 Ollama (admin)
                                    :9090 Prometheus
-                                   :3030 Grafana (monitor.tkverse.ca)
+                                   :3030 Grafana (monitor.nanovia.ca)
 ```
 
 ---

@@ -1,120 +1,117 @@
 """
-OVH DNS Auto-Configuration for tkverse.ca
-==========================================
-STEP 1: Create API credentials at:
-  https://ca.api.ovh.com/createToken/
+OVH DNS Auto-Configuration for Nanovia.
 
-  Use these settings:
-    - Application name: kt-monetization-dns
-    - Application description: KT Monetization OS DNS setup
-    - Validity: Unlimited
-    - Rights:
-        GET    /domain/zone/tkverse.ca/*
-        POST   /domain/zone/tkverse.ca/*
-        DELETE /domain/zone/tkverse.ca/*
-        POST   /domain/zone/tkverse.ca/refresh
-
-  You'll get: APP_KEY, APP_SECRET, CONSUMER_KEY
-
-STEP 2: Fill in the values below and run:
-  python scripts/setup_ovh_dns.py
+Usage:
+  set OVH_APP_KEY=...
+  set OVH_APP_SECRET=...
+  set OVH_CONSUMER_KEY=...
+  set PUBLIC_IP=...
+  python scripts/setup_ovh_dns.py --zone nanovia.ca
 """
 
+from __future__ import annotations
+
+import argparse
+import os
 import sys
 
-# ── Fill these in ──────────────────────────────────────────────────
-APP_KEY      = "YOUR_APP_KEY"
-APP_SECRET   = "YOUR_APP_SECRET"
-CONSUMER_KEY = "YOUR_CONSUMER_KEY"
-# ──────────────────────────────────────────────────────────────────
 
-ZONE   = "tkverse.ca"
-VPS_IP = "167.114.155.166"
-TTL    = 300
+def _build_records(vps_ip: str) -> list[dict[str, str]]:
+    return [
+        {"fieldType": "A", "subDomain": "", "target": vps_ip},
+        {"fieldType": "A", "subDomain": "www", "target": vps_ip},
+        {"fieldType": "A", "subDomain": "api", "target": vps_ip},
+        {"fieldType": "A", "subDomain": "admin", "target": vps_ip},
+        {"fieldType": "A", "subDomain": "monitor", "target": vps_ip},
+        {"fieldType": "TXT", "subDomain": "", "target": f"v=spf1 ip4:{vps_ip} -all"},
+    ]
 
-RECORDS = [
-    {"fieldType": "A", "subDomain": "",        "target": VPS_IP},  # root @
-    {"fieldType": "A", "subDomain": "www",     "target": VPS_IP},
-    {"fieldType": "A", "subDomain": "api",     "target": VPS_IP},
-    {"fieldType": "A", "subDomain": "admin",   "target": VPS_IP},
-    {"fieldType": "A", "subDomain": "monitor", "target": VPS_IP},
-    {"fieldType": "TXT","subDomain": "",       "target": f"v=spf1 ip4:{VPS_IP} -all"},
-]
 
-if __name__ == "__main__":
-    if "YOUR_APP_KEY" in APP_KEY:
-        print("❌ Fill in APP_KEY, APP_SECRET, CONSUMER_KEY first.")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Configure OVH DNS for Nanovia.")
+    parser.add_argument("--zone", default=os.getenv("APP_DOMAIN", "nanovia.ca"))
+    parser.add_argument("--vps-ip", default=os.getenv("PUBLIC_IP", ""))
+    parser.add_argument("--ttl", type=int, default=int(os.getenv("DNS_TTL", "300")))
+    args = parser.parse_args()
+
+    app_key = os.getenv("OVH_APP_KEY", "")
+    app_secret = os.getenv("OVH_APP_SECRET", "")
+    consumer_key = os.getenv("OVH_CONSUMER_KEY", "")
+
+    if not app_key or not app_secret or not consumer_key:
+        print("❌ Set OVH_APP_KEY, OVH_APP_SECRET and OVH_CONSUMER_KEY first.")
         print("   → https://ca.api.ovh.com/createToken/")
-        sys.exit(1)
+        return 1
+    if not args.vps_ip:
+        print("❌ Set PUBLIC_IP or pass --vps-ip before running this script.")
+        return 1
 
     try:
         import ovh
     except ImportError:
         print("Installing ovh library...")
         import subprocess
+
         subprocess.check_call([sys.executable, "-m", "pip", "install", "ovh", "-q"])
         import ovh
 
     client = ovh.Client(
         endpoint="ovh-ca",
-        application_key=APP_KEY,
-        application_secret=APP_SECRET,
-        consumer_key=CONSUMER_KEY,
+        application_key=app_key,
+        application_secret=app_secret,
+        consumer_key=consumer_key,
     )
+    records = _build_records(args.vps_ip)
 
-    # Fetch existing records to avoid duplicates
-    print(f"[~] Fetching existing records for {ZONE}...")
-    existing_ids = client.get(f"/domain/zone/{ZONE}/record")
-    existing = []
-    for rid in existing_ids:
-        r = client.get(f"/domain/zone/{ZONE}/record/{rid}")
-        existing.append(r)
+    print(f"[~] Fetching existing records for {args.zone}...")
+    existing_ids = client.get(f"/domain/zone/{args.zone}/record")
+    existing = [client.get(f"/domain/zone/{args.zone}/record/{rid}") for rid in existing_ids]
 
     added = 0
     skipped = 0
 
-    for rec in RECORDS:
-        # Check if already exists
+    for rec in records:
         already = any(
             e.get("fieldType") == rec["fieldType"]
             and e.get("subDomain") == rec["subDomain"]
             and e.get("target") == rec["target"]
             for e in existing
         )
+        label = f"{rec['subDomain']}.{args.zone}" if rec["subDomain"] else args.zone
         if already:
-            label = f"{rec['subDomain'] or '@'}.{ZONE}" if rec['subDomain'] else ZONE
             print(f"  ↷ SKIP  {rec['fieldType']:5s} {label} (already exists)")
             skipped += 1
             continue
 
-        # Delete old conflicting records of same type+subdomain
         conflicts = [
-            e["id"] for e in existing
-            if e.get("fieldType") == rec["fieldType"]
-            and e.get("subDomain") == rec["subDomain"]
+            e["id"]
+            for e in existing
+            if e.get("fieldType") == rec["fieldType"] and e.get("subDomain") == rec["subDomain"]
         ]
         for cid in conflicts:
-            client.delete(f"/domain/zone/{ZONE}/record/{cid}")
+            client.delete(f"/domain/zone/{args.zone}/record/{cid}")
             print(f"  ✗ DELETED old record id={cid}")
 
-        result = client.post(
-            f"/domain/zone/{ZONE}/record",
+        client.post(
+            f"/domain/zone/{args.zone}/record",
             fieldType=rec["fieldType"],
             subDomain=rec["subDomain"],
             target=rec["target"],
-            ttl=TTL,
+            ttl=args.ttl,
         )
-        label = f"{rec['subDomain']}.{ZONE}" if rec["subDomain"] else ZONE
         print(f"  ✅ ADDED  {rec['fieldType']:5s} {label} → {rec['target']}")
         added += 1
 
-    # Refresh zone
-    print(f"\n[~] Refreshing DNS zone...")
-    client.post(f"/domain/zone/{ZONE}/refresh")
-    print(f"[✅] Zone refreshed.")
-
-    print(f"\n{'='*50}")
+    print("\n[~] Refreshing DNS zone...")
+    client.post(f"/domain/zone/{args.zone}/refresh")
+    print("[✅] Zone refreshed.")
+    print(f"\n{'=' * 50}")
     print(f"Done. Added: {added}  Skipped: {skipped}")
-    print(f"\nDNS propagation takes 1–15 min.")
-    print(f"Test with: Resolve-DnsName tkverse.ca -Type A")
-    print(f"Or visit:  http://tkverse.ca")
+    print("\nDNS propagation takes 1–15 min.")
+    print(f"Test with: Resolve-DnsName {args.zone} -Type A")
+    print(f"Or visit:  https://{args.zone}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

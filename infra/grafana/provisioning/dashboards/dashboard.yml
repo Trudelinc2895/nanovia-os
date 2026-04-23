@@ -1,7 +1,7 @@
 apiVersion: 1
 providers:
-  - name: KT Monetization OS
-    folder: KT OS
+  - name: Nanovia OS
+    folder: Nanovia
     type: file
     options:
       path: /etc/grafana/provisioning/dashboards

@@ -1,6 +1,6 @@
 """
 stripe/setup_stripe.py
-KT Monetization OS — Stripe bootstrap (run once, idempotent)
+Nanovia OS — Stripe bootstrap (run once, idempotent)
 
 Usage:
     python stripe/setup_stripe.py
@@ -29,21 +29,21 @@ stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
 assert stripe.api_key.startswith("sk_"), "Invalid STRIPE_SECRET_KEY"
 
 MODE = "TEST" if stripe.api_key.startswith("sk_test_") else "LIVE"
-DOMAIN = os.getenv("DOMAIN", "tkverse.ca")
+DOMAIN = os.getenv("DOMAIN", "nanovia.ca")
 print(f"[stripe-setup] mode={MODE}  domain={DOMAIN}")
 
 # ─── Plan prices ──────────────────────────────────────────────────────────────
 PLANS = [
     {
         "key": "pro",
-        "name": "KT Pro",
+        "name": "Nanovia Pro",
         "usd_monthly": 7900,   # $79.00/mo
         "usd_yearly": 79000,   # $790.00/yr  (saves ~$158)
         "description": "5 AI modules — 1,000 messages/month — Priority support",
     },
     {
         "key": "business",
-        "name": "KT Business",
+        "name": "Nanovia Business",
         "usd_monthly": 14900,  # $149.00/mo
         "usd_yearly": 149000,  # $1,490.00/yr  (saves ~$298)
         "description": "All 10 AI modules — Unlimited messages — Dedicated support",
@@ -65,7 +65,7 @@ MODULES = [
 ]
 
 CREDIT_PACK = {
-    "name": "KT Credits Pack (100 crédits)",
+    "name": "Nanovia Credits Pack (100 crédits)",
     "usd_cents": 999,
     "credits": 100,
     "description": "Pack de 100 crédits IA — valable sans expiration",
@@ -147,7 +147,7 @@ def upsert_module_price(mod: dict) -> str:
         print(f"  [exists] module product {product.id} ({mod['name']})")
     else:
         product = stripe.Product.create(
-            name=f"TKVerse — {mod['name']}",
+            name=f"Nanovia — {mod['name']}",
             description=f"Individual module subscription: {mod['name']}",
             metadata={"module_key": mod["key"], "product_type": "module"},
         )
@@ -212,7 +212,7 @@ def setup_webhook() -> stripe.WebhookEndpoint:
     wh = stripe.WebhookEndpoint.create(
         url=url,
         enabled_events=WEBHOOK_EVENTS,
-        description="KT Monetization OS — production webhook",
+        description="Nanovia OS — production webhook",
     )
     print(f"  [created] webhook {wh.id} -> {url}")
     print(f"  *** STRIPE_WEBHOOK_SECRET={wh.secret} ***")
@@ -226,7 +226,7 @@ def setup_portal() -> stripe.billing_portal.Configuration:
         return configs[0]
     cfg = stripe.billing_portal.Configuration.create(
         business_profile={
-            "headline": "Gérez votre abonnement TKVerse",
+            "headline": "Gérez votre abonnement Nanovia",
             "privacy_policy_url": f"https://{DOMAIN}/privacy",
             "terms_of_service_url": f"https://{DOMAIN}/terms",
         },
