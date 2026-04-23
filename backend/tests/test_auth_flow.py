@@ -749,6 +749,8 @@ def test_private_orchestrator_admin_routes_return_safe_contract(monkeypatch):
             assert payload["access"]["admin_only"] is True
             assert payload["access"]["public_saas_exposure"] is False
             assert payload["access"]["destructive_merge_with_my_agent_hub"] is False
+            assert payload["capabilities"]["planner_preview"] is True
+            assert payload["capabilities"]["agent_routing"] is True
             assert payload["capabilities"]["prompt_execution"] is False
             assert payload["capabilities"]["terminal_access"] is False
             assert payload["allowed_agent_keys"] == ["operator", "ghost_agency"]
@@ -762,6 +764,55 @@ def test_private_orchestrator_admin_routes_return_safe_contract(monkeypatch):
             assert agents_payload["enabled"] is True
             assert agents_payload["source"] == "upstream"
             assert [item["key"] for item in agents_payload["agents"]] == ["operator", "ghost_agency"]
+    finally:
+        settings.PRIVATE_ORCHESTRATOR_ENABLED = previous_flag
+        settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW = previous_agents
+
+
+def test_private_orchestrator_preview_returns_scored_route(monkeypatch):
+    from api.services import private_orchestrator_service
+
+    previous_flag = settings.PRIVATE_ORCHESTRATOR_ENABLED
+    previous_agents = settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW
+    email = f"{uuid.uuid4()}@example.com"
+
+    async def _fake_health():
+        return {
+            "ok": True,
+            "status": "ok",
+            "service": "ai-orchestrator",
+            "version": "1.0.0",
+            "detail": None,
+        }
+
+    try:
+        monkeypatch.setattr(settings, "PRIVATE_ORCHESTRATOR_ENABLED", True)
+        monkeypatch.setattr(settings, "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "operator,ghost_agency,decision_engine")
+        monkeypatch.setattr(private_orchestrator_service, "fetch_upstream_health", _fake_health)
+
+        with TestClient(app) as client:
+            register = client.post(
+                "/api/v1/auth/register",
+                json={"email": email, "password": "Password1", "full_name": "Preview Admin"},
+            )
+            assert register.status_code == 201, register.text
+            access_token = register.json()["access_token"]
+
+            with sqlite3.connect("test_auth.db") as conn:
+                conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
+                conn.commit()
+
+            preview = client.post(
+                "/api/v1/admin/orchestrator/preview",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"message": "Compare scenarios and recommend the best strategy."},
+            )
+            assert preview.status_code == 200, preview.text
+            payload = preview.json()
+            assert payload["selected_agent_key"] == "decision_engine"
+            assert payload["intent"] == "decision-support"
+            assert payload["memory"]["message_count"] == 0
+            assert payload["candidates"][0]["score"] >= payload["candidates"][1]["score"]
     finally:
         settings.PRIVATE_ORCHESTRATOR_ENABLED = previous_flag
         settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW = previous_agents

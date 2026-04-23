@@ -16,6 +16,10 @@ class PrivateOrchestratorAccessBoundary(BaseModel):
 class PrivateOrchestratorCapabilityMatrix(BaseModel):
     agent_catalog_read: bool = True
     upstream_health_read: bool = True
+    planner_preview: bool = True
+    agent_routing: bool = True
+    conversation_memory: bool = True
+    result_scoring: bool = True
     prompt_execution: bool = False
     terminal_access: bool = False
     filesystem_access: bool = False
@@ -37,6 +41,32 @@ class PrivateOrchestratorAgent(BaseModel):
     name: str
     description: str
     allowed: bool = True
+
+
+class PrivateOrchestratorRouteCandidate(BaseModel):
+    key: str
+    name: str
+    score: float
+    reasons: list[str]
+
+
+class PrivateOrchestratorMemorySnapshot(BaseModel):
+    message_count: int
+    recent_messages: list[dict[str, str]]
+    summary: str
+
+
+class PrivateOrchestratorRoutePreview(BaseModel):
+    selected_agent_key: str
+    selected_agent_name: str
+    confidence: float
+    force_agent_applied: bool = False
+    intent: str
+    required_capabilities: list[str]
+    memory: PrivateOrchestratorMemorySnapshot
+    candidates: list[PrivateOrchestratorRouteCandidate]
+    upstream: PrivateOrchestratorUpstreamHealth
+    conversation_id: str | None = None
 
 
 class PrivateOrchestratorOverview(BaseModel):
