@@ -52,6 +52,36 @@ def test_production_runtime_env_accepts_safe_values():
     assert errors == []
 
 
+def test_runtime_env_detects_conflicting_alias_values():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "development",
+            "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "JWT_SECRET": "y" * 40,
+        },
+        target_env="development",
+    )
+
+    assert any("Conflicting alias values for JWT_SECRET_KEY/JWT_SECRET/SECRET_KEY" in error for error in errors)
+
+
+def test_runtime_env_detects_unknown_keys():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "development",
+            "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "MYSTERY_FLAG": "enabled",
+        },
+        target_env="development",
+    )
+
+    assert "Unknown env key: MYSTERY_FLAG" in errors
+
+
 def test_staging_runtime_env_rejects_public_bind_and_live_stripe():
     errors = validate_runtime_env(
         {

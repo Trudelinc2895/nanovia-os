@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,18 +19,25 @@ def _looks_placeholder(value: str) -> bool:
 
 
 class Settings(BaseSettings):
-    APP_ENV: str = "development"
+    APP_ENV: Literal["development", "staging", "production", "test"] = "development"
     APP_NAME: str = "Nanovia OS"
     APP_VERSION: str = "1.0.0"
     DOMAIN: str = "nanovia.ca"
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    APP_RUNTIME_ENV_FILE: str = "../.env"
+    ACME_EMAIL: str = "admin@nanovia.ca"
+    PUBLIC_IP: str = ""
 
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8010
+    ADMIN_PORT: int = 3020
+    WEB_PORT: int = 3000
+    AI_ORCHESTRATOR_PORT: int = 8020
     API_BASE_URL: str = "http://127.0.0.1:8010"
     PUBLIC_WEB_URL: str = "http://127.0.0.1:3000"
     PRIVATE_ADMIN_URL: str = "http://127.0.0.1:3020"
     PRIVATE_ORCHESTRATOR_ENABLED: bool = False
+    NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED: bool = False
     PRIVATE_ORCHESTRATOR_UPSTREAM_URL: str = "http://ai-orchestrator:8020"
     PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW: str = Field(
         default="operator,ghost_agency,decision_engine",
@@ -44,10 +52,17 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str
+    POSTGRES_DB: str = ""
+    POSTGRES_USER: str = ""
+    POSTGRES_PASSWORD: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PASSWORD: str = ""
     VAULT_ADDR: str = "http://127.0.0.1:8200"
+    VAULT_TOKEN: str = ""
 
-    JWT_SECRET_KEY: str = Field(validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET"))
+    JWT_SECRET_KEY: str = Field(
+        validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY")
+    )
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 30
@@ -91,6 +106,8 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
 
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
@@ -98,6 +115,8 @@ class Settings(BaseSettings):
     OLLAMA_DEFAULT_MODEL: str = "llama3"
 
     ALLOWED_ORIGINS_RAW: str = "http://localhost:3000,http://localhost:3020"
+    GRAFANA_ADMIN_PASSWORD: str = ""
+    RATE_LIMIT_PER_MINUTE: int = Field(default=100, ge=1)
 
     # ── Computed properties ─────────────────────────────────────────────────────
 
@@ -171,11 +190,33 @@ class Settings(BaseSettings):
     @field_validator("LOG_LEVEL")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
-        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        upper = v.upper()
-        if upper not in valid:
-            raise ValueError(f"LOG_LEVEL must be one of {valid}")
-        return upper
+        return v.upper()
+
+    @field_validator(
+        "API_BASE_URL",
+        "PUBLIC_WEB_URL",
+        "PRIVATE_ADMIN_URL",
+        "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+        "OLLAMA_CLIENT_BASE_URL",
+        "OLLAMA_ADMIN_BASE_URL",
+        "VAULT_ADDR",
+    )
+    @classmethod
+    def validate_http_urls(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            return ""
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return value.rstrip("/")
+
+    @field_validator("PUBLIC_IP")
+    @classmethod
+    def validate_public_ip(cls, v: str) -> str:
+        if not v or _looks_placeholder(v):
+            return ""
+        ipaddress.ip_address(v.strip())
+        return v.strip()
 
     @field_validator("ADMIN_ALLOWED_IPS_RAW")
     @classmethod
@@ -219,6 +260,12 @@ class Settings(BaseSettings):
             origins = self.ALLOWED_ORIGINS
             if "*" in origins:
                 errors.append("Wildcard CORS not allowed in production")
+            if not self.API_BASE_URL.startswith("https://"):
+                errors.append("API_BASE_URL must use https:// in production")
+            if not self.PUBLIC_WEB_URL.startswith("https://"):
+                errors.append("PUBLIC_WEB_URL must use https:// in production")
+            if not self.PRIVATE_ADMIN_URL.startswith("https://"):
+                errors.append("PRIVATE_ADMIN_URL must use https:// in production")
             for o in origins:
                 if "localhost" in o or "127.0.0.1" in o:
                     errors.append(f"Dev origin {o!r} not allowed in production ALLOWED_ORIGINS_RAW")

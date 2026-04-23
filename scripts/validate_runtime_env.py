@@ -13,6 +13,96 @@ _SENSITIVE_PATTERNS = (
     r"postgres(?:ql)?://[^:]+:[^@]+@",
     r"redis://[^:]+:[^@]+@",
 )
+_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY"),
+    ("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
+    ("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
+    ("PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"),
+)
+_KNOWN_ENV_KEYS = {
+    "ACME_EMAIL",
+    "ADMIN_ALLOWED_IP",
+    "ADMIN_ALLOWED_IPS",
+    "ADMIN_ALLOWED_IPS_RAW",
+    "ADMIN_PORT",
+    "AI_ORCHESTRATOR_PORT",
+    "ALLOWED_ORIGINS_RAW",
+    "API_BASE_URL",
+    "API_HOST",
+    "API_PORT",
+    "APP_ENV",
+    "APP_NAME",
+    "APP_RUNTIME_ENV_FILE",
+    "APP_VERSION",
+    "DATABASE_URL",
+    "DOMAIN",
+    "GRAFANA_ADMIN_PASSWORD",
+    "JWT_ACCESS_EXPIRE_MINUTES",
+    "JWT_ALGORITHM",
+    "JWT_AUDIENCE",
+    "JWT_ISSUER",
+    "JWT_REFRESH_EXPIRE_DAYS",
+    "JWT_SECRET",
+    "JWT_SECRET_KEY",
+    "LOG_LEVEL",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED",
+    "OLLAMA_ADMIN_BASE_URL",
+    "OLLAMA_CLIENT_BASE_URL",
+    "OLLAMA_DEFAULT_MODEL",
+    "OPENAI_API_KEY",
+    "POSTGRES_DB",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_USER",
+    "PRIVATE_ADMIN_URL",
+    "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS",
+    "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
+    "PRIVATE_ORCHESTRATOR_ENABLED",
+    "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+    "PUBLIC_IP",
+    "PUBLIC_WEB_URL",
+    "RATE_LIMIT_PER_MINUTE",
+    "REDIS_PASSWORD",
+    "REDIS_URL",
+    "RESEND_API_KEY",
+    "RESEND_FROM_EMAIL",
+    "RESEND_FROM_NAME",
+    "SECRET_KEY",
+    "STAGING_ADMIN_PORT",
+    "STAGING_AI_PORT",
+    "STAGING_API_PORT",
+    "STAGING_BIND_ADDRESS",
+    "STAGING_WEB_PORT",
+    "STRIPE_CREDIT_PACK_SIZE",
+    "STRIPE_CREDIT_PRICE_ID",
+    "STRIPE_PRICE_ADDON_API_PACK",
+    "STRIPE_PRICE_ADDON_STORAGE_10GB",
+    "STRIPE_PRICE_BUSINESS_MONTHLY_ID",
+    "STRIPE_PRICE_BUSINESS_YEARLY_ID",
+    "STRIPE_PRICE_CREDITS_PACK",
+    "STRIPE_PRICE_MODULE_CONTENT",
+    "STRIPE_PRICE_MODULE_DECISION",
+    "STRIPE_PRICE_MODULE_EXECUTION",
+    "STRIPE_PRICE_MODULE_GHOST",
+    "STRIPE_PRICE_MODULE_KNOWLEDGE",
+    "STRIPE_PRICE_MODULE_LEVERAGE",
+    "STRIPE_PRICE_MODULE_MICRO_SAAS",
+    "STRIPE_PRICE_MODULE_OFFER",
+    "STRIPE_PRICE_MODULE_OPERATOR",
+    "STRIPE_PRICE_MODULE_REVERSE",
+    "STRIPE_PRICE_PRO_MONTHLY_ID",
+    "STRIPE_PRICE_PRO_YEARLY_ID",
+    "STRIPE_PUBLIC_KEY",
+    "STRIPE_PUBLISHABLE_KEY",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TOTP_ENCRYPTION_KEY",
+    "VAULT_ADDR",
+    "VAULT_TOKEN",
+    "WEB_PORT",
+}
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -43,6 +133,33 @@ def _first_present(values: dict[str, str], *keys: str) -> str:
 def _is_loopback_host(value: str) -> bool:
     host = value.strip().lower()
     return host in _LOOPBACK_HOSTS
+
+
+def _validate_known_keys(values: dict[str, str]) -> list[str]:
+    return [f"Unknown env key: {key}" for key in sorted(values) if key not in _KNOWN_ENV_KEYS]
+
+
+def _validate_alias_conflicts(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    for aliases in _ALIAS_GROUPS:
+        present = {key: values[key].strip() for key in aliases if values.get(key, "").strip()}
+        normalized_values = {value for value in present.values()}
+        if len(normalized_values) > 1:
+            errors.append(
+                "Conflicting alias values for "
+                + "/".join(aliases)
+                + ": "
+                + ", ".join(f"{key}={value}" for key, value in present.items())
+            )
+    return errors
+
+
+def _validate_http_urlish(values: dict[str, str], key: str, errors: list[str]) -> None:
+    value = values.get(key, "").strip()
+    if not value or _looks_placeholder(value):
+        return
+    if not value.startswith(("http://", "https://")):
+        errors.append(f"{key} must start with http:// or https://")
 
 
 def _require_value(
@@ -94,6 +211,9 @@ def validate_runtime_env(
     if target_env not in {"development", "staging", "production"}:
         return [f"Unsupported target environment: {target_env}"]
 
+    errors.extend(_validate_known_keys(values))
+    errors.extend(_validate_alias_conflicts(values))
+
     app_env = values.get("APP_ENV", "").strip()
     if app_env != target_env:
         errors.append(f"APP_ENV must be '{target_env}' (got {app_env or '<empty>'})")
@@ -116,11 +236,22 @@ def validate_runtime_env(
         errors,
         values,
         "JWT_SECRET_KEY",
-        aliases=("JWT_SECRET",),
+        aliases=("JWT_SECRET", "SECRET_KEY"),
         allow_placeholders=allow_placeholders,
         min_length=32,
         message="JWT secret must be set to a non-placeholder value with at least 32 characters",
     )
+
+    for key in (
+        "API_BASE_URL",
+        "PUBLIC_WEB_URL",
+        "PRIVATE_ADMIN_URL",
+        "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+        "OLLAMA_CLIENT_BASE_URL",
+        "OLLAMA_ADMIN_BASE_URL",
+        "VAULT_ADDR",
+    ):
+        _validate_http_urlish(values, key, errors)
 
     stripe_secret = _first_present(values, "STRIPE_SECRET_KEY")
     stripe_public = _first_present(values, "STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY")

@@ -42,6 +42,7 @@ except ImportError:
 
 
 _startup_logger = logging.getLogger("startup")
+_NON_PROD_ENVS = {"development", "test"}
 
 
 def _validate_billing_startup_config() -> None:
@@ -109,7 +110,7 @@ async def _ensure_expected_schema() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     print(f"[startup] {settings.APP_NAME} v{settings.APP_VERSION} env={settings.APP_ENV}")
-    if settings.APP_ENV == "development":
+    if settings.APP_ENV in _NON_PROD_ENVS:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         print("[startup] DB tables ready (development create_all)")
