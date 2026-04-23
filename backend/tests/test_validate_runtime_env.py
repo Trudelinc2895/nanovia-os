@@ -139,6 +139,59 @@ def test_production_template_mode_allows_placeholders():
     assert errors == []
 
 
+def test_runtime_env_accepts_vault_managed_secret_references():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "production",
+            "SECRET_PROVIDER": "auto",
+            "DATABASE_URL": "postgresql+psycopg://user:pass@postgres:5432/nanovia",
+            "REDIS_URL": "redis://redis:6379/0",
+            "JWT_SECRET_KEY_REF": "vault://secret/nanovia/backend#jwt_secret_key",
+            "TOTP_ENCRYPTION_KEY_REF": "vault://secret/nanovia/backend#totp_encryption_key",
+            "STRIPE_SECRET_KEY_REF": "vault://secret/nanovia/backend#stripe_secret_key",
+            "STRIPE_WEBHOOK_SECRET_REF": "vault://secret/nanovia/backend#stripe_webhook_secret",
+            "STRIPE_PUBLIC_KEY": "pk_live_prod",
+            "ADMIN_ALLOWED_IP": "203.0.113.10/32",
+            "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
+            "API_BASE_URL": "https://nanovia.ca",
+            "PUBLIC_WEB_URL": "https://nanovia.ca",
+            "PRIVATE_ADMIN_URL": "https://admin.nanovia.ca",
+            "NEXT_PUBLIC_API_URL": "",
+            "VAULT_ADDR": "http://127.0.0.1:8200",
+            "VAULT_TOKEN": "vault-token",
+        },
+        target_env="production",
+    )
+
+    assert errors == []
+
+
+def test_runtime_env_requires_vault_token_when_secret_refs_are_enabled():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "production",
+            "SECRET_PROVIDER": "auto",
+            "DATABASE_URL": "postgresql+psycopg://user:pass@postgres:5432/nanovia",
+            "REDIS_URL": "redis://redis:6379/0",
+            "JWT_SECRET_KEY_REF": "vault://secret/nanovia/backend#jwt_secret_key",
+            "STRIPE_SECRET_KEY_REF": "vault://secret/nanovia/backend#stripe_secret_key",
+            "STRIPE_WEBHOOK_SECRET_REF": "vault://secret/nanovia/backend#stripe_webhook_secret",
+            "STRIPE_PUBLIC_KEY": "pk_live_prod",
+            "TOTP_ENCRYPTION_KEY_REF": "vault://secret/nanovia/backend#totp_encryption_key",
+            "ADMIN_ALLOWED_IP": "203.0.113.10/32",
+            "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
+            "API_BASE_URL": "https://nanovia.ca",
+            "PUBLIC_WEB_URL": "https://nanovia.ca",
+            "PRIVATE_ADMIN_URL": "https://admin.nanovia.ca",
+            "NEXT_PUBLIC_API_URL": "",
+            "VAULT_ADDR": "http://127.0.0.1:8200",
+        },
+        target_env="production",
+    )
+
+    assert "VAULT_TOKEN is required when Vault-managed secrets are enabled" in errors
+
+
 def test_resolve_target_env_for_examples():
     assert resolve_target_env("infra/env/.env.example", {"APP_ENV": "development"}) == "production"
     assert resolve_target_env("infra/env/.env.staging.example", {"APP_ENV": "development"}) == "staging"

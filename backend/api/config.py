@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from api.core.secret_manager import resolve_secret_value
+
 
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -57,8 +59,13 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_PASSWORD: str = ""
+    SECRET_PROVIDER: Literal["env", "auto", "vault"] = "auto"
     VAULT_ADDR: str = "http://127.0.0.1:8200"
     VAULT_TOKEN: str = ""
+    VAULT_REQUEST_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
+    JWT_SECRET_KEY_REF: str = ""
+    POSTGRES_PASSWORD_REF: str = ""
+    REDIS_PASSWORD_REF: str = ""
 
     JWT_SECRET_KEY: str = Field(
         validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY")
@@ -73,6 +80,8 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
     )
+    STRIPE_SECRET_KEY_REF: str = ""
+    STRIPE_WEBHOOK_SECRET_REF: str = ""
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_PRO_MONTHLY_ID: str = ""
@@ -100,15 +109,19 @@ class Settings(BaseSettings):
     # Security — TOTP encryption key (Fernet, 32-byte URL-safe base64)
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # If empty, TOTP secrets are stored as plain base32 (dev-only acceptable)
+    TOTP_ENCRYPTION_KEY_REF: str = ""
     TOTP_ENCRYPTION_KEY: str = ""
 
     # Resend email
+    RESEND_API_KEY_REF: str = ""
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    TELEGRAM_BOT_TOKEN_REF: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
+    OPENAI_API_KEY_REF: str = ""
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_ADMIN_BASE_URL: str = "http://127.0.0.1:11435"
@@ -166,6 +179,44 @@ class Settings(BaseSettings):
         return f"{self.RESEND_FROM_NAME} <{self.RESEND_FROM_EMAIL}>"
 
     # ── Validators ──────────────────────────────────────────────────────────────
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_managed_secrets(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        provider = str(data.get("SECRET_PROVIDER", "auto") or "auto").strip().lower()
+        vault_addr = str(data.get("VAULT_ADDR", "http://127.0.0.1:8200") or "http://127.0.0.1:8200")
+        vault_token = str(data.get("VAULT_TOKEN", "") or "")
+        timeout_raw = data.get("VAULT_REQUEST_TIMEOUT_SECONDS", 5.0)
+        try:
+            timeout = float(timeout_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("VAULT_REQUEST_TIMEOUT_SECONDS must be a positive number") from exc
+        if timeout <= 0:
+            raise ValueError("VAULT_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+
+        for field_name, ref_name in (
+            ("JWT_SECRET_KEY", "JWT_SECRET_KEY_REF"),
+            ("POSTGRES_PASSWORD", "POSTGRES_PASSWORD_REF"),
+            ("REDIS_PASSWORD", "REDIS_PASSWORD_REF"),
+            ("STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_REF"),
+            ("STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET_REF"),
+            ("TOTP_ENCRYPTION_KEY", "TOTP_ENCRYPTION_KEY_REF"),
+            ("RESEND_API_KEY", "RESEND_API_KEY_REF"),
+            ("OPENAI_API_KEY", "OPENAI_API_KEY_REF"),
+            ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN_REF"),
+        ):
+            data[field_name] = resolve_secret_value(
+                provider=provider,
+                value=str(data.get(field_name, "") or ""),
+                reference=str(data.get(ref_name, "") or ""),
+                vault_addr=vault_addr,
+                vault_token=vault_token,
+                timeout=timeout,
+            )
+        return data
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod

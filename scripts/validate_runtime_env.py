@@ -44,6 +44,7 @@ _KNOWN_ENV_KEYS = {
     "JWT_REFRESH_EXPIRE_DAYS",
     "JWT_SECRET",
     "JWT_SECRET_KEY",
+    "JWT_SECRET_KEY_REF",
     "LOG_LEVEL",
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED",
@@ -51,8 +52,10 @@ _KNOWN_ENV_KEYS = {
     "OLLAMA_CLIENT_BASE_URL",
     "OLLAMA_DEFAULT_MODEL",
     "OPENAI_API_KEY",
+    "OPENAI_API_KEY_REF",
     "POSTGRES_DB",
     "POSTGRES_PASSWORD",
+    "POSTGRES_PASSWORD_REF",
     "POSTGRES_USER",
     "PRIVATE_ADMIN_URL",
     "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS",
@@ -63,11 +66,14 @@ _KNOWN_ENV_KEYS = {
     "PUBLIC_WEB_URL",
     "RATE_LIMIT_PER_MINUTE",
     "REDIS_PASSWORD",
+    "REDIS_PASSWORD_REF",
     "REDIS_URL",
     "RESEND_API_KEY",
+    "RESEND_API_KEY_REF",
     "RESEND_FROM_EMAIL",
     "RESEND_FROM_NAME",
     "SECRET_KEY",
+    "SECRET_PROVIDER",
     "STAGING_ADMIN_PORT",
     "STAGING_AI_PORT",
     "STAGING_API_PORT",
@@ -95,11 +101,16 @@ _KNOWN_ENV_KEYS = {
     "STRIPE_PUBLIC_KEY",
     "STRIPE_PUBLISHABLE_KEY",
     "STRIPE_SECRET_KEY",
+    "STRIPE_SECRET_KEY_REF",
     "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_WEBHOOK_SECRET_REF",
     "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_BOT_TOKEN_REF",
     "TELEGRAM_CHAT_ID",
     "TOTP_ENCRYPTION_KEY",
+    "TOTP_ENCRYPTION_KEY_REF",
     "VAULT_ADDR",
+    "VAULT_REQUEST_TIMEOUT_SECONDS",
     "VAULT_TOKEN",
     "WEB_PORT",
 }
@@ -160,6 +171,26 @@ def _validate_http_urlish(values: dict[str, str], key: str, errors: list[str]) -
         return
     if not value.startswith(("http://", "https://")):
         errors.append(f"{key} must start with http:// or https://")
+
+
+def _validate_secret_reference(
+    values: dict[str, str],
+    *,
+    secret_key: str,
+    ref_key: str,
+    errors: list[str],
+) -> bool:
+    reference = values.get(ref_key, "").strip()
+    direct_value = values.get(secret_key, "").strip()
+    active_ref = reference or (direct_value if direct_value.startswith("vault://") else "")
+    if not active_ref:
+        return False
+    if not active_ref.startswith("vault://"):
+        errors.append(f"{ref_key} must use vault://<mount>/<path>#<field>")
+        return True
+    if "#" not in active_ref:
+        errors.append(f"{ref_key} must include a #field suffix")
+    return True
 
 
 def _require_value(
@@ -232,15 +263,37 @@ def validate_runtime_env(
         allow_placeholders=allow_placeholders,
         message="REDIS_URL is required",
     )
-    _require_value(
-        errors,
-        values,
-        "JWT_SECRET_KEY",
-        aliases=("JWT_SECRET", "SECRET_KEY"),
-        allow_placeholders=allow_placeholders,
-        min_length=32,
-        message="JWT secret must be set to a non-placeholder value with at least 32 characters",
-    )
+    jwt_secret_reference = values.get("JWT_SECRET_KEY_REF", "").strip()
+    jwt_secret_direct = _first_present(values, "JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY")
+    if not jwt_secret_reference and not jwt_secret_direct.startswith("vault://"):
+        _require_value(
+            errors,
+            values,
+            "JWT_SECRET_KEY",
+            aliases=("JWT_SECRET", "SECRET_KEY"),
+            allow_placeholders=allow_placeholders,
+            min_length=32,
+            message="JWT secret must be set to a non-placeholder value with at least 32 characters",
+        )
+
+    secret_ref_enabled = False
+    for secret_key, ref_key in (
+        ("JWT_SECRET_KEY", "JWT_SECRET_KEY_REF"),
+        ("POSTGRES_PASSWORD", "POSTGRES_PASSWORD_REF"),
+        ("REDIS_PASSWORD", "REDIS_PASSWORD_REF"),
+        ("STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_REF"),
+        ("STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET_REF"),
+        ("TOTP_ENCRYPTION_KEY", "TOTP_ENCRYPTION_KEY_REF"),
+        ("RESEND_API_KEY", "RESEND_API_KEY_REF"),
+        ("OPENAI_API_KEY", "OPENAI_API_KEY_REF"),
+        ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN_REF"),
+    ):
+        secret_ref_enabled = _validate_secret_reference(
+            values,
+            secret_key=secret_key,
+            ref_key=ref_key,
+            errors=errors,
+        ) or secret_ref_enabled
 
     for key in (
         "API_BASE_URL",
@@ -253,9 +306,31 @@ def validate_runtime_env(
     ):
         _validate_http_urlish(values, key, errors)
 
+    secret_provider = values.get("SECRET_PROVIDER", "auto").strip() or "auto"
+    if secret_provider not in {"env", "auto", "vault"}:
+        errors.append("SECRET_PROVIDER must be one of env, auto, vault")
+    if secret_provider == "vault" or secret_ref_enabled:
+        _require_value(
+            errors,
+            values,
+            "VAULT_ADDR",
+            allow_placeholders=allow_placeholders,
+            message="VAULT_ADDR is required when Vault-managed secrets are enabled",
+        )
+        _require_value(
+            errors,
+            values,
+            "VAULT_TOKEN",
+            allow_placeholders=allow_placeholders,
+            message="VAULT_TOKEN is required when Vault-managed secrets are enabled",
+        )
+
     stripe_secret = _first_present(values, "STRIPE_SECRET_KEY")
     stripe_public = _first_present(values, "STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY")
     stripe_webhook = _first_present(values, "STRIPE_WEBHOOK_SECRET")
+    stripe_secret_ref = values.get("STRIPE_SECRET_KEY_REF", "").strip()
+    stripe_webhook_ref = values.get("STRIPE_WEBHOOK_SECRET_REF", "").strip()
+    totp_ref = values.get("TOTP_ENCRYPTION_KEY_REF", "").strip()
 
     if target_env == "development":
         if stripe_secret.startswith("sk_live_"):
@@ -264,13 +339,14 @@ def validate_runtime_env(
             errors.append("Development refuses live Stripe public keys")
         return errors
 
-    _require_value(
-        errors,
-        values,
-        "TOTP_ENCRYPTION_KEY",
-        allow_placeholders=allow_placeholders,
-        message="TOTP_ENCRYPTION_KEY must be set to a non-placeholder Fernet key",
-    )
+    if not totp_ref and not values.get("TOTP_ENCRYPTION_KEY", "").strip().startswith("vault://"):
+        _require_value(
+            errors,
+            values,
+            "TOTP_ENCRYPTION_KEY",
+            allow_placeholders=allow_placeholders,
+            message="TOTP_ENCRYPTION_KEY must be set to a non-placeholder Fernet key",
+        )
 
     if target_env == "staging":
         bind_address = values.get("STAGING_BIND_ADDRESS", "127.0.0.1").strip()
@@ -282,9 +358,9 @@ def validate_runtime_env(
             errors.append("Staging refuses live Stripe public keys")
         return errors
 
-    if not stripe_secret:
+    if not stripe_secret and not stripe_secret_ref:
         errors.append("Production requires STRIPE_SECRET_KEY=sk_live_...")
-    elif not allow_placeholders and not stripe_secret.startswith("sk_live_"):
+    elif not stripe_secret_ref and not allow_placeholders and not stripe_secret.startswith("sk_live_"):
         errors.append("Production requires STRIPE_SECRET_KEY=sk_live_...")
 
     if not stripe_public:
@@ -292,9 +368,9 @@ def validate_runtime_env(
     elif not allow_placeholders and not stripe_public.startswith("pk_live_"):
         errors.append("Production requires STRIPE_PUBLIC_KEY=pk_live_...")
 
-    if not stripe_webhook:
+    if not stripe_webhook and not stripe_webhook_ref:
         errors.append("Production requires STRIPE_WEBHOOK_SECRET=whsec_...")
-    elif not allow_placeholders and not stripe_webhook.startswith("whsec_"):
+    elif not stripe_webhook_ref and not allow_placeholders and not stripe_webhook.startswith("whsec_"):
         errors.append("Production requires STRIPE_WEBHOOK_SECRET=whsec_...")
 
     if values.get("NEXT_PUBLIC_API_URL", "").strip():
