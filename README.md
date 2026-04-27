@@ -4,9 +4,9 @@
 > Built with FastAPI + Next.js · Stripe billing · Argon2id auth · Redis rate limiting
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-brightgreen)](https://python.org)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-brightgreen)](https://python.org)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688)](https://fastapi.tiangolo.com)
 
 ---
 
@@ -132,8 +132,8 @@ When a user exceeds their monthly AI message limit:
 ### Backend
 | Technology | Version | Purpose |
 |-----------|---------|---------|
-| Python | 3.14+ | Runtime |
-| FastAPI | 0.115 | REST API framework |
+| Python | 3.12 | Runtime |
+| FastAPI | 0.116 | REST API framework |
 | SQLAlchemy | 2.0 | ORM (async) |
 | aiosqlite | latest | SQLite async driver (dev) |
 | asyncpg | latest | PostgreSQL async driver (prod) |
@@ -208,26 +208,24 @@ nanovia/
 │   │       └── email_service.py   # Resend transactional emails
 │   └── requirements.txt
 ├── frontend/
-│   └── client/
-│       ├── app/
-│       │   ├── page.tsx                    # Homepage + pricing
-│       │   ├── login/page.tsx              # Login form
-│       │   ├── register/page.tsx           # Registration form
-│       │   ├── forgot-password/page.tsx    # Forgot password flow
-│       │   ├── reset-password/page.tsx     # Token-based password reset
-│       │   ├── not-found.tsx               # 404 page
-│       │   ├── error.tsx                   # Error boundary
-│       │   └── dashboard/
-│       │       ├── page.tsx                # Main dashboard + entitlements
-│       │       ├── billing/page.tsx        # Billing dashboard (full)
-│       │       ├── analytics/page.tsx      # Analytics + milestones
-│       │       └── chat/page.tsx           # AI chat interface
-│       ├── lib/
-│       │   ├── api.ts                      # API client + all typed helpers
-│       │   └── auth-context.tsx            # Auth state (JWT in memory)
-│       ├── next.config.ts                  # Security headers, CSP, HSTS
-│       ├── tailwind.config.js
-│       └── package.json
+│   ├── client/
+│   │   ├── app/
+│   │   │   ├── page.tsx                    # Homepage + pricing
+│   │   │   ├── login/page.tsx              # Login form
+│   │   │   ├── register/page.tsx           # Registration form
+│   │   │   ├── forgot-password/page.tsx    # Forgot password flow
+│   │   │   ├── reset-password/page.tsx     # Token-based password reset
+│   │   │   ├── not-found.tsx               # 404 page
+│   │   │   ├── error.tsx                   # Error boundary
+│   │   │   ├── dashboard/                  # User-facing app
+│   │   │   └── admin/                      # Current admin/operator UI routes
+│   │   ├── lib/
+│   │   │   ├── api.ts                      # API client + all typed helpers
+│   │   │   └── auth-context.tsx            # Auth state (JWT in memory)
+│   │   ├── next.config.ts                  # Security headers, CSP, HSTS
+│   │   ├── tailwind.config.js
+│   │   └── package.json
+│   └── admin/                              # Optional deploy stub, not the main admin UI
 ├── stripe/
 │   └── setup_stripe.py            # Automated Stripe product/price setup
 ├── infra/
@@ -251,10 +249,10 @@ nanovia/
 
 ### Prerequisites
 
-- Python 3.14+
-- Node.js 20+
-- Redis (optional — rate limiting fails open)
-- A Stripe account (test mode for dev)
+- Python 3.12
+- Node.js 20
+- Docker Desktop / Docker Engine + Compose plugin (recommended local path)
+- A Stripe account (test mode for dev when billing flows are exercised)
 
 ### 1. Clone
 
@@ -263,51 +261,58 @@ git clone <nanovia-repo-url>
 cd <nanovia-repo-dir>
 ```
 
-### 2. Backend Setup
+### 2. Recommended Local Dev Stack (one command)
 
 ```bash
-# From repo root
+copy infra\env\.env.dev.example .env.dev     # Windows
+# cp infra/env/.env.dev.example .env.dev     # Linux/Mac
+
+# Edit .env.dev only if you need real Stripe/OpenAI/Resend values locally
+docker compose --env-file .env.dev -f infra/docker-compose.dev.yml up --build
+```
+
+- Web app: `http://localhost:3000`
+- API docs: `http://127.0.0.1:8010/docs`
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6379`
+
+This is the supported local workflow:
+- `frontend/client` serves both the user app and the current admin/operator routes.
+- `frontend/admin` stays a separate deploy stub and is not required for local development.
+- PostgreSQL + Redis run in containers; the backend uses live reload; the frontend uses Next.js dev mode.
+
+### 3. Manual Local Setup (SQLite fallback)
+
+```bash
+# Backend
 python -m venv .venv
 .venv\Scripts\activate         # Windows
 # source .venv/bin/activate    # Linux/Mac
-
 pip install -r backend/requirements.txt
 
-# Copy the root env template
 copy .env.example .env         # Windows
 # cp .env.example .env         # Linux/Mac
 
-# Edit .env with your values (see Environment Variables section)
+# Frontend
+cd frontend/client
+npm ci
+npm run dev
+```
+
+For the SQLite fallback, keep `DATABASE_URL=sqlite+aiosqlite:///./dev.db` in `.env` and start the API with:
+
+```bash
 $env:PYTHONPATH = "backend"
 uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 ```
 
-API docs available at: `http://127.0.0.1:8010/docs` *(dev mode only)*
-
-### 3. Frontend Setup
+On Windows, if you are running a PostgreSQL-backed `.env` with Python 3.14, prefer:
 
 ```bash
-cd frontend/client
-npm install
-
-# Create .env.local if you want an explicit local API target.
-# For production, keep NEXT_PUBLIC_API_URL empty and use same-origin /api.
-echo NEXT_PUBLIC_API_URL=http://127.0.0.1:8010 > .env.local
-echo NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false >> .env.local
-
-npm run dev
+python scripts\run_api_windows.py
 ```
 
-Frontend available at: `http://localhost:3000`
-
-### 4. Database Setup
-
-```bash
-cd backend
-
-# Run migrations
-alembic upgrade head
-```
+This avoids the `psycopg` async incompatibility with the default Proactor event loop and also remaps Docker-style local hostnames such as `db`, `postgres`, and `redis` to `127.0.0.1` for direct local runs.
 
 ---
 
@@ -315,8 +320,16 @@ alembic upgrade head
 
 ### Backend — `.env`
 
-Use `.env.example` for local dev, `infra/env/.env.example` for production, and
-`infra/env/.env.staging.example` for the isolated staging stack.
+The repo now uses one explicit environment strategy:
+
+| File | Purpose | Typical runtime |
+|------|---------|-----------------|
+| `.env.example` | Lightweight local fallback with SQLite | Manual local run |
+| `infra/env/.env.dev.example` | Local Docker dev stack | `infra/docker-compose.dev.yml` |
+| `infra/env/.env.example` | Production template | `infra/docker-compose.prod.yml` |
+| `infra/env/.env.staging.example` | Isolated staging template | `infra/docker-compose.prod.yml` + `infra/docker-compose.staging.yml` |
+
+Copy `infra/env/.env.dev.example` to `.env.dev` for the Docker dev stack, or copy `.env.example` to `.env` for the manual SQLite fallback.
 
 ```bash
 # App
@@ -373,6 +386,8 @@ ALLOWED_ORIGINS_RAW=http://localhost:3000,http://localhost:3020
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8010
 NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false
 ```
+
+When `NEXT_PUBLIC_API_URL` is empty, the frontend uses same-origin `/api` rewrites. That is the default production-safe path and also works in the Docker dev stack.
 
 ### Auto-setup Stripe Products
 
@@ -478,6 +493,8 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | `/dashboard/chat` | AI chat interface | ✅ Yes |
 | `/admin/webhooks` | Admin Stripe webhook status view | ✅ Admin only |
 | `/admin/orchestrator` | Private orchestrator slice | ✅ Admin only + feature-flagged |
+
+Admin/operator pages currently live inside `frontend/client`. The separate `frontend/admin` deploy target is still an infrastructure stub and should be treated as optional until it becomes a real standalone app.
 
 ---
 
@@ -630,6 +647,13 @@ python3 scripts/validate_runtime_env.py --env-file .env.staging --target-env sta
 docker compose -p nanovia-staging -f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml --env-file .env.staging up -d
 ```
 
+### GitHub flow
+
+- `feature/*` branches open PRs into `staging`
+- `staging` is the integration branch validated by CI and eligible for staging deploys
+- `main` stays production-oriented
+- CI and deploy workflows are aligned on `staging` and `main`
+
 ### Architecture (Production)
 
 ```
@@ -638,7 +662,8 @@ Internet → Caddy (TLS) → FastAPI :8010
 ```
 
 - The public app stays on `https://nanovia.ca` with same-origin `/api`.
-- The separate admin frontend container exists in the stack, but the default production `Caddyfile` does **not** publish a public `admin.` host yet.
+- The current admin/operator UI lives in `frontend/client/app/admin/*`.
+- The separate `admin` container remains a private operational stub in the stack, and the default production `Caddyfile` still does **not** publish a public `admin.` host yet.
 
 ### Staging vs production on one OVH VPS
 

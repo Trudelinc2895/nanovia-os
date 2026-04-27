@@ -1,7 +1,5 @@
 # Nanovia OS — Production Stack
 # Usage: docker compose -f infra/docker-compose.prod.yml up -d
-version: "3.9"
-
 services:
 
   # ── REVERSE PROXY ──────────────────────────────────────────────────────────
@@ -59,6 +57,8 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
+  # Optional operational stub. The main admin/operator UI currently lives
+  # inside frontend/client/app/admin and ships with the main web app.
   admin:
     build: {context: .., dockerfile: infra/docker/admin.Dockerfile}
     restart: unless-stopped

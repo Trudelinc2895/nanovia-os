@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# KT Monetization OS — Fresh Install Script
+# Nanovia OS — Fresh Install Script
 # Run on a BRAND NEW Ubuntu 22.04 / 24.04 VPS
 #
 # Usage:
 #   # With domain:
-#   bash infra/scripts/fresh-install.sh tkverse.ca admin@tkverse.ca
+#   bash infra/scripts/fresh-install.sh nanovia.ca admin@nanovia.ca
 #
 #   # IP only (no domain yet):
 #   bash infra/scripts/fresh-install.sh
@@ -24,7 +24,7 @@ err()  { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
-echo "║   KT Monetization OS — Fresh Install         ║"
+echo "║   Nanovia OS — Fresh Install                 ║"
 echo "║   $([ -n "$DOMAIN" ] && echo "$DOMAIN" || echo 'IP-only mode (no domain)')                   ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
@@ -127,7 +127,7 @@ if [ ! -f .env ]; then
     JWT_KEY=$(openssl rand -hex 32)
 
     cat > .env << ENVEOF
-# ── KT Monetization OS — Environment ──────────────────────
+# ── Nanovia OS — Environment ─────────────────────────────
 # Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Mode: $MODE
 
@@ -300,7 +300,7 @@ else
         echo "  2. Attendre propagation DNS (5–30 min)"
         echo "  3. Re-run: bash $APP_DIR/infra/scripts/fresh-install.sh ${1}"
     else
-        echo "  1. Obtenir un domaine (ex: tkverse.ca)"
+        echo "  1. Obtenir un domaine (ex: nanovia.ca)"
         echo "  2. OVH Manager → Zone DNS → A record: domaine → $MY_IP"
         echo "  3. Re-run: bash $APP_DIR/infra/scripts/fresh-install.sh TON_DOMAINE admin@TON_DOMAINE"
     fi

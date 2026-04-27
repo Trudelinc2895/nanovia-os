@@ -1,4 +1,5 @@
-# Admin panel — stub minimaliste (sera remplacé par Next.js admin complet)
+# Admin panel — minimal deploy stub. The main admin/operator UI currently
+# lives in frontend/client/app/admin inside the main web app.
 FROM node:20-alpine
 
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
