@@ -33,6 +33,8 @@ from api.routers import notifications
 from api.routers import admin
 from api.routers import admin_orchestrator
 from api.routers import team
+from api.routers import scrape
+from api.scraping.worker import run_worker_forever
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -142,6 +144,7 @@ async def _ensure_expected_schema() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
+    scrape_worker_task: asyncio.Task | None = None
     print(f"[startup] {settings.APP_NAME} v{settings.APP_VERSION} env={settings.APP_ENV}")
     if settings.APP_ENV in _NON_PROD_ENVS:
         async with engine.begin() as conn:
@@ -176,7 +179,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                 _redis_exc,
             )
 
+    if settings.SCRAPING_ENABLED and settings.SCRAPING_RUN_WORKER_IN_API:
+        scrape_worker_task = asyncio.create_task(run_worker_forever())
+        _startup_logger.info("[startup] scrape worker task started in API process")
+
     yield
+
+    if scrape_worker_task is not None:
+        scrape_worker_task.cancel()
+        try:
+            await scrape_worker_task
+        except asyncio.CancelledError:
+            pass
     print("[shutdown] clean exit")
 
 
@@ -391,5 +405,6 @@ app.include_router(digital_leverage.router, prefix="/api/v1", tags=["Digital Lev
 app.include_router(reverse_engineering.router, prefix="/api/v1", tags=["Reverse Engineering"])
 app.include_router(offer_generator.router, prefix="/api/v1", tags=["Offer Generator"])
 app.include_router(execution_service.router, prefix="/api/v1", tags=["Execution Service"])
+app.include_router(scrape.router, tags=["scraping"])
 from api.routers.contact import router as contact_router
 app.include_router(contact_router, prefix="/api/v1", tags=["contact"])

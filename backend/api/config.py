@@ -34,6 +34,7 @@ RUNTIME_NON_RELOADABLE_AREAS = (
     "RESEND_*",
     "OPENAI_*",
     "TELEGRAM_BOT_TOKEN",
+    "SCRAPING_*",
 )
 
 
@@ -153,6 +154,33 @@ class Settings(BaseSettings):
     GRAFANA_ADMIN_PASSWORD: str = ""
     RATE_LIMIT_PER_MINUTE: int = Field(default=100, ge=1)
 
+    # Scraping (secure proxy layer)
+    SCRAPING_ENABLED: bool = False
+    SCRAPING_ALLOWLIST_RAW: str = ""
+    SCRAPING_STRICT_ALLOWLIST: bool = True
+    SCRAPING_REQUIRE_AUTH: bool = False
+    SCRAPING_MODE_DEFAULT: Literal["sync", "async"] = "sync"
+    SCRAPING_CACHE_TTL_SECONDS: int = Field(default=900, ge=1)
+    SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
+    SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
+    SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
+    SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(default=60, ge=1)
+    SCRAPING_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=8)
+    SCRAPING_RETRY_BACKOFF_BASE_MS: int = Field(default=250, ge=50, le=10_000)
+    SCRAPING_CIRCUIT_FAIL_THRESHOLD: int = Field(default=5, ge=1, le=100)
+    SCRAPING_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=5, le=3600)
+    SCRAPING_PROXY_ROTATION_ENABLED: bool = False
+    SCRAPING_PROXY_LIST_RAW: str = ""
+    SCRAPING_RUN_WORKER_IN_API: bool = False
+    SCRAPING_JITTER_MIN_MS: int = Field(default=25, ge=0, le=2000)
+    SCRAPING_JITTER_MAX_MS: int = Field(default=120, ge=0, le=5000)
+    SCRAPING_BROWSER_POOL_SIZE: int = Field(default=2, ge=1, le=20)
+    SCRAPING_QUEUE_MAX_DEPTH: int = Field(default=1000, ge=1)
+    SCRAPING_DEDUPE_TTL_SECONDS: int = Field(default=300, ge=1)
+    SCRAPING_JOB_TTL_SECONDS: int = Field(default=3600, ge=60)
+    SCRAPING_CLIENT_DAILY_QUOTA: int = Field(default=0, ge=0)
+    SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
+
     # ── Computed properties ─────────────────────────────────────────────────────
 
     @property
@@ -199,6 +227,30 @@ class Settings(BaseSettings):
     @property
     def RESEND_FROM(self) -> str:
         return f"{self.RESEND_FROM_NAME} <{self.RESEND_FROM_EMAIL}>"
+
+    @property
+    def SCRAPING_ALLOWLIST(self) -> list[str]:
+        return sorted({
+            domain.strip().lower()
+            for domain in self.SCRAPING_ALLOWLIST_RAW.split(",")
+            if domain and domain.strip()
+        })
+
+    @property
+    def SCRAPING_PROXY_LIST(self) -> list[str]:
+        return [
+            proxy.strip()
+            for proxy in self.SCRAPING_PROXY_LIST_RAW.split(",")
+            if proxy and proxy.strip()
+        ]
+
+    @property
+    def SCRAPING_ALLOWED_CONTENT_TYPES(self) -> list[str]:
+        return [
+            content_type.strip().lower()
+            for content_type in self.SCRAPING_ALLOWED_CONTENT_TYPES_RAW.split(",")
+            if content_type and content_type.strip()
+        ]
 
     # ── Validators ──────────────────────────────────────────────────────────────
 
@@ -313,6 +365,14 @@ class Settings(BaseSettings):
         except Exception as exc:  # noqa: BLE001
             raise ValueError("TOTP_ENCRYPTION_KEY must be a valid Fernet key") from exc
         return v
+
+    @model_validator(mode="after")
+    def validate_scraping_limits(self) -> "Settings":
+        if self.SCRAPING_JITTER_MAX_MS < self.SCRAPING_JITTER_MIN_MS:
+            raise ValueError("SCRAPING_JITTER_MAX_MS must be >= SCRAPING_JITTER_MIN_MS")
+        if self.SCRAPING_PROXY_ROTATION_ENABLED and not self.SCRAPING_PROXY_LIST:
+            raise ValueError("SCRAPING_PROXY_ROTATION_ENABLED=true requires SCRAPING_PROXY_LIST_RAW")
+        return self
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
