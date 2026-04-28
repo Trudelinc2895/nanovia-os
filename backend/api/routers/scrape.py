@@ -1,22 +1,60 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from api.config import settings
+from api.core.deps import OptionalUser, get_db
+from api.models.user import User
 from api.scraping.models import ScrapeMode, ScrapeRequest
 from api.scraping.service import enqueue_scrape, get_scrape_job, scrape_once
 
 router = APIRouter()
 
 
-def _resolve_client_id(request: Request, explicit_client_id: str | None) -> str:
+async def _require_scraping_access(
+    request: Request,
+    user: OptionalUser,
+    db: Annotated[object, Depends(get_db)],
+) -> User | None:
+    """Gate scraping access.
+
+    - SCRAPING_REQUIRE_AUTH=false → anonymous allowed, no plan check
+    - SCRAPING_REQUIRE_AUTH=true  → valid JWT + scraping feature required
+    """
+    if not settings.SCRAPING_REQUIRE_AUTH:
+        return user  # anonymous OK when auth not required
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization required for scraping",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    from api.core.monetization import canUseFeature
+
+    if not await canUseFeature(str(user.id), "scraping", db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Le scraping n'est pas disponible dans ton plan actuel. Upgrade requis.",
+        )
+    return user
+
+
+def _resolve_client_id(
+    request: Request,
+    explicit_client_id: str | None,
+    user: User | None,
+) -> str:
     if explicit_client_id:
         return explicit_client_id.strip()[:128]
-
+    if user:
+        return str(user.id)[:36]
     auth = request.headers.get("authorization", "").strip()
     if auth.lower().startswith("bearer "):
         return auth[7:30]
-
     if request.client and request.client.host:
         return request.client.host
     return "anonymous"
@@ -30,19 +68,17 @@ async def scrape(
     render_js: bool = Query(default=False),
     force_refresh: bool = Query(default=False),
     client_id: str | None = Query(default=None, max_length=128),
+    user: Annotated[User | None, Depends(_require_scraping_access)] = None,
 ):
     if not settings.SCRAPING_ENABLED:
         raise HTTPException(status_code=404, detail="Scraping is disabled")
-
-    if settings.SCRAPING_REQUIRE_AUTH and not request.headers.get("authorization"):
-        raise HTTPException(status_code=401, detail="Authorization required")
 
     req = ScrapeRequest(
         url=url,
         mode=mode or settings.SCRAPING_MODE_DEFAULT,
         render_js=render_js,
         force_refresh=force_refresh,
-        client_id=_resolve_client_id(request, client_id),
+        client_id=_resolve_client_id(request, client_id, user),
     )
 
     if req.mode == "async":

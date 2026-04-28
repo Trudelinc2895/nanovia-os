@@ -222,3 +222,22 @@ async def get_admin_user(
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
 DB = Annotated[AsyncSession, Depends(get_db)]
 AdminUser = Annotated[User, Depends(get_admin_user)]
+
+
+async def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User | None:
+    """Returns the authenticated User or None if no valid token is present.
+
+    Does NOT raise on missing/invalid credentials — callers decide what to do.
+    """
+    if not credentials:
+        return None
+    try:
+        return await get_current_user(credentials, db)
+    except HTTPException:
+        return None
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_current_user)]
