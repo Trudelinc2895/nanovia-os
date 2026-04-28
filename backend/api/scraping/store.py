@@ -20,6 +20,7 @@ _local_cache: dict[str, _LocalValue] = {}
 _local_locks: dict[str, float] = {}
 _local_circuit: dict[str, dict[str, float]] = {}
 _local_jobs: dict[str, dict[str, str]] = {}
+_local_job_dedupe: dict[str, _LocalValue] = {}
 _local_queue: deque[str] = deque()
 
 _redis_pool: aioredis.Redis | None = None
@@ -41,6 +42,13 @@ def _prune_local_cache() -> None:
     stale = [key for key, val in _local_cache.items() if val.expires_at <= now]
     for key in stale:
         _local_cache.pop(key, None)
+
+
+def _prune_local_job_dedupe() -> None:
+    now = _now()
+    stale = [key for key, val in _local_job_dedupe.items() if val.expires_at <= now]
+    for key in stale:
+        _local_job_dedupe.pop(key, None)
 
 
 async def cache_get(key: str) -> str | None:
@@ -175,6 +183,45 @@ async def get_job_state(job_id: str) -> dict[str, str] | None:
         return raw or None
     except Exception:
         return _local_jobs.get(job_id)
+
+
+async def get_dedupe_job(url_hash: str) -> str | None:
+    key = f"scrape:jobdedupe:{url_hash}"
+    try:
+        redis = await get_redis()
+        return await redis.get(key)
+    except Exception:
+        _prune_local_job_dedupe()
+        item = _local_job_dedupe.get(key)
+        return None if item is None else item.value
+
+
+async def set_dedupe_job(url_hash: str, job_id: str, ttl: int) -> None:
+    key = f"scrape:jobdedupe:{url_hash}"
+    try:
+        redis = await get_redis()
+        await redis.setex(key, ttl, job_id)
+    except Exception:
+        _local_job_dedupe[key] = _LocalValue(expires_at=_now() + ttl, value=job_id)
+
+
+async def clear_dedupe_job(url_hash: str, job_id: str | None = None) -> None:
+    key = f"scrape:jobdedupe:{url_hash}"
+    try:
+        redis = await get_redis()
+        if job_id is not None:
+            current = await redis.get(key)
+            if current and current != job_id:
+                return
+        await redis.delete(key)
+    except Exception:
+        _prune_local_job_dedupe()
+        current = _local_job_dedupe.get(key)
+        if current is None:
+            return
+        if job_id is not None and current.value != job_id:
+            return
+        _local_job_dedupe.pop(key, None)
 
 
 def dumps_json(value: dict) -> str:

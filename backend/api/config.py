@@ -155,17 +155,36 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = Field(default=100, ge=1)
 
     # Scraping (secure proxy layer)
-    SCRAPING_ENABLED: bool = False
+    SCRAPING_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_ENABLED", "ENABLE_SCRAPE_PROXY"),
+    )
     SCRAPING_ALLOWLIST_RAW: str = ""
     SCRAPING_STRICT_ALLOWLIST: bool = True
     SCRAPING_REQUIRE_AUTH: bool = False
     SCRAPING_MODE_DEFAULT: Literal["sync", "async"] = "sync"
-    SCRAPING_CACHE_TTL_SECONDS: int = Field(default=900, ge=1)
+    SCRAPING_CACHE_TTL_SECONDS: int = Field(
+        default=900,
+        ge=1,
+        validation_alias=AliasChoices("SCRAPING_CACHE_TTL_SECONDS", "SCRAPE_TTL_SECONDS"),
+    )
     SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
     SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
     SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
-    SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(default=60, ge=1)
-    SCRAPING_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=8)
+    SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
+        default=60,
+        ge=1,
+        validation_alias=AliasChoices(
+            "SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN",
+            "RATE_LIMIT_MAX_PER_DOMAIN",
+        ),
+    )
+    SCRAPING_RETRY_MAX_ATTEMPTS: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("SCRAPING_RETRY_MAX_ATTEMPTS", "SCRAPE_MAX_RETRIES"),
+    )
     SCRAPING_RETRY_BACKOFF_BASE_MS: int = Field(default=250, ge=50, le=10_000)
     SCRAPING_CIRCUIT_FAIL_THRESHOLD: int = Field(default=5, ge=1, le=100)
     SCRAPING_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=5, le=3600)
@@ -180,6 +199,7 @@ class Settings(BaseSettings):
     SCRAPING_JOB_TTL_SECONDS: int = Field(default=3600, ge=60)
     SCRAPING_CLIENT_DAILY_QUOTA: int = Field(default=0, ge=0)
     SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
+    SCRAPING_USER_AGENT: str = "nanovia-scraper/1.0"
 
     # ── Computed properties ─────────────────────────────────────────────────────
 
@@ -259,6 +279,13 @@ class Settings(BaseSettings):
     def resolve_managed_secrets(cls, data: object) -> object:
         if not isinstance(data, dict):
             return data
+
+        if "SCRAPING_TIMEOUT_SECONDS" not in data and "SCRAPE_TIMEOUT_MS" in data:
+            timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+            try:
+                data["SCRAPING_TIMEOUT_SECONDS"] = float(timeout_ms) / 1000.0
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SCRAPE_TIMEOUT_MS must be a positive integer") from exc
 
         provider = str(data.get("SECRET_PROVIDER", "auto") or "auto").strip().lower()
         vault_addr = str(data.get("VAULT_ADDR", "http://127.0.0.1:8200") or "http://127.0.0.1:8200")
@@ -372,6 +399,8 @@ class Settings(BaseSettings):
             raise ValueError("SCRAPING_JITTER_MAX_MS must be >= SCRAPING_JITTER_MIN_MS")
         if self.SCRAPING_PROXY_ROTATION_ENABLED and not self.SCRAPING_PROXY_LIST:
             raise ValueError("SCRAPING_PROXY_ROTATION_ENABLED=true requires SCRAPING_PROXY_LIST_RAW")
+        if self.SCRAPING_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SCRAPING_TIMEOUT_SECONDS must be > 0")
         return self
 
     @model_validator(mode="after")

@@ -81,7 +81,7 @@ async def _fetch_http(normalized_url: str) -> tuple[int, str, str]:
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, proxy=proxy) as client:
         for _ in range(settings.SCRAPING_MAX_REDIRECTS + 1):
-            response = await client.get(current_url, headers={"User-Agent": "kt-scraper/1.0"})
+            response = await client.get(current_url, headers={"User-Agent": settings.SCRAPING_USER_AGENT})
             if response.status_code in {301, 302, 303, 307, 308}:
                 location = response.headers.get("location", "")
                 if not location:

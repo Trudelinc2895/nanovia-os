@@ -105,3 +105,21 @@ def test_production_requires_https_public_urls(monkeypatch):
     assert "API_BASE_URL must use https:// in production" in message
     assert "PUBLIC_WEB_URL must use https:// in production" in message
     assert "PRIVATE_ADMIN_URL must use https:// in production" in message
+
+
+def test_scraping_env_aliases_are_supported(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_scrape_aliases.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-prod")
+    monkeypatch.setenv("ENABLE_SCRAPE_PROXY", "true")
+    monkeypatch.setenv("SCRAPE_TTL_SECONDS", "3600")
+    monkeypatch.setenv("RATE_LIMIT_MAX_PER_DOMAIN", "20")
+    monkeypatch.setenv("SCRAPE_MAX_RETRIES", "2")
+    monkeypatch.setenv("SCRAPE_TIMEOUT_MS", "15000")
+
+    settings = Settings()
+
+    assert settings.SCRAPING_ENABLED is True
+    assert settings.SCRAPING_CACHE_TTL_SECONDS == 3600
+    assert settings.SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN == 20
+    assert settings.SCRAPING_RETRY_MAX_ATTEMPTS == 2
+    assert settings.SCRAPING_TIMEOUT_SECONDS == 15.0
