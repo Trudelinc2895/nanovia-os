@@ -1,16 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import {
   setup2FA,
   enable2FA,
   disable2FA,
+  apiFetch,
   type TwoFASetupResponse,
 } from "@/lib/api";
 
 type Step = "idle" | "setup" | "verify" | "disable";
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  resource: string | null;
+  ip_address: string | null;
+  status: string;
+  detail: string | null;
+  created_at: string;
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  login: "Connexion",
+  login_failed: "Connexion échouée",
+  login_2fa_required: "2FA requis",
+  login_2fa_verified: "2FA vérifié",
+  "2fa_login_failed": "2FA échoué",
+  "2fa_enabled": "2FA activé",
+  "2fa_disabled": "2FA désactivé",
+  logout: "Déconnexion",
+  register: "Inscription",
+  password_reset: "Réinitialisation mot de passe",
+  email_verified: "Email vérifié",
+};
+
+function formatDate(iso: string): string {
+  return new Intl.DateTimeFormat("fr-CA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(iso));
+}
 
 export default function SecurityPage() {
   const { user } = useAuth();
@@ -23,6 +55,16 @@ export default function SecurityPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    apiFetch<AuditEntry[]>("/api/v1/auth/audit-log?limit=25")
+      .then((data) => setAuditLogs(data))
+      .catch(() => setAuditLogs([]))
+      .finally(() => setAuditLoading(false));
+  }, [user]);
 
   if (!user) return null;
 
@@ -51,7 +93,6 @@ export default function SecurityPage() {
       setSuccess("✅ 2FA activé avec succès ! Ton compte est maintenant protégé.");
       setStep("idle");
       setTotpCode("");
-      // Refresh user in context
       window.location.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Code invalide.");
@@ -114,7 +155,6 @@ export default function SecurityPage() {
             </div>
           </div>
 
-          {/* Idle state */}
           {step === "idle" && (
             <div>
               {!isEnabled ? (
@@ -136,7 +176,6 @@ export default function SecurityPage() {
             </div>
           )}
 
-          {/* Setup step — display QR code */}
           {step === "setup" && setupData && (
             <div className="space-y-5">
               <div className="bg-gray-800/50 rounded-xl p-5">
@@ -208,7 +247,6 @@ export default function SecurityPage() {
             </div>
           )}
 
-          {/* Disable step */}
           {step === "disable" && (
             <form onSubmit={handleDisable} className="space-y-4">
               <p className="text-sm text-gray-400">
@@ -282,6 +320,53 @@ export default function SecurityPage() {
               </span>
             </div>
           </div>
+        </div>
+
+        {/* Audit log */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+          <h2 className="text-lg font-bold mb-4">📋 Historique de sécurité</h2>
+          {auditLoading ? (
+            <p className="text-sm text-gray-500">Chargement…</p>
+          ) : auditLogs.length === 0 ? (
+            <p className="text-sm text-gray-500">Aucune activité enregistrée.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 border-b border-gray-800">
+                    <th className="text-left pb-2 font-medium">Événement</th>
+                    <th className="text-left pb-2 font-medium">IP</th>
+                    <th className="text-left pb-2 font-medium">Statut</th>
+                    <th className="text-left pb-2 font-medium">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/60">
+                  {auditLogs.map((entry) => (
+                    <tr key={entry.id} className="py-2">
+                      <td className="py-2 pr-4 text-gray-300">
+                        {ACTION_LABELS[entry.action] ?? entry.action}
+                      </td>
+                      <td className="py-2 pr-4 text-gray-500 font-mono text-xs">
+                        {entry.ip_address ?? "—"}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className={
+                          entry.status === "success"
+                            ? "text-green-400 text-xs"
+                            : "text-red-400 text-xs"
+                        }>
+                          {entry.status === "success" ? "✓" : "✗"} {entry.status}
+                        </span>
+                      </td>
+                      <td className="py-2 text-gray-500 text-xs whitespace-nowrap">
+                        {formatDate(entry.created_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </main>
     </div>

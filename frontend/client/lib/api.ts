@@ -33,7 +33,7 @@ export function getAccessToken(): string | null {
   return _accessToken;
 }
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   retry = true

@@ -472,3 +472,49 @@ async def resend_verification(current_user: CurrentUser, db: DB):
     asyncio.create_task(
         send_verification_email(current_user.email, current_user.full_name or current_user.email, verify_url)
     )
+
+
+# ── Audit log ─────────────────────────────────────────────────────────────────
+
+class _AuditEntry(UserPublic.__class__.__bases__[0]):
+    """Minimal audit log entry returned to the authenticated user."""
+    id: uuid.UUID
+    action: str
+    resource: str | None
+    ip_address: str | None
+    status: str
+    detail: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+from pydantic import BaseModel as _PB
+
+class AuditEntryPublic(_PB):
+    id: uuid.UUID
+    action: str
+    resource: str | None = None
+    ip_address: str | None = None
+    status: str
+    detail: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/audit-log", response_model=list[AuditEntryPublic])
+async def get_my_audit_log(
+    current_user: CurrentUser,
+    db: DB,
+    limit: int = 50,
+):
+    """Return the authenticated user's own last N audit entries (max 100)."""
+    limit = min(max(1, limit), 100)
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.user_id == current_user.id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
