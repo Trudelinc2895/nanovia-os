@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/live")
+async def liveness():
+    """
+    Basic liveness probe — always returns 200 if the process is up.
+    Kubernetes kubelet calls this to decide whether to restart the container.
+    """
+    return {
+        "status": "ok",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/health")
 async def health():
     """

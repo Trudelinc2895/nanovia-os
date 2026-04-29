@@ -201,6 +201,33 @@ class Settings(BaseSettings):
     SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
     SCRAPING_USER_AGENT: str = "nanovia-scraper/1.0"
 
+    # Stealth scraping (all off by default — zero behaviour change for existing deployments)
+    SCRAPING_STEALTH_MODE: bool = False
+    SCRAPING_STEALTH_SCROLL_SIMULATE: bool = True
+    SCRAPING_STEALTH_HEADER_ROTATION: bool = True
+    SCRAPING_PROXY_HEALTH_CHECK_INTERVAL_SECONDS: int = 300
+
+    # URL risk scoring
+    SCRAPING_RISK_SCORE_THRESHOLD: float = 0.75
+    SCRAPING_RISK_SCORING_ENABLED: bool = False
+
+    # Governance — per-API-key budgets (0 = disabled)
+    SCRAPING_API_KEY_HOURLY_BUDGET: int = Field(default=0, ge=0)
+    SCRAPING_API_KEY_DAILY_BUDGET: int = Field(default=0, ge=0)
+    SCRAPING_ANOMALY_DETECTION_ENABLED: bool = False
+    SCRAPING_ANOMALY_BASELINE_MULTIPLIER: float = Field(default=3.0, gt=1.0)
+
+    # Observability
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    APP_REGION: str = "local"
+
+    # Slowloris / large-body protection
+    API_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    API_BODY_SIZE_LIMIT_BYTES: int = 1_048_576  # 1 MB
+
+    # Chaos engineering (MUST be disabled in production)
+    CHAOS_ENABLED: bool = False
+
     # ── Computed properties ─────────────────────────────────────────────────────
 
     @property

@@ -61,7 +61,9 @@ def _client_quota_key(client_id: str, epoch_day: int) -> str:
 
 
 def _log_scrape_event(event: str, **fields: object) -> None:
-    logger.info({"event": event, **fields})
+    from api.core.logging import get_request_id
+    from api.config import settings as _s
+    logger.info({"event": event, "traceId": get_request_id(), "region": _s.APP_REGION, **fields})
 
 
 async def _enforce_rate_limit(domain: str) -> None:
@@ -124,6 +126,11 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
     url_hash = normalized_hash(normalized_url)
     started_at = time.perf_counter()
 
+    if settings.SCRAPING_RISK_SCORING_ENABLED:
+        from api.scraping.risk import is_risky
+        if is_risky(normalized_url):
+            raise HTTPException(status_code=403, detail="URL risk score too high")
+
     await _enforce_rate_limit(domain)
     await _enforce_client_quota(req.client_id)
     await _check_circuit(domain)
@@ -182,7 +189,12 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
                 cache_hit=False,
             )
             return result
-        except HTTPException:
+        except HTTPException as exc:
+            # Do NOT retry bot-detection / legal-block status codes
+            if exc.status_code in {403, 429, 451}:
+                await _record_failure(domain)
+                SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="http_error", domain=domain).inc()
+                raise
             await _record_failure(domain)
             SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="http_error", domain=domain).inc()
             raise
@@ -203,6 +215,12 @@ async def enqueue_scrape(req: ScrapeRequest) -> ScrapeJobEnqueueResponse:
     normalized_url = validate_safe_url(req.url)
     domain = _domain(normalized_url)
     url_hash = normalized_hash(normalized_url)
+
+    if settings.SCRAPING_RISK_SCORING_ENABLED:
+        from api.scraping.risk import is_risky
+        if is_risky(normalized_url):
+            raise HTTPException(status_code=403, detail="URL risk score too high")
+
     await _enforce_rate_limit(domain)
     await _enforce_client_quota(req.client_id)
     await _check_circuit(domain)

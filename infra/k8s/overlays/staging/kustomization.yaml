@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+  - ../../base
+
+namePrefix: staging-
+namespace: nanovia-staging
+
+patches:
+  - path: patches/api-replicas.yaml
+
+commonLabels:
+  environment: staging

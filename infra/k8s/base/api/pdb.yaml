@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nanovia-api-pdb
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      app: nanovia-api
+  minAvailable: 1

@@ -1,0 +1,52 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nanovia.fullname" . }}-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nanovia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "nanovia.fullname" . }}-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: {{ include "nanovia.fullname" . }}-worker
+        {{- include "nanovia.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: {{ toJson .Values.worker.command }}
+          env:
+            - name: SCRAPING_RUN_WORKER_IN_API
+              value: "false"
+            - name: SCRAPING_ENABLED
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: {{ include "nanovia.fullname" . }}-config
+            - secretRef:
+                name: {{ .Values.secrets.name }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "api.scraping.worker"]
+            periodSeconds: 30
+            failureThreshold: 3
+{{- end }}

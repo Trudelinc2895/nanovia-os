@@ -1,0 +1,44 @@
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nanovia.fullname" . }}-api-monitor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nanovia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "nanovia.fullname" . }}-api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nanovia.fullname" . }}-worker-monitor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nanovia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "nanovia.fullname" . }}-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}

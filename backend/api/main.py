@@ -35,6 +35,7 @@ from api.routers import admin_orchestrator
 from api.routers import team
 from api.routers import scrape
 from api.scraping.worker import run_worker_forever
+from api.middleware.body_limit import BodySizeLimitMiddleware
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -210,6 +211,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.API_BODY_SIZE_LIMIT_BYTES)
 
 
 @app.middleware("http")
@@ -408,3 +410,7 @@ app.include_router(execution_service.router, prefix="/api/v1", tags=["Execution 
 app.include_router(scrape.router, tags=["scraping"])
 from api.routers.contact import router as contact_router
 app.include_router(contact_router, prefix="/api/v1", tags=["contact"])
+
+if settings.CHAOS_ENABLED:
+    from api.routers.chaos import router as chaos_router
+    app.include_router(chaos_router, tags=["chaos"])

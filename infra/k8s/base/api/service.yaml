@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nanovia-api
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app: nanovia-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8010
+    - name: metrics
+      port: 8010
+      targetPort: 8010

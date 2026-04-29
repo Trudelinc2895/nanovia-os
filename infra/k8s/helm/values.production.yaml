@@ -1,0 +1,59 @@
+# Production overrides — full replicas, HPA enabled
+api:
+  replicas: 3
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  env:
+    APP_ENV: "production"
+    LOG_LEVEL: "INFO"
+
+web:
+  replicas: 3
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+worker:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "1Gi"
+    limits:
+      cpu: "4000m"
+      memory: "4Gi"
+
+autoscaling:
+  enabled: true
+  api:
+    minReplicas: 3
+    maxReplicas: 15
+    cpuUtilization: 50
+    memoryUtilization: 70
+  web:
+    minReplicas: 2
+    maxReplicas: 8
+    cpuUtilization: 60
+  worker:
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 60
+
+podDisruptionBudget:
+  enabled: true
+
+monitoring:
+  enabled: true
+  serviceMonitor:
+    interval: "30s"
+  prometheusRule:
+    enabled: true
