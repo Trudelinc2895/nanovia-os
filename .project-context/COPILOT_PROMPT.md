@@ -1,4 +1,4 @@
-# COPILOT_PROMPT — Reprise de session KT Monetization OS
+# COPILOT_PROMPT — Reprise de session Nanovia OS
 
 Colle ce bloc au début d'une nouvelle session GitHub Copilot CLI pour reprendre le projet immédiatement.
 
@@ -7,10 +7,10 @@ Colle ce bloc au début d'une nouvelle session GitHub Copilot CLI pour reprendre
 ## PROMPT DE REPRISE
 
 ```
-Poursuivons le projet TKVerse.
+Poursuivons le projet Nanovia.
 
-REPO ACTIF : C:\Users\Alienware\kt-monetization-os\
-(Ne jamais travailler dans TKVerse\ ou kt-monetization-os-needed-copy-...\)
+REPO ACTIF : C:\Users\Alienware\kt-monetization-os\  (repo Nanovia actuel)
+(Ne jamais travailler dans le monorepo archivé ni dans un backup local du repo actif.)
 
 STACK :
 - Backend : Python 3.14 · FastAPI 0.115.6 · SQLAlchemy 2 async · Alembic · Stripe SDK 11
@@ -25,7 +25,7 @@ AVANT TOUTE ACTION :
 3. Lire .project-context/NEXT_STEPS.md → prochaine étape prioritaire
 
 RÈGLES :
-- Ne jamais modifier TKVerse\ (repo archivé)
+- Ne jamais modifier le monorepo archivé legacy
 - Toujours valider les changements avant commit
 - Ne jamais committer .env ni sk_live_ keys
 - Préférer les petits patches ciblés

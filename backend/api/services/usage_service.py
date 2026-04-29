@@ -19,7 +19,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
+from api.core.logging import get_request_id
+from api.core.monetization._workspace import ensure_owner_workspace
+from api.core.monetization.usage_metering_service import build_usage_event
 from api.models.usage_record import UsageRecord
+from api.models.user import User
+from api.models.workspace_billing import UsageEvent
 
 # Cost per token in USD (gpt-4o-mini blended rate)
 _COST_PER_TOKEN = Decimal("0.000002")
@@ -74,6 +79,11 @@ async def record_usage(
     tokens_used: int,
     db: AsyncSession,
     unit_cost_credits: int = 0,
+    *,
+    workspace_id: uuid.UUID | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    request_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> UsageRecord:
     """
     Persist a usage record and increment the Redis monthly counter.
@@ -81,6 +91,17 @@ async def record_usage(
     unit_cost_credits: 0 = within plan, 1 = 1 overage credit deducted.
     """
     cost = _COST_PER_TOKEN * tokens_used
+    request_id = request_id or (get_request_id() or None)
+    if workspace_id is None or actor_user_id is None:
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        usage_user = user_result.scalar_one_or_none()
+        if usage_user is not None:
+            await ensure_owner_workspace(usage_user, db)
+        if workspace_id is None:
+            workspace_id = user_id
+        if actor_user_id is None:
+            actor_user_id = user_id
+
     record = UsageRecord(
         user_id=user_id,
         module=module,
@@ -89,6 +110,36 @@ async def record_usage(
         unit_cost_credits=unit_cost_credits,
     )
     db.add(record)
+
+    metering_event = build_usage_event(
+        workspace_id=str(workspace_id or user_id),
+        usage_type=module,
+        quantity=1,
+        actor_id=str(actor_user_id or user_id),
+        request_id=request_id,
+        idempotency_key=idempotency_key or (
+            f"usage:{workspace_id or user_id}:{module}:{request_id}"
+            if request_id
+            else f"usage-{uuid.uuid4()}"
+        ),
+        cost=cost,
+    )
+    db.add(
+        UsageEvent(
+            workspace_id=uuid.UUID(metering_event["workspaceId"]),
+            actor_user_id=uuid.UUID(metering_event["actorId"]) if metering_event["actorId"] else None,
+            request_id=metering_event["requestId"],
+            idempotency_key=metering_event["idempotency_key"],
+            event_type=metering_event["type"],
+            quantity=metering_event["quantity"],
+            cost_usd=Decimal(metering_event["cost"]),
+            event_metadata={
+                "tokens_used": max(tokens_used, 0),
+                "unit_cost_credits": unit_cost_credits,
+                "usage_record_module": module,
+            },
+        )
+    )
     await db.flush()
 
     # Increment Redis counter for fast limit checks (fire-and-forget; fail open)
@@ -157,7 +208,7 @@ async def check_usage_limit(
 ) -> bool:
     """
     Return True if the user is within their monthly message limit.
-    Returns True (fail open) if Redis is unavailable.
+    Development fails open if Redis is unavailable; production fails closed.
     -1 limit means unlimited (business plan).
     """
     limit = _get_plan_limit(plan)
@@ -170,8 +221,7 @@ async def check_usage_limit(
         count = int(raw) if raw else 0
         return count < limit
     except Exception:
-        # Redis unavailable — fail open to avoid blocking users
-        return True
+        return settings.APP_ENV != "production"
 
 
 async def check_and_charge_usage(
@@ -179,6 +229,7 @@ async def check_and_charge_usage(
     db: AsyncSession,
     *,
     usage_type: str = "ai_message",
+    idempotency_key: str | None = None,
 ) -> tuple[bool, str]:
     """
     Full usage gate with overage credit fallback.
@@ -194,7 +245,8 @@ async def check_and_charge_usage(
       "unlimited"         — business plan, no cap
       "credit_deducted"   — over quota, 1 overage credit deducted
       "limit_exceeded"    — over quota, no credits or overage not enabled
-      "redis_unavailable" — Redis down, fail-open
+      "redis_unavailable"    — Redis down in development, fail-open
+      "metering_unavailable" — Redis down in production, fail-closed
 
     Overage logic (revenue expansion):
       When a user exceeds their monthly limit AND overage_allowed=True
@@ -206,6 +258,10 @@ async def check_and_charge_usage(
         Alert is only sent once (tracked via Redis flag).
     """
     from api.services.billing_service import has_feature  # avoid circular import
+    from api.services.credit_service import (
+        deduct_credits,
+        get_authoritative_credit_balance,
+    )
 
     plan: str = getattr(user, "plan", "free")
     user_id: uuid.UUID = getattr(user, "id")
@@ -222,6 +278,8 @@ async def check_and_charge_usage(
         raw = await redis.get(_month_key(user_id))
         count = int(raw) if raw else 0
     except Exception:
+        if settings.APP_ENV == "production":
+            return False, "metering_unavailable"
         return True, "redis_unavailable"
 
     # ── 80% alert trigger (fire-and-forget, once per month) ─────────────────
@@ -243,9 +301,19 @@ async def check_and_charge_usage(
         return True, "within_limit"
 
     # ── Over limit — attempt overage credit deduction ────────────────────────
-    if has_feature(plan, "overage_allowed") and (getattr(user, "credits", 0) or 0) > 0:
-        from api.services.credit_service import deduct_credits
-        deducted = await deduct_credits(user, source=f"overage:{usage_type}", db=db)
+    authoritative_credits = await get_authoritative_credit_balance(user_id, db)
+    overage_idempotency_key = idempotency_key or (
+        f"usage-gate:{user_id}:{usage_type}:{get_request_id()}"
+        if get_request_id()
+        else None
+    )
+    if has_feature(plan, "overage_allowed") and authoritative_credits > 0:
+        deducted = await deduct_credits(
+            user,
+            source=f"overage:{usage_type}",
+            db=db,
+            idempotency_key=overage_idempotency_key,
+        )
         if deducted:
             if _HAS_PROM:
                 _kt_messages_total.labels(plan=plan, module="gate", reason="credit_deducted").inc()
@@ -254,6 +322,18 @@ async def check_and_charge_usage(
 
     if _HAS_PROM:
         _kt_messages_total.labels(plan=plan, module="gate", reason="limit_exceeded").inc()
+
+    # ── Overage-blocked alert: fire once per month when access is hard-blocked ─
+    overage_blocked_key = f"overage_blocked_alert:{user_id}:{datetime.now(timezone.utc).strftime('%Y-%m')}"
+    try:
+        already_sent = await redis.get(overage_blocked_key)
+        if not already_sent:
+            await redis.setex(overage_blocked_key, 35 * 24 * 3600, "1")
+            from api.services.email_service import send_usage_alert
+            asyncio.create_task(send_usage_alert(user_email, user_name, 100, plan))
+    except Exception:
+        pass  # Never block on alert failure
+
     return False, "limit_exceeded"
 
 

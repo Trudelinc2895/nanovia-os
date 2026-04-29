@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# KT Monetization OS — VPS Bootstrap
+# Nanovia OS — VPS Bootstrap
 # Usage: bash scripts/bootstrap_vps.sh
 # Run as root on fresh Ubuntu 22.04 / Debian 12 VPS
 set -euo pipefail
 
-DEPLOY_PATH="${DEPLOY_PATH:-/opt/kt-monetization-os}"
-REPO_URL="https://github.com/Trudelinc2895/kt-monetization-os.git"
+DEPLOY_PATH="${DEPLOY_PATH:-/opt/nanovia}"
+: "${REPO_URL:?Set REPO_URL to the Nanovia Git repository URL before running this script}"
 
 echo ">>> [1/7] System update"
 apt-get update -qq && apt-get upgrade -y -qq

@@ -9,12 +9,12 @@ export default function TermsPage() {
 
         <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-3">1. Acceptation des conditions</h2>
-          <p className="text-gray-300">En accédant à TKVerse, vous acceptez ces conditions. Si vous n'êtes pas d'accord, n'utilisez pas le service.</p>
+          <p className="text-gray-300">En accédant à Nanovia OS, vous acceptez ces conditions. Si vous n'êtes pas d'accord, n'utilisez pas le service.</p>
         </section>
 
         <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-3">2. Description du service</h2>
-          <p className="text-gray-300">TKVerse (KT Monetization OS) est une plateforme SaaS offrant des modules d'automatisation IA pour les créateurs et entrepreneurs. Les fonctionnalités disponibles dépendent du plan souscrit.</p>
+          <p className="text-gray-300">Nanovia OS est une plateforme SaaS offrant des modules d'automatisation IA pour les créateurs et entrepreneurs. Les fonctionnalités disponibles dépendent du plan souscrit.</p>
         </section>
 
         <section className="mb-8">
@@ -39,12 +39,12 @@ export default function TermsPage() {
 
         <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-3">5. Propriété intellectuelle</h2>
-          <p className="text-gray-300">Le contenu généré par les modules IA vous appartient. Le code, les algorithmes et l'interface TKVerse restent la propriété exclusive de KT Monetization Inc.</p>
+          <p className="text-gray-300">Le contenu généré par les modules IA vous appartient. Le code, les algorithmes et l'interface Nanovia OS restent la propriété exclusive de Nanovia.</p>
         </section>
 
         <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-3">6. Limitation de responsabilité</h2>
-          <p className="text-gray-300">TKVerse est fourni "tel quel". Nous ne garantissons pas des résultats spécifiques. La responsabilité totale ne peut excéder les frais payés dans les 3 derniers mois.</p>
+          <p className="text-gray-300">Nanovia OS est fourni "tel quel". Nous ne garantissons pas des résultats spécifiques. La responsabilité totale ne peut excéder les frais payés dans les 3 derniers mois.</p>
         </section>
 
         <section className="mb-8">

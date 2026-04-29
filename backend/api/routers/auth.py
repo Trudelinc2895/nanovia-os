@@ -14,12 +14,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, Response as FastAPIResponse, status
 from jwt.exceptions import InvalidTokenError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
 from api.core.deps import CurrentUser, DB
+from api.core.data_protection import lookup_token_matches, protect_lookup_token
+from api.core.monetization._workspace import ensure_owner_workspace
 from api.core.security import (
     create_access_token,
     create_refresh_token,
@@ -96,10 +98,11 @@ async def register(body: RegisterRequest, request: Request, response: FastAPIRes
     )
     db.add(user)
     await db.flush()
+    await ensure_owner_workspace(user, db)
 
     # Generate email verification token
     verification_token = secrets.token_urlsafe(32)
-    user.email_verification_token = verification_token
+    user.email_verification_token = protect_lookup_token(verification_token)
     user.email_verified = False
     user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=24)
 
@@ -236,7 +239,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: DB):
     user = result.scalar_one_or_none()
     if user and user.is_active:
         token = secrets.token_urlsafe(32)
-        user.password_reset_token = token
+        user.password_reset_token = protect_lookup_token(token)
         user.password_reset_expires = datetime.now(timezone.utc) + timedelta(hours=_RESET_EXPIRE_HOURS)
         await db.commit()
         reset_url = f"{_FRONTEND_URL}/reset-password?token={token}"
@@ -250,10 +253,15 @@ async def reset_password(body: ResetPasswordRequest, db: DB):
     Returns 400 for invalid/expired token.
     """
     result = await db.execute(
-        select(User).where(User.password_reset_token == body.token)
+        select(User).where(
+            or_(
+                User.password_reset_token == body.token,
+                User.password_reset_token == protect_lookup_token(body.token),
+            )
+        )
     )
     user = result.scalar_one_or_none()
-    if not user or not user.password_reset_expires:
+    if not user or not user.password_reset_expires or not lookup_token_matches(user.password_reset_token, body.token):
         raise HTTPException(status_code=400, detail="Lien invalide ou expiré")
     if user.password_reset_expires < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Ce lien a expiré. Refais une demande.")
@@ -306,7 +314,7 @@ async def setup_2fa(current_user: CurrentUser, db: DB):
     await db.commit()
 
     totp = pyotp.TOTP(secret)
-    issuer = "KT Monetization OS"
+    issuer = "Nanovia OS"
     uri = totp.provisioning_uri(name=current_user.email, issuer_name=issuer)
 
     try:
@@ -424,10 +432,15 @@ async def verify_email(token: str, db: DB):
     Token is valid for 24 hours.
     """
     result = await db.execute(
-        select(User).where(User.email_verification_token == token)
+        select(User).where(
+            or_(
+                User.email_verification_token == token,
+                User.email_verification_token == protect_lookup_token(token),
+            )
+        )
     )
     user = result.scalar_one_or_none()
-    if not user or not user.email_verification_expires:
+    if not user or not user.email_verification_expires or not lookup_token_matches(user.email_verification_token, token):
         raise HTTPException(status_code=400, detail="Lien de vérification invalide.")
     if user.email_verification_expires < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Lien expiré. Demande un nouveau lien.")
@@ -451,7 +464,7 @@ async def resend_verification(current_user: CurrentUser, db: DB):
         raise HTTPException(status_code=400, detail="Email déjà vérifié.")
 
     verification_token = secrets.token_urlsafe(32)
-    current_user.email_verification_token = verification_token
+    current_user.email_verification_token = protect_lookup_token(verification_token)
     current_user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=_VERIFY_EMAIL_EXPIRE_HOURS)
     await db.commit()
 
@@ -459,3 +472,49 @@ async def resend_verification(current_user: CurrentUser, db: DB):
     asyncio.create_task(
         send_verification_email(current_user.email, current_user.full_name or current_user.email, verify_url)
     )
+
+
+# ── Audit log ─────────────────────────────────────────────────────────────────
+
+class _AuditEntry(UserPublic.__class__.__bases__[0]):
+    """Minimal audit log entry returned to the authenticated user."""
+    id: uuid.UUID
+    action: str
+    resource: str | None
+    ip_address: str | None
+    status: str
+    detail: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+from pydantic import BaseModel as _PB
+
+class AuditEntryPublic(_PB):
+    id: uuid.UUID
+    action: str
+    resource: str | None = None
+    ip_address: str | None = None
+    status: str
+    detail: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/audit-log", response_model=list[AuditEntryPublic])
+async def get_my_audit_log(
+    current_user: CurrentUser,
+    db: DB,
+    limit: int = 50,
+):
+    """Return the authenticated user's own last N audit entries (max 100)."""
+    limit = min(max(1, limit), 100)
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.user_id == current_user.id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()

@@ -17,7 +17,7 @@ _is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 # PostgreSQL (prod) uses connection pooling
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.APP_ENV == "development",
+    echo=settings.APP_ENV in {"development", "test"},
     **(
         {"poolclass": NullPool}
         if _is_sqlite

@@ -9,25 +9,7 @@ import {
   createModuleCheckout,
   type ModuleAccess,
 } from "@/lib/api";
-
-const MODULE_ICONS: Record<string, string> = {
-  operator: "🤖",
-  content: "📡",
-  micro_saas: "⚙️",
-  ghost: "👻",
-  decision: "🧠",
-  knowledge: "📚",
-  leverage: "⚡",
-  reverse: "🔍",
-  offer: "🎯",
-  execution: "🚀",
-};
-
-const PLAN_COLORS: Record<string, string> = {
-  free: "text-gray-400",
-  pro: "text-violet-400",
-  business: "text-yellow-400",
-};
+import { getModulePresentation, getPlanTextClass } from "@/lib/monetization";
 
 function SkeletonCard() {
   return (
@@ -48,7 +30,7 @@ function SkeletonCard() {
 function ModuleCard({ mod }: { mod: ModuleAccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const icon = MODULE_ICONS[mod.slug] ?? "🔲";
+  const moduleMeta = getModulePresentation(mod);
 
   const handleActivate = async () => {
     setLoading(true);
@@ -87,17 +69,17 @@ function ModuleCard({ mod }: { mod: ModuleAccess }) {
     >
       <div className="flex items-start gap-4">
         <div className="text-3xl w-10 h-10 flex items-center justify-center bg-gray-800 rounded-xl shrink-0">
-          {icon}
+          {moduleMeta.icon}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className="font-bold text-white text-sm">{mod.name}</span>
+            <span className="font-bold text-white text-sm">{moduleMeta.name}</span>
             {badge}
           </div>
-          <p className="text-xs text-gray-400 leading-relaxed">{mod.description}</p>
-          {!mod.access && mod.price_usd > 0 && (
+          <p className="text-xs text-gray-400 leading-relaxed">{moduleMeta.description}</p>
+          {!mod.access && moduleMeta.priceUsd > 0 && (
             <p className="text-xs text-violet-300 mt-1 font-semibold">
-              ${mod.price_usd}/mois
+              ${moduleMeta.priceUsd}/mois
             </p>
           )}
         </div>
@@ -110,7 +92,7 @@ function ModuleCard({ mod }: { mod: ModuleAccess }) {
             disabled={loading}
             className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-semibold py-2 px-4 rounded-xl text-sm transition"
           >
-            {loading ? "Redirection..." : `Activer — $${mod.price_usd}/mois`}
+            {loading ? "Redirection..." : `Activer — $${moduleMeta.priceUsd}/mois`}
           </button>
           {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
         </div>
@@ -164,7 +146,7 @@ export default function ModulesPage() {
     );
   }
 
-  const planColor = PLAN_COLORS[plan] ?? "text-gray-400";
+  const planColor = getPlanTextClass(plan);
   const activeModules = modules.filter((m) => m.access);
   const lockedModules = modules.filter((m) => !m.access);
 

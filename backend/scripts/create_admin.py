@@ -4,7 +4,7 @@ backend/scripts/create_admin.py
 Bootstrap script — promote an existing user to admin.
 
 Usage (from backend/ directory):
-    python scripts/create_admin.py --email kevin@tkverse.ca
+    python scripts/create_admin.py --email kevin@nanovia.ca
 
 Or interactively:
     python scripts/create_admin.py
@@ -22,10 +22,7 @@ from pathlib import Path
 # Ensure backend package is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent.parent / ".env")
-
-from api.config import settings  # noqa: E402 (after load_dotenv)
+from api.config import settings  # noqa: E402
 from api.database import engine  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -88,11 +85,11 @@ async def list_admins() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Promote a TKVerse user to admin",
+        description="Promote a Nanovia user to admin",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/create_admin.py --email kevin@tkverse.ca
+  python scripts/create_admin.py --email kevin@nanovia.ca
   python scripts/create_admin.py --list
         """,
     )

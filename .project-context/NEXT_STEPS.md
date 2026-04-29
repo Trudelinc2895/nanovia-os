@@ -1,136 +1,88 @@
-# NEXT STEPS — KT Monetization OS
-## Mis à jour : 2026-04-02
+# NEXT STEPS — Nanovia OS
+## Mis à jour : 2026-04-27
 
 Les étapes sont ordonnées par impact/urgence. Attaquer une à la fois.
 
 ---
 
-## 🔴 ÉTAPE 1 — Vérifier que l'API démarre (5 min)
+## 🔴 ÉTAPE 1 — Renseigner les vraies clés et price IDs (indispensable avant usage réel)
 
-**Pourquoi :** Rien ne peut être testé sans que l'API tourne.
+**Pourquoi :** Le code et la stack sont prêts, mais Stripe/Resend restent dépendants de vraies valeurs externes.
 
 ```powershell
 cd C:\Users\Alienware\kt-monetization-os
-$env:PYTHONPATH = "backend"
-# Option A : PostgreSQL disponible → lancer tel quel
-uvicorn api.main:app --reload --host 127.0.0.1 --port 8010
-
-# Option B : Pas de PostgreSQL → basculer en SQLite pour dev
-# Dans .env, remplacer DATABASE_URL par :
-# DATABASE_URL=sqlite+aiosqlite:///./dev.db
+Copy-Item infra\env\.env.dev.example .env.dev
+# Remplir ensuite dans .env.dev :
+# - STRIPE_SECRET_KEY / STRIPE_PUBLIC_KEY / STRIPE_WEBHOOK_SECRET
+# - STRIPE_PRICE_*
+# - RESEND_API_KEY si emails réels voulus
 ```
 
-**Fichiers touchés :** `.env` uniquement (si SQLite)
-**Vérification :** `Invoke-WebRequest http://localhost:8010/health`
-
 ---
 
-## 🔴 ÉTAPE 2 — Ajouter @stripe/react-stripe-js au frontend (5 min)
+## 🔴 ÉTAPE 2 — Générer ou synchroniser le catalogue Stripe
 
-**Pourquoi :** Le bouton "Upgrade" du frontend ne peut pas initier un checkout sans cette lib.
+**Pourquoi :** Les abonnements mensuels/annuels et packs dépendent des `price_id` réellement présents dans Stripe.
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os\frontend\client
-npm install @stripe/react-stripe-js @stripe/stripe-js
+cd C:\Users\Alienware\kt-monetization-os
+python stripe\setup_stripe.py
 ```
 
-**Fichiers touchés :** `frontend/client/package.json`, `package-lock.json`
+**À faire ensuite :**
+- Copier les `STRIPE_PRICE_*` générés dans `.env.dev`, `.env.staging` ou `.env.production`
+- Garder `sk_test_` en dev/staging et `sk_live_` uniquement en prod
 
 ---
 
-## 🔴 ÉTAPE 3 — Configurer les yearly price IDs Stripe (10 min)
+## 🟡 ÉTAPE 3 — Démarrer la stack locale recommandée
 
-**Pourquoi :** Si affichés dans le front, les yearly checkouts échouent.
+**Pourquoi :** C'est désormais le chemin de dev propre et reproductible.
 
 ```powershell
-# Option A : Créer les prix yearly via setup_stripe.py (modifier le script)
-# Option B : Créer manuellement dans le Stripe Dashboard (TEST)
-# → Copier les price_id générés dans .env :
-# STRIPE_PRICE_PRO_YEARLY_ID=price_xxx
-# STRIPE_PRICE_BUSINESS_YEARLY_ID=price_xxx
+cd C:\Users\Alienware\kt-monetization-os
+docker compose --env-file .env.dev -f infra\docker-compose.dev.yml up --build
 ```
 
-**Fichiers touchés :** `.env`, `stripe/setup_stripe.py` (si modifié)
+**Endpoints attendus :**
+- Web: `http://localhost:3000`
+- API: `http://127.0.0.1:8010`
+- Docs: `http://127.0.0.1:8010/docs`
 
 ---
 
-## 🟡 ÉTAPE 4 — Implémenter le credit ledger (1h)
+## 🟡 ÉTAPE 4 — Tester le flow Stripe end-to-end
 
-**Pourquoi :** L'endpoint `/billing/credits/purchase` existe mais les crédits ne s'ajoutent pas.
-
-Actions :
-1. Ajouter champ `credits` (int, default=0) au modèle `User` dans `backend/api/models/user.py`
-2. Ajouter logique d'incrémentation dans `billing_service.py` après `checkout.session.completed` (mode `credit_pack`)
-3. Vérifier que `STRIPE_CREDIT_PRICE_ID` est configuré dans `.env`
-
-**Fichiers touchés :**
-- `backend/api/models/user.py`
-- `backend/api/services/billing_service.py`
-- `.env`
-
----
-
-## 🟡 ÉTAPE 5 — Tester le flow Stripe end-to-end (30 min)
+**Pourquoi :** Le code est présent, mais il faut confirmer la vraie intégration avec des clés valides.
 
 ```powershell
-# Terminal 1 : API
-uvicorn api.main:app --reload --port 8010
+# Terminal 1
+docker compose --env-file .env.dev -f infra\docker-compose.dev.yml up --build
 
-# Terminal 2 : Stripe webhook listener
+# Terminal 2
 stripe listen --forward-to localhost:8010/api/v1/billing/webhook
 
-# Terminal 3 : Déclencher un checkout test
+# Terminal 3
 stripe trigger checkout.session.completed
 ```
 
-**À vérifier :**
-- User.plan mis à jour après checkout
-- Email de confirmation envoyé (ou loggué)
-- `GET /api/v1/billing/entitlements` retourne le bon plan
+---
+
+## 🟡 ÉTAPE 5 — Décider du futur du service `frontend/admin`
+
+**Pourquoi :** L'UI admin réelle vit dans `frontend/client/app/admin`, alors que `frontend/admin` reste un stub de déploiement.
 
 ---
 
-## 🟡 ÉTAPE 6 — Configurer RESEND_API_KEY (10 min)
+## 🟢 ÉTAPE 6 — Remplacer les métriques placeholder du mobile
 
-**Pourquoi :** Les emails sont silencieux (loggués seulement) sans cette clé.
-
-```
-1. Créer un compte sur resend.com (gratuit)
-2. Générer une API key
-3. Ajouter dans .env : RESEND_API_KEY=re_xxx
-```
-
-**Fichiers touchés :** `.env` uniquement
-
----
-
-## 🟢 ÉTAPE 7 — Générer les migrations Alembic (20 min)
-
-**Pourquoi :** Les tables sont créées via `Base.metadata.create_all` au démarrage (dev) mais Alembic est nécessaire pour la prod.
-
-```powershell
-cd C:\Users\Alienware\kt-monetization-os\backend
-alembic init migrations  # si pas encore fait
-alembic revision --autogenerate -m "initial_schema"
-alembic upgrade head
-```
-
----
-
-## 🟢 ÉTAPE 8 — Déployer en prod (VPS)
-
-```powershell
-# 1. Remplacer sk_test_ par sk_live_ dans .env
-# 2. Changer APP_ENV=production
-# 3. Lancer bootstrap VPS
-bash scripts/bootstrap_vps.sh
-```
+**Pourquoi :** C'est le dernier point technique encore explicitement documenté comme incomplet dans le code applicatif.
 
 ---
 
 ## Pour chaque nouvelle session
 
-1. Lire `WORKSTATE.md` → identifier ce qui est fait/cassé
-2. Lire `KNOWN_BUGS.md` → éviter de retomber sur les mêmes erreurs
-3. Choisir la prochaine étape dans ce fichier (la plus haute non cochée)
-4. Après chaque étape : mettre à jour `WORKSTATE.md` + `KNOWN_BUGS.md`
+1. Démarrer par `.env.dev` + `infra/docker-compose.dev.yml`
+2. Vérifier si la session a besoin de vraies intégrations externes ou seulement d'un run local
+3. Ne pas supposer que `frontend/admin` est la vraie surface admin
+4. Mettre à jour `KNOWN_BUGS.md` et ce fichier dès qu'un point change réellement

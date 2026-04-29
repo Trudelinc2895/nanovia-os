@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from api.config import settings
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_module_access, require_usage_budget
 from api.models.content_clone import ContentClone
 from api.schemas.content_cloner import (
     CloneHistoryResponse,
@@ -24,7 +25,7 @@ from api.schemas.content_cloner import (
     CloneFormats,
 )
 from api.services.content_cloner_service import clone_content
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,27 +34,17 @@ router = APIRouter()
 # ─── Clone ────────────────────────────────────────────────────────────────────
 
 @router.post("/content-cloner/clone", response_model=CloneResponse, status_code=status.HTTP_201_CREATED)
-async def create_clone(body: CloneRequest, current_user: CurrentUser, db: DB):
+async def create_clone(
+    body: CloneRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _module_access: Annotated[CurrentUser, Depends(require_module_access("content"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     """
     Transform original_content into 5 platform-optimised formats via OpenAI.
     Persists the result and returns it immediately.
     """
-    # Enforce feature gate: Content Cloner requires api_access (pro+)
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "api_access"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Content Cloner nécessite un plan Pro ou supérieur.",
-        )
-
-    # Enforce usage quota (overage → credit deduction)
-    within_limit, _ = await check_and_charge_usage(current_user, db)
-    if not within_limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
-        )
-
     formats = await clone_content(
         original=body.original_content,
         niche=body.niche,

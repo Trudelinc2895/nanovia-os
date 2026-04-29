@@ -7,13 +7,14 @@ backend/api/routers/reverse_engineering.py — Module 8: Reverse Engineering
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_module_access, require_usage_budget
 from api.services.reverse_engineering_service import run_reverse_engineering
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,21 +31,13 @@ class ReverseEngineeringResponse(BaseModel):
 
 
 @router.post("/reverse/analyze", response_model=ReverseEngineeringResponse, status_code=status.HTTP_201_CREATED)
-async def analyze_reverse_engineering(body: ReverseEngineeringRequest, current_user: CurrentUser, db: DB):
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "automation"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Reverse Engineering nécessite un plan Pro ou supérieur.",
-        )
-
-    within_limit, _ = await check_and_charge_usage(current_user, db)
-    if not within_limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan.",
-        )
-
+async def analyze_reverse_engineering(
+    body: ReverseEngineeringRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _module_access: Annotated[CurrentUser, Depends(require_module_access("reverse"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     result, tokens = await run_reverse_engineering(body.content, body.context or "")
     await record_usage(current_user.id, "reverse_engineering", tokens, db)
     return ReverseEngineeringResponse(result=result)

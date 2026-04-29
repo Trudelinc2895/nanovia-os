@@ -7,13 +7,14 @@ backend/api/routers/knowledge_weapon.py — Module 6: Knowledge Weapon
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_module_access, require_usage_budget
 from api.services.knowledge_weapon_service import run_knowledge_weapon
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,21 +31,13 @@ class KnowledgeWeaponResponse(BaseModel):
 
 
 @router.post("/knowledge/extract", response_model=KnowledgeWeaponResponse, status_code=status.HTTP_201_CREATED)
-async def extract_knowledge_weapon(body: KnowledgeWeaponRequest, current_user: CurrentUser, db: DB):
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "api_access"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Knowledge Weapon nécessite un plan Pro ou supérieur.",
-        )
-
-    within_limit, _ = await check_and_charge_usage(current_user, db)
-    if not within_limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan.",
-        )
-
+async def extract_knowledge_weapon(
+    body: KnowledgeWeaponRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _module_access: Annotated[CurrentUser, Depends(require_module_access("knowledge"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     result, tokens = await run_knowledge_weapon(body.content, body.context or "")
     await record_usage(current_user.id, "knowledge_weapon", tokens, db)
     return KnowledgeWeaponResponse(result=result)

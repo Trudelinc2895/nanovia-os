@@ -1,0 +1,16 @@
+services:
+  web:
+    ports:
+      - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_WEB_PORT:-13000}:3000"
+
+  admin:
+    ports:
+      - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_ADMIN_PORT:-13020}:3020"
+
+  api:
+    ports:
+      - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_API_PORT:-18010}:8010"
+
+  ai-orchestrator:
+    ports:
+      - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_AI_PORT:-18020}:8020"

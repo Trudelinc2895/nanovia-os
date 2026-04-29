@@ -1,0 +1,47 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nanovia-alerts
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/managed-by: kustomize
+    release: prometheus
+spec:
+  groups:
+    - name: nanovia.api.rules
+      interval: 30s
+      rules:
+        - alert: HighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="nanovia", status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{namespace="nanovia"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            namespace: nanovia
+          annotations:
+            summary: "High HTTP 5xx error rate detected"
+            description: "More than 5% of HTTP requests are returning 5xx errors for the past 5 minutes."
+
+        - alert: ScrapeQueueDepthHigh
+          expr: scrape_queue_depth{namespace="nanovia"} > 500
+          for: 10m
+          labels:
+            severity: warning
+            namespace: nanovia
+          annotations:
+            summary: "Scrape queue depth is high"
+            description: "The scrape queue depth has exceeded 500 items for more than 10 minutes."
+
+        - alert: APIDown
+          expr: up{namespace="nanovia", job=~"nanovia-api.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            namespace: nanovia
+          annotations:
+            summary: "Nanovia API is down"
+            description: "The Nanovia API has been unreachable for more than 2 minutes."

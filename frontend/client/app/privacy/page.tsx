@@ -20,7 +20,7 @@ export default function PrivacyPage() {
         <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-3">2. Utilisation des données</h2>
           <ul className="text-gray-300 list-disc pl-6 space-y-2">
-            <li>Fournir et améliorer le service TKVerse.</li>
+            <li>Fournir et améliorer le service Nanovia OS.</li>
             <li>Traiter les paiements via Stripe.</li>
             <li>Envoyer des notifications de compte (emails transactionnels uniquement).</li>
             <li>Sécuriser le service (détection de fraude, rate limiting).</li>

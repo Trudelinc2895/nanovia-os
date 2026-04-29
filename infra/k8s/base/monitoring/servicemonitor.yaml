@@ -1,0 +1,44 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nanovia-api-monitor
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-api
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/managed-by: kustomize
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nanovia-api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - nanovia
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nanovia-worker-monitor
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-worker
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/managed-by: kustomize
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nanovia-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - nanovia

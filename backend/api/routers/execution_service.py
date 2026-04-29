@@ -7,13 +7,14 @@ backend/api/routers/execution_service.py — Module 10: Execution Service
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_module_access, require_usage_budget
 from api.services.execution_service_service import run_execution_service
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,21 +31,13 @@ class ExecutionServiceResponse(BaseModel):
 
 
 @router.post("/execution/plan", response_model=ExecutionServiceResponse, status_code=status.HTTP_201_CREATED)
-async def plan_execution_service(body: ExecutionServiceRequest, current_user: CurrentUser, db: DB):
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "automation"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Execution Service nécessite un plan Pro ou supérieur.",
-        )
-
-    within_limit, _ = await check_and_charge_usage(current_user, db)
-    if not within_limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan.",
-        )
-
+async def plan_execution_service(
+    body: ExecutionServiceRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _module_access: Annotated[CurrentUser, Depends(require_module_access("execution"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     result, tokens = await run_execution_service(body.content, body.context or "")
     await record_usage(current_user.id, "execution_service", tokens, db)
     return ExecutionServiceResponse(result=result)

@@ -35,7 +35,7 @@ def _wrap(body: str) -> str:
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>KT Monetization OS</title>
+  <title>Nanovia OS</title>
 </head>
 <body style="margin:0;padding:0;background:#0D0D0D;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#0D0D0D;padding:40px 0;">
@@ -45,7 +45,7 @@ def _wrap(body: str) -> str:
         <tr>
           <td style="background:#7C3AED;padding:20px 32px;">
             <span style="color:#fff;font-size:20px;font-weight:800;letter-spacing:.5px;">
-              ⚡ KT Monetization OS
+              ⚡ Nanovia OS
             </span>
           </td>
         </tr>
@@ -57,7 +57,7 @@ def _wrap(body: str) -> str:
         <tr>
           <td style="padding:20px 32px;border-top:1px solid #2A2A2A;">
             <p style="margin:0;color:#6B7280;font-size:12px;">
-              © KT Monetization OS · tkverse.ca · Vous recevez cet e-mail car vous avez
+              © Nanovia OS · nanovia.ca · Vous recevez cet e-mail car vous avez
               créé un compte ou souscrit à un abonnement.
             </p>
           </td>
@@ -100,7 +100,7 @@ async def send_welcome_email(to: str, name: str) -> bool:
     display = str(escape(name or to))
     html = _wrap(f"""
       <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
-        Bienvenue sur KT Monetization OS ⚡
+        Bienvenue sur Nanovia OS ⚡
       </h1>
       <p style="margin:0 0 12px;">
         Salut <strong style="color:#A78BFA;">{display}</strong> 👋,
@@ -117,7 +117,7 @@ async def send_welcome_email(to: str, name: str) -> bool:
         Des questions ? Réponds directement à cet e-mail, on est là.
       </p>
     """)
-    return await _send(to, "Bienvenue sur KT Monetization OS ⚡", html)
+    return await _send(to, "Bienvenue sur Nanovia OS ⚡", html)
 
 
 async def send_password_reset_email(to: str, reset_url: str) -> bool:
@@ -127,7 +127,7 @@ async def send_password_reset_email(to: str, reset_url: str) -> bool:
         🔐 Réinitialisation de mot de passe
       </h1>
       <p style="margin:0 0 12px;">
-        Tu as demandé à réinitialiser le mot de passe de ton compte KT Monetization OS.
+        Tu as demandé à réinitialiser le mot de passe de ton compte Nanovia OS.
       </p>
       <p style="margin:0 0 28px;">
         Clique sur le bouton ci-dessous. Ce lien expire dans <strong>1 heure</strong>.
@@ -259,6 +259,33 @@ async def send_usage_alert(to: str, name: str, pct: int, plan: str) -> bool:
     return await _send(to, f"Alerte quota — {pct}% utilise ce mois", html)
 
 
+async def send_subscription_cancelled(to: str, name: str, plan: str) -> bool:
+    """Notify user their subscription has been cancelled."""
+    display = name or to
+    plan_display = plan.capitalize()
+    html = _wrap(f"""
+      <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
+        Abonnement annulé
+      </h1>
+      <p style="margin:0 0 12px;">
+        Salut <strong style="color:#A78BFA;">{display}</strong>,
+      </p>
+      <p style="margin:0 0 12px;">
+        Ton abonnement <strong style="color:#F87171;">Plan {plan_display}</strong>
+        a été annulé. Tu garderas accès à tes fonctionnalités jusqu'à la fin
+        de ta période de facturation en cours.
+      </p>
+      <p style="margin:0 0 28px;">
+        Tu peux te réabonner à tout moment depuis ton tableau de bord.
+      </p>
+      {_btn(_DASHBOARD_URL + "/billing", "Gérer mon abonnement")}
+      <p style="margin:28px 0 0;color:#9CA3AF;font-size:13px;">
+        Une question ? Réponds à cet e-mail, nous sommes là pour toi.
+      </p>
+    """)
+    return await _send(to, "Abonnement Nanovia annulé", html)
+
+
 async def send_low_credits(to: str, name: str, balance: int) -> bool:
     """Notify user their overage credit balance is critically low (less than 3)."""
     display = name or to
@@ -288,12 +315,12 @@ async def send_low_credits(to: str, name: str, balance: int) -> bool:
 
 async def send_verification_email(to_email: str, name: str, verify_url: str) -> None:
     """Send email verification link after registration."""
-    subject = "Vérifie ton adresse email — TKVerse"
+    subject = "Vérifie ton adresse email — Nanovia OS"
     html = f"""
     <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
       <h2>Confirme ton email</h2>
       <p>Salut {name or to_email},</p>
-      <p>Clique sur le bouton ci-dessous pour activer ton compte TKVerse :</p>
+      <p>Clique sur le bouton ci-dessous pour activer ton compte Nanovia OS :</p>
       <a href="{verify_url}" style="display:inline-block;padding:12px 28px;background:#4F46E5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">
         Vérifier mon email
       </a>

@@ -2,12 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { getAdminMetrics, type AdminMetrics } from "@/lib/api";
-
-const PLAN_COLORS: Record<string, string> = {
-  free: "bg-gray-500",
-  pro: "bg-purple-600",
-  business: "bg-yellow-500",
-};
+import { getPlanFillClass, PLAN_SLUGS } from "@/lib/monetization";
 
 export default function AdminMetricsPage() {
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
@@ -89,7 +84,7 @@ export default function AdminMetricsPage() {
               Plan Distribution
             </h2>
             <div className="space-y-4">
-              {["free", "pro", "business"].map((plan) => {
+              {PLAN_SLUGS.map((plan) => {
                 const count = metrics.users_by_plan[plan] ?? 0;
                 const pct = totalByPlan > 0 ? Math.round((count / totalByPlan) * 100) : 0;
                 return (
@@ -102,9 +97,7 @@ export default function AdminMetricsPage() {
                     </div>
                     <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-500 ${
-                          PLAN_COLORS[plan] ?? "bg-gray-500"
-                        }`}
+                        className={`h-full rounded-full transition-all duration-500 ${getPlanFillClass(plan)}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>

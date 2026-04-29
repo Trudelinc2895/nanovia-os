@@ -20,137 +20,66 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import select
 
+from api.core.data_protection import encrypt_at_rest
 from api.core.deps import CurrentUser, DB
 from api.models.device_session import DeviceSession
 from api.models.notification import UserNotification
-from api.services.billing_service import PLANS_CONFIG, compute_entitlements, get_active_subscription
+from api.services.billing_service import MODULES_CONFIG, compute_entitlements, get_active_subscription
+from api.services.entitlements_service import has_module_access
+from api.services.module_registry import MODULE_REGISTRY_SLUGS, get_module_registry_entry
+from api.services.subscription_state_machine import is_access_granted
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ─── Modules config (mobile-aware) ───────────────────────────────────────────
-MODULES_CATALOG = [
-    {
-        "key": "operator",
-        "name": "AI Personal Operator",
-        "description": "Ton assistant exécutif IA — emails, décisions, organisation",
-        "category": "productivity",
-        "icon": "robot",
-        "enabled": True,
-        "visible_on_mobile": True,
-        "entitlements_required": ["free"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "content_cloner",
-        "name": "Content Cloner Engine",
-        "description": "Transforme contenu viral en multi-format automatiquement",
-        "category": "marketing",
-        "icon": "copy",
-        "enabled": False,  # coming soon
-        "visible_on_mobile": False,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "micro_saas",
-        "name": "Micro-SaaS Builder",
-        "description": "Génère des outils SaaS ultra-spécifiques en 24h",
-        "category": "automation",
-        "icon": "code",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "ghost_agency",
-        "name": "Ghost Automation Agency",
-        "description": "Automatise prospection et outreach pour clients",
-        "category": "sales",
-        "icon": "ghost",
-        "enabled": False,
-        "visible_on_mobile": True,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "decision_engine",
-        "name": "AI Decision Engine",
-        "description": "Prise de décision augmentée — business, stratégie, investissement",
-        "category": "intelligence",
-        "icon": "brain",
-        "enabled": False,
-        "visible_on_mobile": True,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "knowledge_weapon",
-        "name": "Knowledge Weapon System",
-        "description": "Transforme livres/vidéos en plans d'action exécutables",
-        "category": "intelligence",
-        "icon": "book",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "digital_leverage",
-        "name": "Digital Leverage Builder",
-        "description": "Crée des assets digitaux qui travaillent pour toi",
-        "category": "automation",
-        "icon": "trending-up",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["business"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "reverse_engineering",
-        "name": "AI Reverse Engineering",
-        "description": "Analyse concurrents → recrée en mieux avec IA",
-        "category": "intelligence",
-        "icon": "search",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["business"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "offer_generator",
-        "name": "Hyper-Personalized Offer Generator",
-        "description": "Génère des offres ultra-ciblées par profil client",
-        "category": "sales",
-        "icon": "target",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["pro"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-    {
-        "key": "execution_service",
-        "name": "Execution-as-a-Service",
-        "description": "Tu délègues — l'IA exécute tout à ta place",
-        "category": "automation",
-        "icon": "zap",
-        "enabled": False,
-        "visible_on_mobile": False,
-        "entitlements_required": ["business"],
-        "roles_allowed": ["user", "admin", "vip"],
-    },
-]
-
-_PLAN_HIERARCHY = {"free": 0, "pro": 1, "business": 2}
+def _serialize_module_entry(module_meta: dict[str, Any], is_available: bool) -> dict[str, Any]:
+    module_cfg = MODULES_CONFIG[module_meta["slug"]]
+    return {
+        "key": module_meta["key"],
+        "slug": module_meta["slug"],
+        "name": module_cfg["name"],
+        "description": module_cfg["description"],
+        "category": module_meta["category"],
+        "icon": module_meta["icon"],
+        "enabled": module_meta["enabled"],
+        "visible_on_mobile": module_meta["visible_on_mobile"],
+        "entitlements_required": list(module_cfg.get("included_in_plans", [])),
+        "roles_allowed": module_meta["roles_allowed"],
+        "is_available": is_available,
+    }
 
 
-def _user_has_access(user_plan: str, required: list[str]) -> bool:
-    user_level = _PLAN_HIERARCHY.get(user_plan, 0)
-    return any(_PLAN_HIERARCHY.get(r, 0) <= user_level for r in required)
+async def _build_mobile_catalog(current_user: CurrentUser, db: DB) -> list[dict[str, Any]]:
+    catalog: list[dict[str, Any]] = []
+    for module_slug in MODULE_REGISTRY_SLUGS:
+        module_meta = get_module_registry_entry(module_slug)
+        if not module_meta:
+            continue
+        is_available = module_meta["enabled"] and await has_module_access(
+            current_user,
+            module_slug,
+            db,
+        )
+        catalog.append(_serialize_module_entry(module_meta, is_available))
+    return catalog
+
+
+async def _require_vip_access(current_user: CurrentUser, db: DB) -> tuple[dict[str, Any], Any]:
+    sub = await get_active_subscription(current_user.id, db)
+    entitlements = compute_entitlements(current_user, sub)
+
+    if getattr(current_user, "is_admin", False):
+        return entitlements, sub
+
+    if entitlements["plan"] == "free":
+        raise HTTPException(status_code=403, detail="VIP access requires a paid plan")
+    if not is_access_granted(sub):
+        raise HTTPException(status_code=402, detail="Active subscription required.")
+
+    return entitlements, sub
 
 
 # ─── Module catalog ───────────────────────────────────────────────────────────
@@ -158,39 +87,21 @@ def _user_has_access(user_plan: str, required: list[str]) -> bool:
 @router.get("/modules/catalog")
 async def get_modules_catalog(current_user: CurrentUser, db: DB):
     """Full module catalog with user access computed per module."""
-    result = []
-    for m in MODULES_CATALOG:
-        entry = dict(m)
-        entry["is_available"] = (
-            m["enabled"]
-            and current_user.plan in m["entitlements_required"]
-            or _user_has_access(current_user.plan, m["entitlements_required"])
-        )
-        result.append(entry)
-    return result
+    return await _build_mobile_catalog(current_user, db)
 
 
 @router.get("/modules/catalog/mobile")
 async def get_mobile_modules(current_user: CurrentUser, db: DB):
     """Modules visible_on_mobile only — for the mobile client."""
-    return [
-        {
-            **m,
-            "is_available": m["enabled"] and _user_has_access(current_user.plan, m["entitlements_required"]),
-        }
-        for m in MODULES_CATALOG
-        if m["visible_on_mobile"]
-    ]
+    catalog = await _build_mobile_catalog(current_user, db)
+    return [module for module in catalog if module["visible_on_mobile"]]
 
 
 @router.get("/modules/me")
 async def get_my_modules(current_user: CurrentUser, db: DB):
-    """Modules the current user has access to (enabled + plan check)."""
-    return [
-        {**m, "is_available": True}
-        for m in MODULES_CATALOG
-        if m["enabled"] and _user_has_access(current_user.plan, m["entitlements_required"])
-    ]
+    """Modules the current user has access to (enabled + entitlement/module check)."""
+    catalog = await _build_mobile_catalog(current_user, db)
+    return [module for module in catalog if module["enabled"] and module["is_available"]]
 
 
 # ─── Sessions (device tracking + kill switch) ─────────────────────────────────
@@ -221,12 +132,12 @@ async def register_device(body: DeviceRegistrationRequest, current_user: Current
             device_id=body.device_id,
             device_name=body.device_name,
             platform=body.platform,
-            push_token=body.push_token,
+            push_token=encrypt_at_rest(body.push_token),
             ip_address=ip,
         )
         db.add(session)
     else:
-        session.push_token = body.push_token
+        session.push_token = encrypt_at_rest(body.push_token)
         session.device_name = body.device_name
         session.last_seen = datetime.now(timezone.utc)
         session.ip_address = ip
@@ -335,11 +246,7 @@ async def mark_notification_read(notification_id: str, current_user: CurrentUser
 @router.get("/vip/overview")
 async def get_vip_overview(current_user: CurrentUser, db: DB):
     """VIP dashboard — KPIs + alerts. Requires vip or admin role."""
-    if current_user.plan not in ("pro", "business") and current_user.plan != "admin":
-        raise HTTPException(status_code=403, detail="VIP access requires Pro or Business plan")
-
-    sub = await get_active_subscription(current_user.id, db)
-    entitlements = compute_entitlements(current_user, sub)
+    entitlements, sub = await _require_vip_access(current_user, db)
 
     from api.services.usage_service import get_monthly_usage
     usage = await get_monthly_usage(current_user.id, db)
@@ -356,7 +263,7 @@ async def get_vip_overview(current_user: CurrentUser, db: DB):
         {
             "key": "plan",
             "label": "Plan actuel",
-            "value": current_user.plan.upper(),
+            "value": str(entitlements["plan"]).upper(),
             "trend": "stable",
         },
         {
@@ -420,12 +327,9 @@ async def get_vip_overview(current_user: CurrentUser, db: DB):
 @router.get("/vip/kpis")
 async def get_vip_kpis(current_user: CurrentUser, db: DB):
     """KPIs synthétiques — usage des modules, progression."""
-    if current_user.plan not in ("pro", "business"):
-        raise HTTPException(status_code=403, detail="Requires Pro or Business plan")
-    sub = await get_active_subscription(current_user.id, db)
-    entitlements = compute_entitlements(current_user, sub)
+    entitlements, _sub = await _require_vip_access(current_user, db)
     return {"kpis": [
-        {"key": "plan", "label": "Plan", "value": current_user.plan, "trend": "stable"},
+        {"key": "plan", "label": "Plan", "value": entitlements["plan"], "trend": "stable"},
         {"key": "active_modules", "label": "Modules", "value": entitlements["limits"]["active_modules"]},
         {"key": "ai_messages", "label": "Msgs/mois", "value": entitlements["limits"]["ai_messages_per_month"]},
     ]}

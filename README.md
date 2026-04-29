@@ -4,9 +4,9 @@
 > Built with FastAPI + Next.js · Stripe billing · Argon2id auth · Redis rate limiting
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-brightgreen)](https://python.org)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-brightgreen)](https://python.org)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688)](https://fastapi.tiangolo.com)
 
 ---
 
@@ -43,8 +43,8 @@
 - Feature gating by subscription tier
 - Real-time analytics and gamification milestones
 
-**Owner:** Kevin Trudel — Trudelinc2895  
-**Domain:** nanovia.ca  
+**Owner:** Kevin Trudel — Trudelinc2895
+**Domain:** nanovia.ca
 **Status:** Production hardening in progress
 
 ---
@@ -55,7 +55,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                        CLIENT BROWSER                        │
 │                    Next.js 15 (App Router)                   │
-│              Port 3000 (dev) · tkverse.ca (prod)             │
+│              Port 3000 (dev) · nanovia.ca (prod)             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ HTTPS / REST
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -132,8 +132,8 @@ When a user exceeds their monthly AI message limit:
 ### Backend
 | Technology | Version | Purpose |
 |-----------|---------|---------|
-| Python | 3.14+ | Runtime |
-| FastAPI | 0.115 | REST API framework |
+| Python | 3.12 | Runtime |
+| FastAPI | 0.116 | REST API framework |
 | SQLAlchemy | 2.0 | ORM (async) |
 | aiosqlite | latest | SQLite async driver (dev) |
 | asyncpg | latest | PostgreSQL async driver (prod) |
@@ -169,7 +169,7 @@ When a user exceeds their monthly AI message limit:
 ## Project Structure
 
 ```
-kt-monetization-os/
+nanovia/
 ├── backend/
 │   ├── api/
 │   │   ├── config.py              # All env vars via pydantic-settings
@@ -208,26 +208,24 @@ kt-monetization-os/
 │   │       └── email_service.py   # Resend transactional emails
 │   └── requirements.txt
 ├── frontend/
-│   └── client/
-│       ├── app/
-│       │   ├── page.tsx                    # Homepage + pricing
-│       │   ├── login/page.tsx              # Login form
-│       │   ├── register/page.tsx           # Registration form
-│       │   ├── forgot-password/page.tsx    # Forgot password flow
-│       │   ├── reset-password/page.tsx     # Token-based password reset
-│       │   ├── not-found.tsx               # 404 page
-│       │   ├── error.tsx                   # Error boundary
-│       │   └── dashboard/
-│       │       ├── page.tsx                # Main dashboard + entitlements
-│       │       ├── billing/page.tsx        # Billing dashboard (full)
-│       │       ├── analytics/page.tsx      # Analytics + milestones
-│       │       └── chat/page.tsx           # AI chat interface
-│       ├── lib/
-│       │   ├── api.ts                      # API client + all typed helpers
-│       │   └── auth-context.tsx            # Auth state (JWT in memory)
-│       ├── next.config.ts                  # Security headers, CSP, HSTS
-│       ├── tailwind.config.js
-│       └── package.json
+│   ├── client/
+│   │   ├── app/
+│   │   │   ├── page.tsx                    # Homepage + pricing
+│   │   │   ├── login/page.tsx              # Login form
+│   │   │   ├── register/page.tsx           # Registration form
+│   │   │   ├── forgot-password/page.tsx    # Forgot password flow
+│   │   │   ├── reset-password/page.tsx     # Token-based password reset
+│   │   │   ├── not-found.tsx               # 404 page
+│   │   │   ├── error.tsx                   # Error boundary
+│   │   │   ├── dashboard/                  # User-facing app
+│   │   │   └── admin/                      # Current admin/operator UI routes
+│   │   ├── lib/
+│   │   │   ├── api.ts                      # API client + all typed helpers
+│   │   │   └── auth-context.tsx            # Auth state (JWT in memory)
+│   │   ├── next.config.ts                  # Security headers, CSP, HSTS
+│   │   ├── tailwind.config.js
+│   │   └── package.json
+│   └── admin/                              # Optional deploy stub, not the main admin UI
 ├── stripe/
 │   └── setup_stripe.py            # Automated Stripe product/price setup
 ├── infra/
@@ -251,72 +249,81 @@ kt-monetization-os/
 
 ### Prerequisites
 
-- Python 3.14+
-- Node.js 20+
-- Redis (optional — rate limiting fails open)
-- A Stripe account (test mode for dev)
+- Python 3.12
+- Node.js 20
+- Docker Desktop / Docker Engine + Compose plugin (recommended local path)
+- A Stripe account (test mode for dev when billing flows are exercised)
 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/Trudelinc2895/kt-monetization-os.git
-cd kt-monetization-os
+git clone <nanovia-repo-url>
+cd <nanovia-repo-dir>
 ```
 
-### 2. Backend Setup
+### 2. Recommended Local Dev Stack (one command)
 
 ```bash
-cd backend
+copy infra\env\.env.dev.example .env.dev     # Windows
+# cp infra/env/.env.dev.example .env.dev     # Linux/Mac
 
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Linux/Mac
+# Edit .env.dev only if you need real Stripe/OpenAI/Resend values locally
+docker compose --env-file .env.dev -f infra/docker-compose.dev.yml up --build
+```
 
-# Install dependencies
-pip install -r requirements.txt
+- Web app: `http://localhost:3000`
+- API docs: `http://127.0.0.1:8010/docs`
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6379`
 
-# Copy env template
+Or, use the `make` shortcuts (require Docker):
+
+```bash
+make dev-up          # Start the full dev stack (build + up)
+make dev-logs        # Live logs from all dev services
+make dev-logs-api    # Live logs from the API only
+make dev-migrate     # Run Alembic migrations in dev stack
+make dev-test        # Run backend pytest in dev stack
+make dev-down        # Stop and remove dev containers
+```
+
+This is the supported local workflow:
+- `frontend/client` serves both the user app and the current admin/operator routes.
+- `frontend/admin` stays a separate deploy stub and is not required for local development.
+- PostgreSQL + Redis run in containers; the backend uses live reload; the frontend uses Next.js dev mode.
+
+### 3. Manual Local Setup (SQLite fallback)
+
+```bash
+# Backend
+python -m venv .venv
+.venv\Scripts\activate         # Windows
+# source .venv/bin/activate    # Linux/Mac
+pip install -r backend/requirements.txt
+
 copy .env.example .env         # Windows
 # cp .env.example .env         # Linux/Mac
 
-# Edit .env with your values (see Environment Variables section)
+# Frontend
+cd frontend/client
+npm ci
+npm run dev
+```
 
-# Run backend
+For the SQLite fallback, keep `DATABASE_URL=sqlite+aiosqlite:///./dev.db` in `.env` and start the API with:
+
+```bash
 $env:PYTHONPATH = "backend"
 uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 ```
 
-API docs available at: `http://127.0.0.1:8010/docs` *(dev mode only)*
-
-### 3. Frontend Setup
+On Windows, if you are running a PostgreSQL-backed `.env` with Python 3.14, prefer:
 
 ```bash
-cd frontend/client
-
-# Install dependencies
-npm install
-
-# Copy env template
-copy .env.local.example .env.local   # Windows
-# cp .env.local.example .env.local   # Linux/Mac
-
-# Edit .env.local with your values
-
-# Run frontend
-npm run dev
+python scripts\run_api_windows.py
 ```
 
-Frontend available at: `http://localhost:3000`
-
-### 4. Database Setup
-
-```bash
-cd backend
-
-# Run migrations
-alembic upgrade head
-```
+This avoids the `psycopg` async incompatibility with the default Proactor event loop and also remaps Docker-style local hostnames such as `db`, `postgres`, and `redis` to `127.0.0.1` for direct local runs.
 
 ---
 
@@ -324,11 +331,24 @@ alembic upgrade head
 
 ### Backend — `.env`
 
+The repo now uses one explicit environment strategy:
+
+| File | Purpose | Typical runtime |
+|------|---------|-----------------|
+| `.env.example` | Lightweight local fallback with SQLite | Manual local run |
+| `infra/env/.env.dev.example` | Local Docker dev stack | `infra/docker-compose.dev.yml` |
+| `infra/env/.env.example` | Production template | `infra/docker-compose.prod.yml` |
+| `infra/env/.env.staging.example` | Isolated staging template | `infra/docker-compose.prod.yml` + `infra/docker-compose.staging.yml` |
+
+Copy `infra/env/.env.dev.example` to `.env.dev` for the Docker dev stack, or copy `.env.example` to `.env` for the manual SQLite fallback.
+
 ```bash
 # App
 APP_ENV=development
-APP_NAME="KT Monetization OS"
+APP_NAME="Nanovia OS"
+APP_RUNTIME_ENV_FILE=../.env
 PUBLIC_WEB_URL=http://localhost:3000
+PRIVATE_ADMIN_URL=http://localhost:3020
 API_BASE_URL=http://127.0.0.1:8010
 
 # Database
@@ -361,6 +381,12 @@ RESEND_API_KEY=re_...
 OPENAI_API_KEY=sk-...
 OLLAMA_CLIENT_BASE_URL=http://127.0.0.1:11434
 
+# Private orchestrator (admin-only, disabled by default)
+PRIVATE_ORCHESTRATOR_ENABLED=false
+PRIVATE_ORCHESTRATOR_UPSTREAM_URL=http://ai-orchestrator:8020
+PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS=operator,ghost_agency,decision_engine
+ADMIN_ALLOWED_IPS=127.0.0.1/32
+
 # CORS (comma-separated)
 ALLOWED_ORIGINS_RAW=http://localhost:3000,http://localhost:3020
 ```
@@ -369,7 +395,10 @@ ALLOWED_ORIGINS_RAW=http://localhost:3000,http://localhost:3020
 
 ```bash
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8010
+NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED=false
 ```
+
+When `NEXT_PUBLIC_API_URL` is empty, the frontend uses same-origin `/api` rewrites. That is the default production-safe path and also works in the Docker dev stack.
 
 ### Auto-setup Stripe Products
 
@@ -422,6 +451,17 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | POST | `/billing/credits/purchase` | Bearer | Buy credit pack |
 | POST | `/billing/webhook` | Stripe sig | Stripe event handler |
 
+### Admin / Operator
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/admin/webhooks` | Admin bearer | Recent Stripe webhook events + status |
+| POST | `/admin/webhooks/{stripe_event_id}/reprocess` | Admin bearer | Re-fetch a stored Stripe event and replay it |
+| GET | `/admin/users/{user_id}/billing-audit` | Admin bearer | Billing audit trail for one user |
+| POST | `/admin/users/{user_id}/resync-subscription` | Admin bearer | Force-sync latest Stripe subscription into local DB |
+| GET | `/admin/orchestrator/overview` | Admin bearer | Private orchestrator status/contract (404 when disabled) |
+| GET | `/admin/orchestrator/agents` | Admin bearer | Allowlisted private orchestrator agent catalog |
+
 ### Analytics
 
 | Method | Endpoint | Auth | Plan |
@@ -462,6 +502,10 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | `/dashboard/billing` | Billing management | ✅ Yes |
 | `/dashboard/analytics` | Usage analytics | ✅ Yes (Pro+) |
 | `/dashboard/chat` | AI chat interface | ✅ Yes |
+| `/admin/webhooks` | Admin Stripe webhook status view | ✅ Admin only |
+| `/admin/orchestrator` | Private orchestrator slice | ✅ Admin only + feature-flagged |
+
+Admin/operator pages currently live inside `frontend/client`. The separate `frontend/admin` deploy target is still an infrastructure stub and should be treated as optional until it becomes a real standalone app.
 
 ---
 
@@ -516,7 +560,7 @@ Plans are identified by lowercase strings: `"free"`, `"pro"`, `"business"`
 
 ```python
 "api_access"          # REST API calls allowed
-"white_label"         # Remove KT branding
+"white_label"         # Remove Nanovia branding for client delivery
 "priority_support"    # Priority queue
 "advanced_analytics"  # 30/90 day analytics history
 "custom_modules"      # Build custom AI modules
@@ -539,6 +583,12 @@ Credit packs available via one-time Stripe purchase (add-on).
 - `customer.subscription.updated` — update plan
 - `customer.subscription.deleted` — downgrade to free
 - `invoice.payment_failed` — flag account
+
+### Operator Recovery
+
+- Use `GET /api/v1/admin/webhooks` to inspect recent Stripe processing state.
+- Use `POST /api/v1/admin/webhooks/{stripe_event_id}/reprocess` to replay a stored event.
+- Use `POST /api/v1/admin/users/{user_id}/resync-subscription` to recover a user's latest Stripe state from Stripe when webhook delivery drifted.
 
 ---
 
@@ -573,6 +623,7 @@ All AI module endpoints are protected by:
 | Database | `dev.db` and all `*.db` in `.gitignore` |
 | Webhook | Stripe signature verified before processing |
 | Password reset | 32-byte random token · 1h expiry · single use · generic email response |
+| Private orchestrator | Admin-only + feature-flagged off by default · read-only status/catalog slice only · no terminal/files/browser/user-impersonation |
 
 ### Never Hardcoded
 
@@ -596,14 +647,23 @@ All AI module endpoints are protected by:
 ### Quick Start (Ubuntu 24.04)
 
 ```bash
-# One-shot install (see infra/scripts/)
-bash infra/scripts/install.sh
+# Production (public stack on OVH)
+cp infra/env/.env.example .env.production   # or .env for current production host
+python3 scripts/validate_runtime_env.py --env-file .env.production --target-env production
+docker compose -p nanovia-prod -f infra/docker-compose.prod.yml --env-file .env.production up -d
 
-# Or manually with Docker Compose
-cp .env.example .env
-# Edit .env with prod values
-docker-compose up -d
+# Staging (same VPS, isolated path/project, loopback-only ports)
+cp infra/env/.env.staging.example .env.staging
+python3 scripts/validate_runtime_env.py --env-file .env.staging --target-env staging
+docker compose -p nanovia-staging -f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml --env-file .env.staging up -d
 ```
+
+### GitHub flow
+
+- `feature/*` branches open PRs into `staging`
+- `staging` is the integration branch validated by CI and eligible for staging deploys
+- `main` stays production-oriented
+- CI and deploy workflows are aligned on `staging` and `main`
 
 ### Architecture (Production)
 
@@ -611,6 +671,36 @@ docker-compose up -d
 Internet → Caddy (TLS) → FastAPI :8010
                        → Next.js :3000
 ```
+
+- The public app stays on `https://nanovia.ca` with same-origin `/api`.
+- The current admin/operator UI lives in `frontend/client/app/admin/*`.
+- The separate `admin` container remains a private operational stub in the stack, and the default production `Caddyfile` still does **not** publish a public `admin.` host yet.
+
+### Staging vs production on one OVH VPS
+
+- `main` keeps the current production flow.
+- `staging` can deploy to a separate `DEPLOY_PATH` with its own `.env.staging`.
+- Production stays on `infra/docker-compose.prod.yml`.
+- Staging reuses the same stack plus `infra/docker-compose.staging.yml`, which publishes app ports on loopback-only high ports and skips Caddy.
+- `APP_RUNTIME_ENV_FILE` should match the chosen runtime env file (`../.env.production`, `../.env.staging`, or legacy `../.env`).
+- Deploys now fail early if the env file still has placeholder secrets, lacks `TOTP_ENCRYPTION_KEY`, or omits the production admin IP allowlist.
+- This is **not** zero-downtime; it is safer environment separation for a single-host Compose setup.
+- Recommended GitHub Environment secrets/vars per target:
+  - secrets: `VPS_HOST`, `VPS_SSH_PRIVATE_KEY`, `DEPLOY_PATH`
+  - vars: `APP_DOMAIN`, `PUBLIC_IP`, `STAGING_BIND_ADDRESS`, `STAGING_WEB_PORT`, `STAGING_ADMIN_PORT`, `STAGING_API_PORT`, `STAGING_AI_PORT`
+
+### Staging access
+
+Use SSH tunnels instead of exposing the shared host publicly:
+
+```bash
+ssh -L 13000:127.0.0.1:13000 -L 13020:127.0.0.1:13020 -L 18010:127.0.0.1:18010 deploy@YOUR_VPS_HOST
+```
+
+- Web: `http://127.0.0.1:13000`
+- Admin: `http://127.0.0.1:13020`
+- API: `http://127.0.0.1:18010`
+- Keep staging on Stripe test keys only.
 
 ### Required Services
 
@@ -661,8 +751,9 @@ npm run lint
 # Setup Stripe products (first time)
 python stripe/setup_stripe.py
 
-# Test API health
-curl http://127.0.0.1:8010/api/v1/health
+# Test API liveness / readiness
+curl http://127.0.0.1:8010/health
+curl http://127.0.0.1:8010/api/v1/health/ready
 ```
 
 ### Code Conventions
@@ -778,7 +869,7 @@ curl http://127.0.0.1:8010/api/v1/analytics/milestones \
 
 ## License
 
-MIT © 2025 Kevin Trudel — [tkverse.ca](https://tkverse.ca)
+MIT © 2025 Kevin Trudel — [nanovia.ca](https://nanovia.ca)
 
 ---
 

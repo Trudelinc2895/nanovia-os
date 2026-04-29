@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { listAgents, orchestrate, type OrchestrateResponse } from "@/lib/api";
+import { getModuleIcon } from "@/lib/monetization";
 
 interface Message {
   role: "user" | "assistant";
@@ -131,7 +132,7 @@ function ChatInner() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-center">
             <div className="text-5xl mb-4">🤖</div>
-            <h2 className="text-xl font-bold text-white mb-2">KT AI Orchestrator</h2>
+            <h2 className="text-xl font-bold text-white mb-2">Nanovia AI Orchestrator</h2>
             <p className="text-gray-400 max-w-sm text-sm">
               Pose n&apos;importe quelle question. L&apos;IA détecte automatiquement le bon agent (Operator, Ghost Agency, Content Cloner, Decision Engine...).
             </p>
@@ -160,7 +161,7 @@ function ChatInner() {
             >
               {msg.role === "assistant" && msg.agent_name && (
                 <div className="text-xs text-purple-400 mb-1 font-semibold">
-                  {getAgentIcon(msg.agent || "")} {msg.agent_name}
+                  {getModuleIcon(msg.agent || "")} {msg.agent_name}
                 </div>
               )}
               <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
@@ -214,19 +215,3 @@ const SUGGESTIONS = [
   "Crée un post LinkedIn viral sur l'IA et l'entrepreneuriat",
   "Organise ma to-do liste pour cette semaine",
 ];
-
-function getAgentIcon(agent: string): string {
-  const icons: Record<string, string> = {
-    operator: "🤖",
-    ghost_agency: "👻",
-    content_cloner: "📢",
-    decision_engine: "🧠",
-    offer_generator: "🎯",
-    knowledge_weapon: "📚",
-    micro_saas: "⚙️",
-    digital_leverage: "📈",
-    reverse_engineering: "🔬",
-    execution_service: "⚡",
-  };
-  return icons[agent] ?? "⚡";
-}

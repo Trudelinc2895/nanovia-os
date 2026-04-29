@@ -11,11 +11,12 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_feature
 from api.schemas.billing import (
     MilestoneStatus,
     MilestonesResponse,
@@ -23,7 +24,8 @@ from api.schemas.billing import (
     UsageHistoryItem,
     UsageHistoryResponse,
 )
-from api.services.billing_service import MILESTONES, has_feature
+from api.services.billing_service import MILESTONES
+from api.services.entitlements_service import get_entitlements
 from api.services.usage_service import (
     get_module_breakdown,
     get_monthly_usage,
@@ -38,6 +40,7 @@ router = APIRouter()
 async def usage_history(
     current_user: CurrentUser,
     db: DB,
+    _: Annotated[CurrentUser, Depends(require_feature("advanced_analytics"))],
     days: int = Query(default=30, ge=1, le=90, description="Look-back window in days"),
 ):
     """
@@ -45,12 +48,6 @@ async def usage_history(
     Requires advanced_analytics feature (pro+).
     Data lock-in: the richer the history, the more valuable the account.
     """
-    if not has_feature(current_user.plan, "advanced_analytics"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Analytics détaillés disponibles sur le plan Pro et supérieur.",
-        )
-
     records_raw = await get_usage_history(current_user.id, db, days=days)
     breakdown_raw = await get_module_breakdown(current_user.id, db, days=days)
 
@@ -78,7 +75,8 @@ async def module_breakdown(
     days: int = Query(default=30, ge=1, le=90),
 ):
     """Module-level usage breakdown. Available on all plans (free only sees last 7 days)."""
-    effective_days = days if has_feature(current_user.plan, "advanced_analytics") else min(days, 7)
+    entitlements = await get_entitlements(current_user, db)
+    effective_days = days if entitlements["features_enabled"].get("advanced_analytics", False) else min(days, 7)
     breakdown = await get_module_breakdown(current_user.id, db, days=effective_days)
     return {"days": effective_days, "breakdown": breakdown}
 
@@ -87,18 +85,13 @@ async def module_breakdown(
 async def export_usage_csv(
     current_user: CurrentUser,
     db: DB,
+    _: Annotated[CurrentUser, Depends(require_feature("data_export"))],
     days: int = Query(default=30, ge=1, le=365),
 ):
     """
     Export usage records as CSV. Requires data_export feature (pro+).
     This is a data lock-in feature: users with rich history are less likely to churn.
     """
-    if not has_feature(current_user.plan, "data_export"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Export CSV disponible sur le plan Pro et supérieur.",
-        )
-
     records = await get_usage_history(current_user.id, db, days=days, limit=5000)
 
     output = io.StringIO()
@@ -121,6 +114,7 @@ async def user_milestones(current_user: CurrentUser, db: DB):
     Return gamification milestones for the authenticated user.
     Drives progression, engagement, and upgrade motivation.
     """
+    entitlements = await get_entitlements(current_user, db)
     usage = await get_monthly_usage(current_user.id, db)
     total_messages = usage.get("messages_count", 0)
 
@@ -136,7 +130,8 @@ async def user_milestones(current_user: CurrentUser, db: DB):
     for m in MILESTONES:
         # Plan-based milestones
         if "plan" in m:
-            unlocked = current_user.plan in ("business",) if m["plan"] == "business" else current_user.plan in ("pro", "business")
+            plan = entitlements["plan"]
+            unlocked = plan in ("business",) if m["plan"] == "business" else plan in ("pro", "business")
         else:
             unlocked = lifetime_messages >= m["threshold"]
 

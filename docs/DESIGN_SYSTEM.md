@@ -1,4 +1,4 @@
-# Design System — TK Verse UI
+# Design System — Nanovia UI
 
 > Palette Titanium/Noir + Bleu primaire · composants React réutilisables · tokens centralisés
 

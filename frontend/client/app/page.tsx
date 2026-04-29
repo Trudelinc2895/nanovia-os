@@ -9,19 +9,7 @@ import {
   type BillingModulePublic,
   type Plan,
 } from "@/lib/api";
-
-const MODULE_ICONS: Record<string, string> = {
-  operator: "🤖",
-  content: "📡",
-  micro_saas: "⚙️",
-  ghost: "👻",
-  decision: "🧠",
-  knowledge: "📚",
-  leverage: "⚡",
-  reverse: "🔍",
-  offer: "🎯",
-  execution: "🚀",
-};
+import { getModuleIcon, MODULE_SLUGS } from "@/lib/monetization";
 
 function formatPlanCta(planSlug: string): string {
   if (planSlug === "free") return "Commencer gratis";
@@ -127,7 +115,7 @@ export default function Home() {
       {/* SOCIAL PROOF */}
       <section className="py-10 border-y border-gray-800 bg-gray-900/30">
         <div className="max-w-4xl mx-auto px-6 flex flex-wrap justify-center gap-10 text-center">
-          {[["10", "Modules IA"], ["$0", "Pour commencer"], ["24h", "Prototype live"], ["100%", "Ownership"]].map(([n, l]) => (
+            {[[String(MODULE_SLUGS.length), "Modules IA"], ["$0", "Pour commencer"], ["24h", "Prototype live"], ["100%", "Ownership"]].map(([n, l]) => (
             <div key={l}>
               <div className="text-3xl font-extrabold text-violet-400">{n}</div>
               <div className="text-gray-400 text-sm mt-1">{l}</div>
@@ -139,13 +127,13 @@ export default function Home() {
       {/* MODULES */}
       <section id="modules" className="py-24 px-6 max-w-6xl mx-auto">
         <div className="text-center mb-14">
-          <h2 className="text-4xl font-bold mb-4">10 modules. 1 système.</h2>
+          <h2 className="text-4xl font-bold mb-4">{MODULE_SLUGS.length} modules. 1 système.</h2>
           <p className="text-gray-400 text-lg">Tous les prix affiches ici viennent du catalogue billing du backend.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {modules.map((module) => (
             <div key={module.slug} className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-violet-500/50 transition group">
-              <div className="text-3xl mb-3">{MODULE_ICONS[module.slug] ?? "🔷"}</div>
+              <div className="text-3xl mb-3">{getModuleIcon(module.slug)}</div>
               <div className="flex items-start justify-between mb-2">
                 <h3 className="font-bold text-lg group-hover:text-violet-400 transition leading-tight">{module.name}</h3>
                 <span className="text-violet-400 font-bold text-sm ml-3 whitespace-nowrap">${module.price_usd}/mo</span>

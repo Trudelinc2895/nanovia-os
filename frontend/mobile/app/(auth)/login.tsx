@@ -34,9 +34,9 @@ export default function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <View style={styles.inner}>
-        <Text style={styles.logo}>KT</Text>
+        <Text style={styles.logo}>NV</Text>
         <Text style={styles.title}>Connexion</Text>
-        <Text style={styles.subtitle}>tkverse.ca</Text>
+        <Text style={styles.subtitle}>nanovia.ca</Text>
 
         <TextInput
           style={styles.input}

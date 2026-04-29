@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nanovia-grafana-dashboard
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/managed-by: kustomize
+    grafana_dashboard: "1"
+data:
+  nanovia-api-dashboard.json: |
+    {
+      "__inputs": [],
+      "__requires": [],
+      "annotations": { "list": [] },
+      "description": "Nanovia OS API observability dashboard",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Request Rate (req/s)",
+          "id": 1,
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{namespace=\"nanovia\"}[1m])) by (status)",
+              "legendFormat": "{{status}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Error Rate (%)",
+          "id": 2,
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{namespace=\"nanovia\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{namespace=\"nanovia\"}[5m])) * 100",
+              "legendFormat": "5xx rate"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Scrape Queue Depth",
+          "id": 3,
+          "targets": [
+            {
+              "expr": "scrape_queue_depth{namespace=\"nanovia\"}",
+              "legendFormat": "queue depth"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["nanovia", "api"],
+      "title": "Nanovia OS \u2014 API",
+      "uid": "nanovia-api-v1",
+      "version": 1
+    }

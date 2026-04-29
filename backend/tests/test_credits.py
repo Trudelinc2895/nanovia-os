@@ -32,7 +32,11 @@ async def test_deduct_credits_success(mock_user, mock_db):
     user_result = MagicMock()
     user_result.scalar_one_or_none.return_value = mock_user
     mock_db.execute.side_effect = [user_result]
-    result = await deduct_credits(mock_user, source="overage", db=mock_db)
+    with (
+        patch("api.services.credit_service._realign_credit_projections", new=AsyncMock(return_value=100)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()),
+    ):
+        result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is True
     assert mock_user.credits == 99
 
@@ -45,7 +49,11 @@ async def test_deduct_credits_insufficient_balance(mock_user, mock_db):
     user_result = MagicMock()
     user_result.scalar_one_or_none.return_value = mock_user
     mock_db.execute.side_effect = [user_result]
-    result = await deduct_credits(mock_user, source="overage", db=mock_db)
+    with (
+        patch("api.services.credit_service._realign_credit_projections", new=AsyncMock(return_value=0)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()),
+    ):
+        result = await deduct_credits(mock_user, source="overage", db=mock_db)
     assert result is False
 
 @pytest.mark.asyncio
@@ -77,3 +85,20 @@ async def test_add_credits_idempotency(mock_db):
     result = await add_credits(uuid.uuid4(), 100, source="stripe", db=mock_db, idempotency_key="idem-456")
     assert result == existing
     mock_db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_realign_credit_projections_uses_ledger_as_authority(mock_user, mock_db):
+    """Ledger wins over stale projections and triggers projection sync."""
+    from api.services.credit_service import _realign_credit_projections
+
+    mock_user.credits = 7
+    with (
+        patch("api.services.credit_service._get_authoritative_ledger_balance", new=AsyncMock(return_value=11)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()) as sync_mock,
+    ):
+        authoritative = await _realign_credit_projections(mock_user, mock_db)
+
+    assert authoritative == 11
+    assert mock_user.credits == 11
+    sync_mock.assert_awaited_once()

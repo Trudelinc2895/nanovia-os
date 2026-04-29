@@ -4,12 +4,16 @@ import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
+import { isPrivateOrchestratorUiEnabled } from "@/lib/feature-flags";
 import { Badge } from "@/components/ui";
 
 const NAV_ITEMS = [
   { label: "Users", href: "/admin/users", icon: "👥" },
   { label: "Webhooks", href: "/admin/webhooks", icon: "🔗" },
   { label: "Metrics", href: "/admin/metrics", icon: "📊" },
+  ...(isPrivateOrchestratorUiEnabled()
+    ? [{ label: "Orchestrator", href: "/admin/orchestrator", icon: "🔒" }]
+    : []),
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -42,7 +46,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {/* Sidebar */}
       <aside className="w-56 bg-ui-surface border-r border-ui-border flex flex-col shrink-0">
         <div className="p-5 border-b border-ui-border">
-          <span className="text-primary font-bold text-lg">⚡ KT Admin</span>
+          <span className="text-primary font-bold text-lg">⚡ Nanovia Admin</span>
         </div>
         <nav className="flex-1 p-4 flex flex-col gap-1">
           {NAV_ITEMS.map((item) => {

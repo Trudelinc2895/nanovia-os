@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nanovia-web
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app: nanovia-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

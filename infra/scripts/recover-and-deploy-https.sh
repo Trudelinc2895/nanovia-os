@@ -1,16 +1,16 @@
 #!/bin/bash
 # ============================================================
-# KT Monetization OS — Recovery + HTTPS Deploy Script v3
+# Nanovia OS — Recovery + HTTPS Deploy Script v3
 # Run ONCE after VPS recovery to restore everything
 # Usage: bash /opt/kt-monetization-os/infra/scripts/recover-and-deploy-https.sh
 # ============================================================
 set -e
-DOMAIN="tkverse.ca"
+DOMAIN="nanovia.ca"
 APP_DIR="/opt/kt-monetization-os"
 ED25519_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEkMjUt0dkkQgMdlkBc9uhcJ60256s6Dgc6vCHHqoec9 kt-vps-2026"
 
 echo "══════════════════════════════════════════"
-echo "  KT Recovery + HTTPS Deploy v3"
+echo "  Nanovia Recovery + HTTPS Deploy v3"
 echo "══════════════════════════════════════════"
 
 # ── STEP 1: Kill nftables permanently ───────────────────────
@@ -127,8 +127,8 @@ if [ "$DNS_OK" = true ]; then
     echo "  SSH: ssh -i ~/.ssh/id_ed25519 root@167.114.155.166"
 else
     echo "══ ADD DNS A RECORDS IN OVH MANAGER ═════"
-    echo "  tkverse.ca         -> 167.114.155.166"
-    echo "  (optional) www.tkverse.ca     -> 167.114.155.166"
-    echo "  (optional) admin.tkverse.ca   -> 167.114.155.166"
-    echo "  (optional) monitor.tkverse.ca -> 167.114.155.166"
+    echo "  nanovia.ca         -> 167.114.155.166"
+    echo "  (optional) www.nanovia.ca     -> 167.114.155.166"
+    echo "  (optional) admin.nanovia.ca   -> 167.114.155.166"
+    echo "  (optional) monitor.nanovia.ca -> 167.114.155.166"
 fi

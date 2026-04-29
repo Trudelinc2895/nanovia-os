@@ -1,0 +1,42 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nanovia-ingress
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - nanovia.ca
+        - api.nanovia.ca
+      secretName: nanovia-tls
+  rules:
+    - host: nanovia.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nanovia-web
+                port:
+                  number: 80
+    - host: api.nanovia.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nanovia-api
+                port:
+                  number: 80

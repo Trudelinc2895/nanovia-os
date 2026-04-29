@@ -1,5 +1,5 @@
 /**
- * Design System Tokens — KT Verse / TK Verse
+ * Design System Tokens — Nanovia
  * Palette Titanium/noir + accent bleu #4F8CFF
  *
  * Ces tokens sont la source de vérité.

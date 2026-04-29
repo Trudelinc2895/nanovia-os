@@ -1,10 +1,10 @@
-# PROJECT MAP — KT Monetization OS
+# PROJECT MAP — Nanovia OS
 
 ## Identité
-- **Domaine :** tkverse.ca
+- **Domaine :** nanovia.ca
 - **Owner :** Kevin Trudel (trudelinc11@gmail.com)
 - **Mode :** SaaS multi-modules — production-grade, budget < $10/mois
-- **Repo :** https://github.com/Trudelinc2895/kt-monetization-os
+- **Repo actuel :** https://github.com/Trudelinc2895/kt-monetization-os
 
 ---
 
@@ -47,7 +47,7 @@ INTERNET ──HTTPS──► CADDY :443 (TLS auto, rate-limit, security headers
                                    :11434 Ollama (client)
                                    :11435 Ollama (admin)
                                    :9090 Prometheus
-                                   :3030 Grafana (monitor.tkverse.ca)
+                                   :3030 Grafana (monitor.nanovia.ca)
 ```
 
 ---
@@ -92,13 +92,13 @@ INTERNET ──HTTPS──► CADDY :443 (TLS auto, rate-limit, security headers
 | Plan | Prix/mois | Messages/mois | Conversations | Modules actifs |
 |------|-----------|---------------|---------------|----------------|
 | FREE | $0 | 50 | 5 | 1 |
-| PRO | $29 | 1 000 | 100 | 5 |
-| BUSINESS | $99 | Illimité | Illimité | 10 |
+| PRO | $79 | 1 000 | 100 | 5 |
+| BUSINESS | $149 | Illimité | Illimité | 10 |
 
-**Stripe Price IDs (TEST) :**
-- PRO monthly: `price_1TErAjARjyNV3UuRe1cikOz4`
-- BUSINESS monthly: `price_1TErAjARjyNV3UuRxxcyylnI`
-- Yearly: ⚠️ non configurés
+**Source de vérité Stripe :**
+- Les prix affichés suivent `shared/catalog/monetization.json` et `stripe/setup_stripe.py`
+- Les `price_id` réels doivent venir de `stripe/stripe_ids.json` ou des variables `STRIPE_PRICE_*`
+- Ne plus documenter d'anciens IDs codés en dur ici
 
 ---
 

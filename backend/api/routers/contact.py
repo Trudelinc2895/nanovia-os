@@ -24,6 +24,8 @@ SUBJECTS = {
     "billing": "Question de facturation",
     "support": "Support technique",
     "partnership": "Partenariat",
+    "demo": "Demande de démonstration",
+    "bug": "Bug report",
     "other": "Autre",
 }
 
@@ -79,7 +81,7 @@ async def contact_form(body: ContactRequest, request: Request):
     # Build admin notification email
     html = f"""
     <div style="font-family:sans-serif;max-width:600px">
-      <h2>Nouveau message de contact — TKVerse</h2>
+      <h2>Nouveau message de contact — Nanovia OS</h2>
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="padding:8px;font-weight:bold">Nom</td><td style="padding:8px">{body.name}</td></tr>
         <tr><td style="padding:8px;font-weight:bold">Email</td><td style="padding:8px">{body.email}</td></tr>
@@ -96,7 +98,7 @@ async def contact_form(body: ContactRequest, request: Request):
         admin_email = settings.RESEND_FROM_EMAIL
         await send_email(
             to=admin_email,
-            subject=f"[TKVerse Contact] {subject_label} — {body.name}",
+            subject=f"[Nanovia Contact] {subject_label} — {body.name}",
             html=html,
         )
     except Exception as exc:

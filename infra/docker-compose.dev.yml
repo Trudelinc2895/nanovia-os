@@ -1,0 +1,89 @@
+# Nanovia OS — Local development stack
+# Usage:
+#   copy infra\env\.env.dev.example .env.dev
+#   docker compose --env-file .env.dev -f infra/docker-compose.dev.yml up --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - dev_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace/backend
+    restart: unless-stopped
+    env_file:
+      - ../.env.dev
+    environment:
+      PYTHONPATH: /workspace/backend
+      APP_RUNTIME_ENV_FILE: ../.env.dev
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ../:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8010:8010"
+    command: >-
+      sh -lc "pip install --disable-pip-version-check --no-cache-dir -r requirements.txt &&
+      uvicorn api.main:app --host 0.0.0.0 --port 8010 --reload"
+
+  web:
+    image: node:20-alpine
+    working_dir: /workspace/frontend/client
+    restart: unless-stopped
+    env_file:
+      - ../.env.dev
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: ""
+      BACKEND_INTERNAL_URL: http://api:8010
+      API_BASE_URL: http://api:8010
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ../:/workspace
+      - dev_web_node_modules:/workspace/frontend/client/node_modules
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    command: >-
+      sh -lc "npm ci --prefer-offline &&
+      npx next dev -H 0.0.0.0 -p 3000"
+
+volumes:
+  dev_postgres_data:
+  dev_redis_data:
+  dev_web_node_modules:

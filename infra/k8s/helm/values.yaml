@@ -1,0 +1,151 @@
+global:
+  image:
+    registry: ghcr.io/trudelinc2895/kt-monetization-os
+    pullPolicy: IfNotPresent
+  namespace: nanovia
+
+api:
+  enabled: true
+  image:
+    repository: ghcr.io/trudelinc2895/kt-monetization-os/api
+    tag: latest
+  replicas: 3
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  port: 8010
+  env:
+    APP_ENV: "production"
+    API_HOST: "0.0.0.0"
+    API_PORT: "8010"
+    LOG_LEVEL: "INFO"
+  livenessProbe:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    path: /api/v1/health/ready
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  strategy:
+    type: RollingUpdate
+    maxUnavailable: 0
+    maxSurge: 1
+
+web:
+  enabled: true
+  image:
+    repository: ghcr.io/trudelinc2895/kt-monetization-os/web
+    tag: latest
+  replicas: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  port: 3000
+  strategy:
+    type: RollingUpdate
+    maxUnavailable: 0
+    maxSurge: 1
+
+worker:
+  enabled: true
+  image:
+    repository: ghcr.io/trudelinc2895/kt-monetization-os/api
+    tag: latest
+  replicas: 2
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "1Gi"
+    limits:
+      cpu: "4000m"
+      memory: "4Gi"
+  command: ["python", "-m", "api.scraping.worker"]
+
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  storage: 20Gi
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  config:
+    maxmemory: "256mb"
+    maxmemoryPolicy: "allkeys-lru"
+    appendonly: "yes"
+
+ingress:
+  enabled: true
+  class: nginx
+  domain: nanovia.ca
+  apiDomain: api.nanovia.ca
+  tls:
+    enabled: true
+    secretName: nanovia-tls
+    clusterIssuer: letsencrypt-prod
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+autoscaling:
+  enabled: true
+  api:
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 50
+    memoryUtilization: 70
+  web:
+    minReplicas: 2
+    maxReplicas: 6
+    cpuUtilization: 60
+  worker:
+    minReplicas: 1
+    maxReplicas: 8
+    cpuUtilization: 60
+
+podDisruptionBudget:
+  enabled: true
+  api:
+    minAvailable: 1
+
+monitoring:
+  enabled: true
+  serviceMonitor:
+    interval: "30s"
+  prometheusRule:
+    enabled: true
+  grafana:
+    enabled: true
+
+secrets:
+  # Use ExternalSecret or SealedSecret in production
+  create: false
+  name: nanovia-secrets

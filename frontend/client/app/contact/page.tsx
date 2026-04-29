@@ -24,7 +24,7 @@ export default function ContactPage() {
       }
     } catch {
       // Fallback: open mailto if API not available
-      window.location.href = `mailto:admin@tkverse.ca?subject=${encodeURIComponent(form.subject)}&body=${encodeURIComponent(`De: ${form.name} (${form.email})\n\n${form.message}`)}`;
+      window.location.href = `mailto:admin@nanovia.ca?subject=${encodeURIComponent(form.subject)}&body=${encodeURIComponent(`De: ${form.name} (${form.email})\n\n${form.message}`)}`;
       setStatus("idle");
     }
   }
@@ -34,7 +34,7 @@ export default function ContactPage() {
       {/* NAV */}
       <nav className="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="text-xl font-bold text-violet-400">KT Monetization OS</Link>
+          <Link href="/" className="text-xl font-bold text-violet-400">Nanovia OS</Link>
           <div className="flex items-center gap-3 text-sm">
             <Link href="/login" className="text-gray-400 hover:text-white transition px-3 py-2 rounded-lg">
               Connexion
@@ -101,12 +101,12 @@ export default function ContactPage() {
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
               >
                 <option value="">Sélectionne un sujet…</option>
-                <option value="Support technique">Support technique</option>
-                <option value="Question sur la facturation">Question sur la facturation</option>
-                <option value="Partenariat / Collaboration">Partenariat / Collaboration</option>
-                <option value="Demande de démonstration">Demande de démonstration</option>
-                <option value="Bug report">Bug report</option>
-                <option value="Autre">Autre</option>
+                <option value="support">Support technique</option>
+                <option value="billing">Question sur la facturation</option>
+                <option value="partnership">Partenariat / Collaboration</option>
+                <option value="demo">Demande de démonstration</option>
+                <option value="bug">Bug report</option>
+                <option value="other">Autre</option>
               </select>
             </div>
 
@@ -125,7 +125,7 @@ export default function ContactPage() {
             {status === "error" && (
               <p className="text-red-400 text-sm text-center">
                 Erreur lors de l&apos;envoi. Réessaie ou écris-nous directement à{" "}
-                <a href="mailto:admin@tkverse.ca" className="underline">admin@tkverse.ca</a>.
+                <a href="mailto:admin@nanovia.ca" className="underline">admin@nanovia.ca</a>.
               </p>
             )}
 
@@ -142,15 +142,15 @@ export default function ContactPage() {
         {/* Direct contact info */}
         <div className="mt-8 text-center text-gray-500 text-sm">
           <p>Ou directement par email :</p>
-          <a href="mailto:admin@tkverse.ca" className="text-violet-400 hover:text-violet-300">
-            admin@tkverse.ca
+          <a href="mailto:admin@nanovia.ca" className="text-violet-400 hover:text-violet-300">
+            admin@nanovia.ca
           </a>
         </div>
       </div>
 
       {/* FOOTER */}
       <footer className="py-8 border-t border-gray-800 text-center text-gray-500 text-sm">
-        <p>© 2026 Kevin Trudel — KT Monetization OS · <a href="https://tkverse.ca" className="hover:text-white">tkverse.ca</a></p>
+        <p>© 2026 Kevin Trudel — Nanovia OS · <a href="https://nanovia.ca" className="hover:text-white">nanovia.ca</a></p>
       </footer>
     </main>
   );

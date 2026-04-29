@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 
 from api.config import settings
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_module_access, require_usage_budget
 from api.models.ghost_agency import LeadProfile, OutreachCampaign, OutreachMessage
 from api.schemas.ghost_agency import (
     CampaignCreate,
@@ -26,7 +27,7 @@ from api.schemas.ghost_agency import (
     OutreachMessageOut,
 )
 from api.services.ghost_agency_service import generate_outreach_message
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,25 +36,14 @@ router = APIRouter()
 # ─── Generate outreach message ────────────────────────────────────────────────
 
 @router.post("/ghost-agency/generate", response_model=GenerateOutreachResponse, status_code=status.HTTP_201_CREATED)
-async def generate_outreach(body: GenerateOutreachRequest, current_user: CurrentUser, db: DB):
+async def generate_outreach(
+    body: GenerateOutreachRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _module_access: Annotated[CurrentUser, Depends(require_module_access("ghost"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     """Generate a personalized outreach message, save lead profile + message to DB."""
-
-    # Enforce feature gate: Ghost Agency requires pro or higher
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "automation"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Ghost Agency nécessite un plan Pro ou supérieur.",
-        )
-
-    # Enforce usage quota (overage → credit deduction)
-    within_limit, _ = await check_and_charge_usage(current_user, db)
-    if not within_limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
-        )
-
     # Verify campaign belongs to current user
     result = await db.execute(
         select(OutreachCampaign).where(

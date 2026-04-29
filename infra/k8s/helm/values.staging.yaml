@@ -1,0 +1,45 @@
+# Staging overrides — smaller resource footprint
+api:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  env:
+    APP_ENV: "staging"
+    LOG_LEVEL: "DEBUG"
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+
+autoscaling:
+  enabled: false
+
+monitoring:
+  enabled: false
+
+ingress:
+  domain: staging.nanovia.ca
+  apiDomain: api-staging.nanovia.ca
+  tls:
+    secretName: nanovia-staging-tls

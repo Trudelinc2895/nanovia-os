@@ -1,17 +1,28 @@
-# KT Monetization OS — Makefile
+# Nanovia OS — Makefile
 # Usage: make <target>
 # Run from project root on the VPS.
 
-COMPOSE = docker compose -f infra/docker-compose.prod.yml --env-file .env
-APP_DIR  = /opt/kt-monetization-os
+PROJECT_NAME ?= $(or $(COMPOSE_PROJECT),nanovia-os)
+COMPOSE_FILES ?= -f infra/docker-compose.prod.yml
+ENV_FILE ?= .env
+COMPOSE = docker compose -p $(PROJECT_NAME) $(COMPOSE_FILES) --env-file $(ENV_FILE)
+APP_DIR ?= $(or $(DEPLOY_PATH),/opt/nanovia-os)
+POSTGRES_DB ?= ktmonetization
+POSTGRES_USER ?= ktadmin
+
+DEV_PROJECT_NAME ?= nanovia-dev
+DEV_ENV_FILE ?= .env.dev
+DEV_COMPOSE_FILES ?= -f infra/docker-compose.dev.yml
+DEV_COMPOSE = docker compose -p $(DEV_PROJECT_NAME) $(DEV_COMPOSE_FILES) --env-file $(DEV_ENV_FILE)
 
 .PHONY: help up down build logs restart migrate admin shell-api \
-        backup update status clean pull test
+        backup update status clean pull test \
+        dev-up dev-down dev-build dev-logs dev-logs-api dev-migrate dev-test
 
 # ── Default ────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  KT Monetization OS — Commands"
+	@echo "  Nanovia OS — Commands"
 	@echo ""
 	@echo "  make up          Start all containers"
 	@echo "  make down        Stop all containers"
@@ -27,6 +38,19 @@ help:
 	@echo "  make backup      Run database backup"
 	@echo "  make test        Run backend tests"
 	@echo "  make clean       Remove stopped containers + old images"
+	@echo ""
+	@echo "  Local dev:"
+	@echo "  make dev-up      Start the Docker dev stack (.env.dev)"
+	@echo "  make dev-down    Stop the Docker dev stack"
+	@echo "  make dev-logs    Live logs from the Docker dev stack"
+	@echo "  make dev-migrate Run Alembic in the Docker dev stack"
+	@echo "  make dev-test    Run backend tests in the Docker dev stack"
+	@echo ""
+	@echo "  Overrides:"
+	@echo "    ENV_FILE=.env.staging"
+	@echo "    COMPOSE_FILES='-f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml'"
+	@echo "    PROJECT_NAME=nanovia-staging"
+	@echo "    DEV_ENV_FILE=.env.dev"
 	@echo ""
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -70,7 +94,7 @@ shell-api:
 	$(COMPOSE) exec api bash
 
 shell-db:
-	$(COMPOSE) exec postgres psql -U kt_user -d kt_monetization
+	$(COMPOSE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
 
 # ── Monitoring ────────────────────────────────────────────────────────────────
 status:
@@ -96,6 +120,31 @@ backup:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test:
 	$(COMPOSE) exec -T api python -m pytest tests/ -q --tb=short
+
+# ── Local dev stack ─────────────────────────────────────────────────────────────
+dev-up:
+	$(DEV_COMPOSE) up -d --build
+
+dev-down:
+	$(DEV_COMPOSE) down
+
+dev-build:
+	$(DEV_COMPOSE) build --no-cache
+
+dev-logs:
+	$(DEV_COMPOSE) logs -f --tail=100
+
+dev-logs-api:
+	$(DEV_COMPOSE) logs -f --tail=100 api
+
+dev-migrate:
+	@echo "Running Alembic migrations in dev stack..."
+	$(DEV_COMPOSE) up -d postgres redis
+	$(DEV_COMPOSE) run --rm api alembic upgrade head
+	@echo "Done."
+
+dev-test:
+	$(DEV_COMPOSE) exec -T api python -m pytest tests/ -q --tb=short
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 clean:

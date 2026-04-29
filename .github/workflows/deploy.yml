@@ -1,32 +1,54 @@
-name: Deploy to Production
+name: Deploy — OVH staging/production
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:  # allow manual trigger from GitHub UI
+    branches: [staging, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 concurrency:
-  group: production-deploy
-  cancel-in-progress: true
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+    env:
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.environment == 'production' && 'main' || 'staging') || github.ref_name }}
+      REPO_URL: https://github.com/${{ github.repository }}.git
+      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+      PUBLIC_IP: ${{ vars.PUBLIC_IP }}
+      STAGING_BIND_ADDRESS: ${{ vars.STAGING_BIND_ADDRESS }}
+      STAGING_WEB_PORT: ${{ vars.STAGING_WEB_PORT }}
+      STAGING_ADMIN_PORT: ${{ vars.STAGING_ADMIN_PORT }}
+      STAGING_API_PORT: ${{ vars.STAGING_API_PORT }}
+      STAGING_AI_PORT: ${{ vars.STAGING_AI_PORT }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check deploy secrets
         id: secrets-check
         run: |
-          if [ -n "$VPS_HOST" ] && [ -n "$VPS_KEY" ]; then
-            echo "configured=true" >> $GITHUB_OUTPUT
+          if [ -n "$VPS_HOST" ] && [ -n "$VPS_KEY" ] && [ -n "$DEPLOY_PATH" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "configured=false" >> $GITHUB_OUTPUT
-            echo "::warning::Deploy ignoré — Ajouter VPS_HOST + VPS_SSH_PRIVATE_KEY dans Repo Settings → Secrets → Actions"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Deploy ignoré — configurer VPS_HOST, VPS_SSH_PRIVATE_KEY et DEPLOY_PATH pour l'environnement GitHub ciblé"
           fi
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
 
       - name: Setup SSH agent
         if: steps.secrets-check.outputs.configured == 'true'
@@ -42,138 +64,233 @@ jobs:
         if: steps.secrets-check.outputs.configured == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           ssh -o BatchMode=yes \
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=60 \
               -o ServerAliveInterval=15 \
               -o ServerAliveCountMax=4 \
-              "deploy@${VPS_HOST}" 'timeout 900 bash -seuo pipefail' <<'ENDSSH'
-            cd /opt/kt-monetization-os
+              "deploy@${VPS_HOST}" \
+              "TARGET_ENV='${TARGET_ENV}' TARGET_REF='${TARGET_REF}' DEPLOY_PATH='${DEPLOY_PATH}' REPO_URL='${REPO_URL}' APP_DOMAIN='${APP_DOMAIN}' PUBLIC_IP='${PUBLIC_IP}' STAGING_BIND_ADDRESS='${STAGING_BIND_ADDRESS}' STAGING_WEB_PORT='${STAGING_WEB_PORT}' STAGING_ADMIN_PORT='${STAGING_ADMIN_PORT}' STAGING_API_PORT='${STAGING_API_PORT}' STAGING_AI_PORT='${STAGING_AI_PORT}' timeout 900 bash -seuo pipefail" <<'ENDSSH'
+            mkdir -p "${DEPLOY_PATH}"
+            if [ ! -d "${DEPLOY_PATH}/.git" ]; then
+              git clone "${REPO_URL}" "${DEPLOY_PATH}"
+            fi
+
+            cd "${DEPLOY_PATH}"
+
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "❌ Deploy checkout is dirty; refusing to deploy over local changes"
+              git status --short
+              exit 1
+            fi
 
             upsert_env() {
-              key="$1"
-              value="$2"
-              if grep -q "^${key}=" .env 2>/dev/null; then
-                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              file="$1"
+              key="$2"
+              value="$3"
+              if grep -q "^${key}=" "$file" 2>/dev/null; then
+                sed -i "s|^${key}=.*|${key}=${value}|" "$file"
               else
-                printf '%s=%s\n' "$key" "$value" >> .env
+                printf '%s=%s\n' "$key" "$value" >> "$file"
               fi
             }
 
-            # Pull latest code
-            git fetch --prune
-            git reset --hard origin/main
+            compose() {
+              docker compose -p "${COMPOSE_PROJECT}" "${COMPOSE_FILES[@]}" --env-file "${ENV_FILE}" "$@"
+            }
 
-            # Normalize non-secret runtime and routing values on the VPS.
-            upsert_env APP_ENV production
-            upsert_env APP_NAME "Nanovia OS"
-            upsert_env DOMAIN nanovia.ca
-            upsert_env PUBLIC_IP 167.114.155.166
-            upsert_env API_BASE_URL https://nanovia.ca
-            upsert_env NEXT_PUBLIC_API_URL ""
-            upsert_env PUBLIC_WEB_URL https://nanovia.ca
-            upsert_env PRIVATE_ADMIN_URL https://admin.nanovia.ca
-            upsert_env ALLOWED_ORIGINS_RAW "https://nanovia.ca,https://www.nanovia.ca,https://admin.nanovia.ca"
+            git fetch --prune origin
+            if git show-ref --verify --quiet "refs/heads/${TARGET_REF}"; then
+              git checkout "${TARGET_REF}"
+            else
+              git checkout -b "${TARGET_REF}" "origin/${TARGET_REF}"
+            fi
+            git pull --ff-only origin "${TARGET_REF}"
+
+            if [ "${TARGET_ENV}" = "production" ]; then
+              ENV_FILE=".env"
+              if [ -f ".env.production" ]; then
+                ENV_FILE=".env.production"
+              fi
+              COMPOSE_PROJECT="nanovia-prod"
+              COMPOSE_FILES=(-f infra/docker-compose.prod.yml)
+            else
+              ENV_FILE=".env.staging"
+              [ -f "${ENV_FILE}" ] || {
+                echo "❌ Missing ${ENV_FILE}. Copy infra/env/.env.staging.example on the VPS before deploying staging."
+                exit 1
+              }
+              COMPOSE_PROJECT="nanovia-staging"
+              COMPOSE_FILES=(-f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml)
+            fi
+
+            [ -f "${ENV_FILE}" ] || {
+              echo "❌ Missing ${ENV_FILE}"
+              exit 1
+            }
+
+            DOMAIN_VALUE="${APP_DOMAIN}"
+            if [ -z "${DOMAIN_VALUE}" ] && [ "${TARGET_ENV}" = "production" ]; then
+              DOMAIN_VALUE="nanovia.ca"
+            fi
+            PUBLIC_IP_VALUE="${PUBLIC_IP:-}"
+
+            if [ "${TARGET_ENV}" = "production" ]; then
+              upsert_env "${ENV_FILE}" APP_ENV production
+              upsert_env "${ENV_FILE}" APP_NAME "Nanovia OS"
+              upsert_env "${ENV_FILE}" APP_RUNTIME_ENV_FILE "../${ENV_FILE}"
+              if [ -n "${PUBLIC_IP_VALUE}" ]; then
+                upsert_env "${ENV_FILE}" PUBLIC_IP "${PUBLIC_IP_VALUE}"
+              fi
+              if [ -n "${DOMAIN_VALUE}" ]; then
+                upsert_env "${ENV_FILE}" DOMAIN "${DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" API_BASE_URL "https://${DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" NEXT_PUBLIC_API_URL ""
+                upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "https://${DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "https://admin.${DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "https://${DOMAIN_VALUE},https://www.${DOMAIN_VALUE},https://admin.${DOMAIN_VALUE}"
+              fi
+            else
+              STAGING_BIND_ADDRESS="${STAGING_BIND_ADDRESS:-127.0.0.1}"
+              STAGING_WEB_PORT="${STAGING_WEB_PORT:-13000}"
+              STAGING_ADMIN_PORT="${STAGING_ADMIN_PORT:-13020}"
+              STAGING_API_PORT="${STAGING_API_PORT:-18010}"
+              STAGING_AI_PORT="${STAGING_AI_PORT:-18020}"
+
+              upsert_env "${ENV_FILE}" APP_ENV staging
+              upsert_env "${ENV_FILE}" APP_NAME "Nanovia OS (staging)"
+              upsert_env "${ENV_FILE}" APP_RUNTIME_ENV_FILE "../${ENV_FILE}"
+              upsert_env "${ENV_FILE}" DOMAIN "${DOMAIN_VALUE:-staging.nanovia.local}"
+              if [ -n "${PUBLIC_IP_VALUE}" ]; then
+                upsert_env "${ENV_FILE}" PUBLIC_IP "${PUBLIC_IP_VALUE}"
+              fi
+              upsert_env "${ENV_FILE}" STAGING_BIND_ADDRESS "${STAGING_BIND_ADDRESS}"
+              upsert_env "${ENV_FILE}" STAGING_WEB_PORT "${STAGING_WEB_PORT}"
+              upsert_env "${ENV_FILE}" STAGING_ADMIN_PORT "${STAGING_ADMIN_PORT}"
+              upsert_env "${ENV_FILE}" STAGING_API_PORT "${STAGING_API_PORT}"
+              upsert_env "${ENV_FILE}" STAGING_AI_PORT "${STAGING_AI_PORT}"
+              upsert_env "${ENV_FILE}" NEXT_PUBLIC_API_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}"
+              upsert_env "${ENV_FILE}" API_BASE_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}"
+              upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}"
+              upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
+              upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT},http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
+            fi
+
+            STRIPE_SECRET=$(grep '^STRIPE_SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2- || true)
+            if [ "${TARGET_ENV}" = "production" ] && ! printf '%s' "${STRIPE_SECRET}" | grep -q '^sk_live_'; then
+              echo "❌ Production deploy requires STRIPE_SECRET_KEY=sk_live_... in ${ENV_FILE}"
+              exit 1
+            fi
+            if [ "${TARGET_ENV}" = "staging" ] && printf '%s' "${STRIPE_SECRET}" | grep -q '^sk_live_'; then
+              echo "❌ Staging deploy refuses live Stripe keys in ${ENV_FILE}"
+              exit 1
+            fi
+
+            python3 scripts/validate_runtime_env.py --env-file "${ENV_FILE}" --target-env "${TARGET_ENV}"
 
             EDGE_MODE=domain
-            if ! getent ahosts nanovia.ca >/dev/null 2>&1; then
-              EDGE_MODE=ip
-              upsert_env CADDYFILE ./docker/Caddyfile.ip
-            else
-              upsert_env CADDYFILE ./docker/Caddyfile
-            fi
-
-            # Capture current image digests for rollback
-            PREV_API=$(docker inspect --format='{{.Id}}' infra-api-1 2>/dev/null || echo "none")
-
-            # Ensure stateful dependencies are available before running migrations
-            docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              up -d postgres redis
-
-            # Build updated app services without starting them yet
-            docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              build api ai-orchestrator web
-
-            # Run migrations before starting the API
-            docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              run --rm -T api python scripts/ensure_alembic_state.py </dev/null
-            docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              run --rm -T api alembic upgrade head </dev/null
-
-            PUBLIC_DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2- || true)
-            PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-nanovia.ca}
-
-            probe_caddy_from_api() {
-              local path="$1"
-              docker compose -f infra/docker-compose.prod.yml --env-file .env \
-                exec -T api python -c "import sys, urllib.request; resp = urllib.request.urlopen('http://caddy${path}', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
-            }
-
-            # Start updated edge + app services after schema is ready
-            docker compose -f infra/docker-compose.prod.yml --env-file .env \
-              up -d --force-recreate --no-deps caddy api ai-orchestrator web
-
-            API_CONTAINER=$(docker compose -f infra/docker-compose.prod.yml --env-file .env ps -q api)
-
-            # Wait for the API container health before probing through the edge.
-            for i in $(seq 1 24); do
-              API_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "$API_CONTAINER" 2>/dev/null || echo "unknown")
-              [ "$API_HEALTH" = "healthy" ] && break
-
-              if [ "$i" -eq 24 ]; then
-                echo "❌ API container did not become healthy"
-                docker compose -f infra/docker-compose.prod.yml --env-file .env ps
-                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api
-                exit 1
-              fi
-
-              sleep 5
-            done
-
-            # Wait for the real public host routing once the API is healthy.
-            for i in $(seq 1 12); do
-              if [ "$EDGE_MODE" = "ip" ]; then
-                probe_caddy_from_api /api/v1/health/ready && break
+            if [ "${TARGET_ENV}" = "production" ]; then
+              if [ -z "${DOMAIN_VALUE}" ] || ! getent ahosts "${DOMAIN_VALUE}" >/dev/null 2>&1; then
+                EDGE_MODE=ip
+                upsert_env "${ENV_FILE}" CADDYFILE ./docker/Caddyfile.ip
               else
-                curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/ready && break
+                upsert_env "${ENV_FILE}" CADDYFILE ./docker/Caddyfile
               fi
+            fi
 
-              if [ "$i" -eq 12 ]; then
-                echo "❌ Edge healthcheck failed after API became healthy for ${PUBLIC_DOMAIN} (mode=${EDGE_MODE})"
-                docker compose -f infra/docker-compose.prod.yml --env-file .env ps
-                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 caddy api web
+            PREV_API=$(docker inspect --format='{{.Id}}' "${COMPOSE_PROJECT}-api-1" 2>/dev/null || echo "none")
+
+            compose up -d postgres redis
+            compose build api ai-orchestrator web admin
+            compose run --rm -T api python scripts/ensure_alembic_state.py </dev/null
+            compose run --rm -T api alembic upgrade head </dev/null
+
+            if [ "${TARGET_ENV}" = "production" ]; then
+              compose up -d --force-recreate --no-deps caddy api ai-orchestrator web admin
+            else
+              compose up -d --force-recreate --no-deps --scale caddy=0 api ai-orchestrator web admin
+            fi
+
+            API_CONTAINER=$(compose ps -q api)
+
+            for i in $(seq 1 24); do
+              API_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "${API_CONTAINER}" 2>/dev/null || echo "unknown")
+              [ "${API_HEALTH}" = "healthy" ] && break
+
+              if [ "${i}" -eq 24 ]; then
+                echo "❌ API container did not become healthy"
+                compose ps
+                compose logs --tail=200 api
                 exit 1
               fi
 
               sleep 5
             done
 
-            if [ "$EDGE_MODE" = "ip" ]; then
-              probe_caddy_from_api /api/v1/health/public-entrypoint >/dev/null || {
-                echo "❌ public-entrypoint smoke test failed for raw IP mode"
-                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
-                exit 1
-              }
-            else
-              curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/public-entrypoint >/dev/null || {
-                echo "❌ public-entrypoint smoke test failed for ${PUBLIC_DOMAIN}"
-                docker compose -f infra/docker-compose.prod.yml --env-file .env logs --tail=200 api caddy
-                exit 1
-              }
-            }
+            if [ "${TARGET_ENV}" = "production" ]; then
+              PUBLIC_DOMAIN=$(grep '^DOMAIN=' "${ENV_FILE}" | cut -d= -f2- || true)
+              PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-nanovia.ca}
 
-            printf 'EDGE_MODE=%s\n' "${EDGE_MODE}" >&2
-            printf 'PUBLIC_DOMAIN=%s\n' "${PUBLIC_DOMAIN}" >&2
-            if [ "$EDGE_MODE" = "ip" ]; then
-              printf 'localhost title: skipped (ip mode host-port probe unreliable on current VPS)\n' >&2
-              printf 'domain title: skipped (ip mode)\n' >&2
+              probe_caddy_from_api() {
+                local path="$1"
+                compose exec -T api python -c "import sys, urllib.request; resp = urllib.request.urlopen('http://caddy${path}', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
+              }
+
+              for i in $(seq 1 12); do
+                if [ "${EDGE_MODE}" = "ip" ]; then
+                  probe_caddy_from_api /api/v1/health/ready && break
+                else
+                  curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/ready && break
+                fi
+
+                if [ "${i}" -eq 12 ]; then
+                  echo "❌ Edge healthcheck failed after API became healthy for ${PUBLIC_DOMAIN} (mode=${EDGE_MODE})"
+                  compose ps
+                  compose logs --tail=200 caddy api web admin
+                  exit 1
+                fi
+
+                sleep 5
+              done
+
+              if [ "${EDGE_MODE}" = "ip" ]; then
+                probe_caddy_from_api /api/v1/health/public-entrypoint >/dev/null || {
+                  echo "❌ public-entrypoint smoke test failed for raw IP mode"
+                  compose logs --tail=200 api caddy
+                  exit 1
+                }
+              else
+                curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/public-entrypoint >/dev/null || {
+                  echo "❌ public-entrypoint smoke test failed for ${PUBLIC_DOMAIN}"
+                  compose logs --tail=200 api caddy
+                  exit 1
+                }
+              fi
+
+              printf 'EDGE_MODE=%s\n' "${EDGE_MODE}" >&2
+              printf 'PUBLIC_DOMAIN=%s\n' "${PUBLIC_DOMAIN}" >&2
+              if [ "${EDGE_MODE}" = "ip" ]; then
+                printf 'localhost title: skipped (ip mode host-port probe unreliable on current VPS)\n' >&2
+                printf 'domain title: skipped (ip mode)\n' >&2
+              else
+                printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
+                printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
+              fi
             else
-              printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
-              printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
+              curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}/api/v1/health/ready" >/dev/null || {
+                echo "❌ staging API ready probe failed"
+                compose logs --tail=200 api
+                exit 1
+              }
+              curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}/login" | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/staging title: \1/p' >&2
+              printf 'STAGING_TUNNEL=ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s deploy@%s\n' "${STAGING_WEB_PORT}" "${STAGING_WEB_PORT}" "${STAGING_API_PORT}" "${STAGING_API_PORT}" "${VPS_HOST:-${PUBLIC_IP_VALUE}}" >&2
             fi
-            docker compose -f infra/docker-compose.prod.yml --env-file .env ps >&2
+
+            printf 'PREV_API=%s\n' "${PREV_API}" >&2
+            compose ps >&2
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' >&2
 
-            echo "✅ Deploy $(git rev-parse --short HEAD) successful"
+            echo "✅ ${TARGET_ENV} deploy $(git rev-parse --short HEAD) successful"
           ENDSSH

@@ -1,28 +1,98 @@
 """backend/api/config.py — settings via env"""
 from __future__ import annotations
 
+import ipaddress
+from pathlib import Path
+from typing import Literal
+
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from api.core.secret_manager import resolve_secret_value
+
+
+_PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+RUNTIME_RELOADABLE_FIELDS = (
+    "LOG_LEVEL",
+    "ADMIN_ALLOWED_IPS_RAW",
+    "PRIVATE_ORCHESTRATOR_ENABLED",
+    "NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED",
+    "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+    "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
+    "OLLAMA_CLIENT_BASE_URL",
+    "OLLAMA_ADMIN_BASE_URL",
+    "OLLAMA_DEFAULT_MODEL",
+)
+RUNTIME_NON_RELOADABLE_AREAS = (
+    "DATABASE_*",
+    "REDIS_*",
+    "JWT_*",
+    "STRIPE_*",
+    "POSTGRES_*",
+    "TOTP_*",
+    "RESEND_*",
+    "OPENAI_*",
+    "TELEGRAM_BOT_TOKEN",
+    "SCRAPING_*",
+)
+
+
+def _looks_placeholder(value: str) -> bool:
+    upper = value.strip().upper()
+    return not upper or any(token in upper for token in _PLACEHOLDER_TOKENS)
+
 
 class Settings(BaseSettings):
-    APP_ENV: str = "development"
+    APP_ENV: Literal["development", "staging", "production", "test"] = "development"
     APP_NAME: str = "Nanovia OS"
     APP_VERSION: str = "1.0.0"
     DOMAIN: str = "nanovia.ca"
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    APP_RUNTIME_ENV_FILE: str = "../.env"
+    ACME_EMAIL: str = "admin@nanovia.ca"
+    PUBLIC_IP: str = ""
 
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8010
+    ADMIN_PORT: int = 3020
+    WEB_PORT: int = 3000
+    AI_ORCHESTRATOR_PORT: int = 8020
     API_BASE_URL: str = "http://127.0.0.1:8010"
     PUBLIC_WEB_URL: str = "http://127.0.0.1:3000"
     PRIVATE_ADMIN_URL: str = "http://127.0.0.1:3020"
+    PRIVATE_ORCHESTRATOR_ENABLED: bool = False
+    NEXT_PUBLIC_PRIVATE_ORCHESTRATOR_ENABLED: bool = False
+    PRIVATE_ORCHESTRATOR_UPSTREAM_URL: str = "http://ai-orchestrator:8020"
+    PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW: str = Field(
+        default="operator,ghost_agency,decision_engine",
+        validation_alias=AliasChoices(
+            "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
+            "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS",
+        ),
+    )
+    ADMIN_ALLOWED_IPS_RAW: str = Field(
+        default="",
+        validation_alias=AliasChoices("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
+    )
 
     DATABASE_URL: str
+    POSTGRES_DB: str = ""
+    POSTGRES_USER: str = ""
+    POSTGRES_PASSWORD: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PASSWORD: str = ""
+    SECRET_PROVIDER: Literal["env", "auto", "vault"] = "auto"
     VAULT_ADDR: str = "http://127.0.0.1:8200"
+    VAULT_TOKEN: str = ""
+    VAULT_REQUEST_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
+    JWT_SECRET_KEY_REF: str = ""
+    POSTGRES_PASSWORD_REF: str = ""
+    REDIS_PASSWORD_REF: str = ""
 
-    JWT_SECRET_KEY: str = Field(validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET"))
+    JWT_SECRET_KEY: str = Field(
+        validation_alias=AliasChoices("JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY")
+    )
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 30
@@ -33,6 +103,8 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
     )
+    STRIPE_SECRET_KEY_REF: str = ""
+    STRIPE_WEBHOOK_SECRET_REF: str = ""
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_PRO_MONTHLY_ID: str = ""
@@ -60,19 +132,101 @@ class Settings(BaseSettings):
     # Security — TOTP encryption key (Fernet, 32-byte URL-safe base64)
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # If empty, TOTP secrets are stored as plain base32 (dev-only acceptable)
+    TOTP_ENCRYPTION_KEY_REF: str = ""
     TOTP_ENCRYPTION_KEY: str = ""
 
     # Resend email
+    RESEND_API_KEY_REF: str = ""
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    TELEGRAM_BOT_TOKEN_REF: str = ""
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
 
+    OPENAI_API_KEY_REF: str = ""
     OPENAI_API_KEY: str = ""
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_ADMIN_BASE_URL: str = "http://127.0.0.1:11435"
     OLLAMA_DEFAULT_MODEL: str = "llama3"
 
     ALLOWED_ORIGINS_RAW: str = "http://localhost:3000,http://localhost:3020"
+    GRAFANA_ADMIN_PASSWORD: str = ""
+    RATE_LIMIT_PER_MINUTE: int = Field(default=100, ge=1)
+
+    # Scraping (secure proxy layer)
+    SCRAPING_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_ENABLED", "ENABLE_SCRAPE_PROXY"),
+    )
+    SCRAPING_ALLOWLIST_RAW: str = ""
+    SCRAPING_STRICT_ALLOWLIST: bool = True
+    SCRAPING_REQUIRE_AUTH: bool = False
+    SCRAPING_MODE_DEFAULT: Literal["sync", "async"] = "sync"
+    SCRAPING_CACHE_TTL_SECONDS: int = Field(
+        default=900,
+        ge=1,
+        validation_alias=AliasChoices("SCRAPING_CACHE_TTL_SECONDS", "SCRAPE_TTL_SECONDS"),
+    )
+    SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
+    SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
+    SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
+    SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
+        default=60,
+        ge=1,
+        validation_alias=AliasChoices(
+            "SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN",
+            "RATE_LIMIT_MAX_PER_DOMAIN",
+        ),
+    )
+    SCRAPING_RETRY_MAX_ATTEMPTS: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("SCRAPING_RETRY_MAX_ATTEMPTS", "SCRAPE_MAX_RETRIES"),
+    )
+    SCRAPING_RETRY_BACKOFF_BASE_MS: int = Field(default=250, ge=50, le=10_000)
+    SCRAPING_CIRCUIT_FAIL_THRESHOLD: int = Field(default=5, ge=1, le=100)
+    SCRAPING_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=5, le=3600)
+    SCRAPING_PROXY_ROTATION_ENABLED: bool = False
+    SCRAPING_PROXY_LIST_RAW: str = ""
+    SCRAPING_RUN_WORKER_IN_API: bool = False
+    SCRAPING_JITTER_MIN_MS: int = Field(default=25, ge=0, le=2000)
+    SCRAPING_JITTER_MAX_MS: int = Field(default=120, ge=0, le=5000)
+    SCRAPING_BROWSER_POOL_SIZE: int = Field(default=2, ge=1, le=20)
+    SCRAPING_QUEUE_MAX_DEPTH: int = Field(default=1000, ge=1)
+    SCRAPING_DEDUPE_TTL_SECONDS: int = Field(default=300, ge=1)
+    SCRAPING_JOB_TTL_SECONDS: int = Field(default=3600, ge=60)
+    SCRAPING_CLIENT_DAILY_QUOTA: int = Field(default=0, ge=0)
+    SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
+    SCRAPING_USER_AGENT: str = "nanovia-scraper/1.0"
+
+    # Stealth scraping (all off by default — zero behaviour change for existing deployments)
+    SCRAPING_STEALTH_MODE: bool = False
+    SCRAPING_STEALTH_SCROLL_SIMULATE: bool = True
+    SCRAPING_STEALTH_HEADER_ROTATION: bool = True
+    SCRAPING_PROXY_HEALTH_CHECK_INTERVAL_SECONDS: int = 300
+
+    # URL risk scoring
+    SCRAPING_RISK_SCORE_THRESHOLD: float = 0.75
+    SCRAPING_RISK_SCORING_ENABLED: bool = False
+
+    # Governance — per-API-key budgets (0 = disabled)
+    SCRAPING_API_KEY_HOURLY_BUDGET: int = Field(default=0, ge=0)
+    SCRAPING_API_KEY_DAILY_BUDGET: int = Field(default=0, ge=0)
+    SCRAPING_ANOMALY_DETECTION_ENABLED: bool = False
+    SCRAPING_ANOMALY_BASELINE_MULTIPLIER: float = Field(default=3.0, gt=1.0)
+
+    # Observability
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    APP_REGION: str = "local"
+
+    # Slowloris / large-body protection
+    API_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    API_BODY_SIZE_LIMIT_BYTES: int = 1_048_576  # 1 MB
+
+    # Chaos engineering (MUST be disabled in production)
+    CHAOS_ENABLED: bool = False
 
     # ── Computed properties ─────────────────────────────────────────────────────
 
@@ -90,6 +244,22 @@ class Settings(BaseSettings):
         return sorted(origins)
 
     @property
+    def ADMIN_ALLOWED_IPS(self) -> list[str]:
+        return [
+            cidr.strip()
+            for cidr in self.ADMIN_ALLOWED_IPS_RAW.split(",")
+            if cidr and cidr.strip()
+        ]
+
+    @property
+    def PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS(self) -> list[str]:
+        return [
+            slug.strip()
+            for slug in self.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW.split(",")
+            if slug and slug.strip()
+        ]
+
+    @property
     def STRIPE_CHECKOUT_SUCCESS_URL(self) -> str:
         return f"{self.PUBLIC_WEB_URL}/dashboard?checkout=success"
 
@@ -105,7 +275,76 @@ class Settings(BaseSettings):
     def RESEND_FROM(self) -> str:
         return f"{self.RESEND_FROM_NAME} <{self.RESEND_FROM_EMAIL}>"
 
+    @property
+    def SCRAPING_ALLOWLIST(self) -> list[str]:
+        return sorted({
+            domain.strip().lower()
+            for domain in self.SCRAPING_ALLOWLIST_RAW.split(",")
+            if domain and domain.strip()
+        })
+
+    @property
+    def SCRAPING_PROXY_LIST(self) -> list[str]:
+        return [
+            proxy.strip()
+            for proxy in self.SCRAPING_PROXY_LIST_RAW.split(",")
+            if proxy and proxy.strip()
+        ]
+
+    @property
+    def SCRAPING_ALLOWED_CONTENT_TYPES(self) -> list[str]:
+        return [
+            content_type.strip().lower()
+            for content_type in self.SCRAPING_ALLOWED_CONTENT_TYPES_RAW.split(",")
+            if content_type and content_type.strip()
+        ]
+
     # ── Validators ──────────────────────────────────────────────────────────────
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_managed_secrets(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        if "SCRAPING_TIMEOUT_SECONDS" not in data and "SCRAPE_TIMEOUT_MS" in data:
+            timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+            try:
+                data["SCRAPING_TIMEOUT_SECONDS"] = float(timeout_ms) / 1000.0
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SCRAPE_TIMEOUT_MS must be a positive integer") from exc
+
+        provider = str(data.get("SECRET_PROVIDER", "auto") or "auto").strip().lower()
+        vault_addr = str(data.get("VAULT_ADDR", "http://127.0.0.1:8200") or "http://127.0.0.1:8200")
+        vault_token = str(data.get("VAULT_TOKEN", "") or "")
+        timeout_raw = data.get("VAULT_REQUEST_TIMEOUT_SECONDS", 5.0)
+        try:
+            timeout = float(timeout_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("VAULT_REQUEST_TIMEOUT_SECONDS must be a positive number") from exc
+        if timeout <= 0:
+            raise ValueError("VAULT_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+
+        for field_name, ref_name in (
+            ("JWT_SECRET_KEY", "JWT_SECRET_KEY_REF"),
+            ("POSTGRES_PASSWORD", "POSTGRES_PASSWORD_REF"),
+            ("REDIS_PASSWORD", "REDIS_PASSWORD_REF"),
+            ("STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_REF"),
+            ("STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET_REF"),
+            ("TOTP_ENCRYPTION_KEY", "TOTP_ENCRYPTION_KEY_REF"),
+            ("RESEND_API_KEY", "RESEND_API_KEY_REF"),
+            ("OPENAI_API_KEY", "OPENAI_API_KEY_REF"),
+            ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN_REF"),
+        ):
+            data[field_name] = resolve_secret_value(
+                provider=provider,
+                value=str(data.get(field_name, "") or ""),
+                reference=str(data.get(ref_name, "") or ""),
+                vault_addr=vault_addr,
+                vault_token=vault_token,
+                timeout=timeout,
+            )
+        return data
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod
@@ -130,23 +369,92 @@ class Settings(BaseSettings):
     @field_validator("LOG_LEVEL")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
-        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        upper = v.upper()
-        if upper not in valid:
-            raise ValueError(f"LOG_LEVEL must be one of {valid}")
-        return upper
+        return v.upper()
+
+    @field_validator(
+        "API_BASE_URL",
+        "PUBLIC_WEB_URL",
+        "PRIVATE_ADMIN_URL",
+        "PRIVATE_ORCHESTRATOR_UPSTREAM_URL",
+        "OLLAMA_CLIENT_BASE_URL",
+        "OLLAMA_ADMIN_BASE_URL",
+        "VAULT_ADDR",
+    )
+    @classmethod
+    def validate_http_urls(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            return ""
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return value.rstrip("/")
+
+    @field_validator("PUBLIC_IP")
+    @classmethod
+    def validate_public_ip(cls, v: str) -> str:
+        if not v or _looks_placeholder(v):
+            return ""
+        ipaddress.ip_address(v.strip())
+        return v.strip()
+
+    @field_validator("ADMIN_ALLOWED_IPS_RAW")
+    @classmethod
+    def validate_admin_allowed_ips(cls, v: str) -> str:
+        if not v or _looks_placeholder(v):
+            return ""
+        items = [cidr.strip() for cidr in v.split(",") if cidr and cidr.strip()]
+        for cidr in items:
+            ipaddress.ip_network(cidr, strict=False)
+        return ",".join(items)
+
+    @field_validator("TOTP_ENCRYPTION_KEY")
+    @classmethod
+    def validate_totp_encryption_key(cls, v: str) -> str:
+        if not v or _looks_placeholder(v):
+            return ""
+        from cryptography.fernet import Fernet
+
+        try:
+            Fernet(v.encode())
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("TOTP_ENCRYPTION_KEY must be a valid Fernet key") from exc
+        return v
+
+    @model_validator(mode="after")
+    def validate_scraping_limits(self) -> "Settings":
+        if self.SCRAPING_JITTER_MAX_MS < self.SCRAPING_JITTER_MIN_MS:
+            raise ValueError("SCRAPING_JITTER_MAX_MS must be >= SCRAPING_JITTER_MIN_MS")
+        if self.SCRAPING_PROXY_ROTATION_ENABLED and not self.SCRAPING_PROXY_LIST:
+            raise ValueError("SCRAPING_PROXY_ROTATION_ENABLED=true requires SCRAPING_PROXY_LIST_RAW")
+        if self.SCRAPING_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SCRAPING_TIMEOUT_SECONDS must be > 0")
+        return self
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         if self.APP_ENV == "production":
             errors = []
+            if _looks_placeholder(self.JWT_SECRET_KEY):
+                errors.append("JWT_SECRET_KEY cannot use placeholder values in production")
             if not self.STRIPE_SECRET_KEY.startswith("sk_live_"):
                 errors.append("STRIPE_SECRET_KEY must be a live key (sk_live_...) in production")
             if not self.STRIPE_WEBHOOK_SECRET.startswith("whsec_"):
                 errors.append("STRIPE_WEBHOOK_SECRET must start with whsec_")
+            if not self.ADMIN_ALLOWED_IPS:
+                errors.append("ADMIN_ALLOWED_IPS/ADMIN_ALLOWED_IP is required in production")
+            if not self.TOTP_ENCRYPTION_KEY:
+                errors.append("TOTP_ENCRYPTION_KEY is required in production")
+            elif _looks_placeholder(self.TOTP_ENCRYPTION_KEY):
+                errors.append("TOTP_ENCRYPTION_KEY cannot use placeholder values in production")
             origins = self.ALLOWED_ORIGINS
             if "*" in origins:
                 errors.append("Wildcard CORS not allowed in production")
+            if not self.API_BASE_URL.startswith("https://"):
+                errors.append("API_BASE_URL must use https:// in production")
+            if not self.PUBLIC_WEB_URL.startswith("https://"):
+                errors.append("PUBLIC_WEB_URL must use https:// in production")
+            if not self.PRIVATE_ADMIN_URL.startswith("https://"):
+                errors.append("PRIVATE_ADMIN_URL must use https:// in production")
             for o in origins:
                 if "localhost" in o or "127.0.0.1" in o:
                     errors.append(f"Dev origin {o!r} not allowed in production ALLOWED_ORIGINS_RAW")
@@ -154,7 +462,56 @@ class Settings(BaseSettings):
                 raise ValueError("Production config errors:\n" + "\n".join(f"  - {e}" for e in errors))
         return self
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 settings = Settings()
+
+
+def get_runtime_settings_snapshot() -> dict[str, object]:
+    snapshot = {field: getattr(settings, field) for field in RUNTIME_RELOADABLE_FIELDS}
+    snapshot["ADMIN_ALLOWED_IPS"] = settings.ADMIN_ALLOWED_IPS
+    snapshot["PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"] = settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS
+    return snapshot
+
+
+def reload_runtime_settings(*, dry_run: bool = False) -> dict[str, object]:
+    fresh_settings = Settings()
+    changed: dict[str, dict[str, object]] = {}
+
+    for field in RUNTIME_RELOADABLE_FIELDS:
+        current_value = getattr(settings, field)
+        new_value = getattr(fresh_settings, field)
+        if current_value == new_value:
+            continue
+        changed[field] = {"old": current_value, "new": new_value}
+        if not dry_run:
+            setattr(settings, field, new_value)
+
+    if not dry_run and "LOG_LEVEL" in changed:
+        from api.core.logging import setup_logging
+
+        setup_logging(level=settings.LOG_LEVEL)
+
+    applied_snapshot = get_runtime_settings_snapshot() if not dry_run else {
+        **{field: change["new"] for field, change in changed.items()},
+        **{
+            field: getattr(settings, field)
+            for field in RUNTIME_RELOADABLE_FIELDS
+            if field not in changed
+        },
+        "ADMIN_ALLOWED_IPS": fresh_settings.ADMIN_ALLOWED_IPS,
+        "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS": fresh_settings.PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS,
+    }
+
+    return {
+        "dry_run": dry_run,
+        "changed": changed,
+        "applied": applied_snapshot,
+        "reloadable_fields": list(RUNTIME_RELOADABLE_FIELDS),
+        "non_reloadable_areas": list(RUNTIME_NON_RELOADABLE_AREAS),
+    }

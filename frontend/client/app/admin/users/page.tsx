@@ -3,12 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { getAdminUsers, type AdminUserSummary } from "@/lib/api";
-
-const PLAN_BADGE: Record<string, string> = {
-  free: "bg-gray-700 text-gray-300",
-  pro: "bg-purple-700/60 text-purple-200",
-  business: "bg-yellow-600/60 text-yellow-200",
-};
+import { getPlanBadgeClass, getPlanDisplayName, PLAN_SLUGS } from "@/lib/monetization";
 
 export default function AdminUsersPage() {
   const searchParams = useSearchParams();
@@ -63,9 +58,11 @@ export default function AdminUsersPage() {
           className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-purple-600"
         >
           <option value="all">All Plans</option>
-          <option value="free">Free</option>
-          <option value="pro">Pro</option>
-          <option value="business">Business</option>
+          {PLAN_SLUGS.map((plan) => (
+            <option key={plan} value={plan}>
+              {getPlanDisplayName(plan)}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -110,10 +107,10 @@ export default function AdminUsersPage() {
                   <td className="px-4 py-3">
                     <span
                       className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        PLAN_BADGE[u.plan] ?? "bg-gray-700 text-gray-300"
+                        getPlanBadgeClass(u.plan)
                       }`}
                     >
-                      {u.plan}
+                      {getPlanDisplayName(u.plan)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-300">{u.credits}</td>

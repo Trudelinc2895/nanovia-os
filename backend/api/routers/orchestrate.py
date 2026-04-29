@@ -8,22 +8,20 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from api.config import settings
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_feature, require_usage_budget
 from api.models.conversation import Conversation
-from api.services.billing_service import PLANS_CONFIG, get_active_subscription
-from api.services.usage_service import check_and_charge_usage, record_usage
+from api.services import private_orchestrator_service
+from api.services.usage_service import record_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-ORCHESTRATOR_URL = "http://ai-orchestrator:8020"
-
 
 class OrchestrateRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
@@ -41,29 +39,19 @@ class OrchestrateResponse(BaseModel):
 
 
 @router.post("/orchestrate", response_model=OrchestrateResponse)
-async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: DB):
+async def orchestrate(
+    body: OrchestrateRequest,
+    current_user: CurrentUser,
+    db: DB,
+    _feature_access: Annotated[CurrentUser, Depends(require_feature("automation"))],
+    _usage_budget: Annotated[tuple[bool, str], Depends(require_usage_budget())],
+):
     """
     Universal AI entry point.
     - Routes to the right agent based on intent
     - Persists conversation history
     - Enforces plan limits
     """
-    # Enforce plan usage quota (overage → credit deduction)
-    allowed, reason = await check_and_charge_usage(current_user, db)
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Limite mensuelle atteinte. Upgrade ton plan pour continuer.",
-        )
-
-    # Feature gate: orchestrator requires automation feature (pro+)
-    from api.services.billing_service import has_feature
-    if not has_feature(current_user.plan, "automation"):
-        raise HTTPException(
-            status_code=403,
-            detail="L'orchestrateur IA nécessite un plan Pro ou supérieur.",
-        )
-
     # Get or create conversation
     conversation_id = body.conversation_id
     conversation: Conversation | None = None
@@ -88,16 +76,25 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
         db.add(conversation)
         await db.flush()
 
+    conversation_messages = list(conversation.messages or [])
+    route_preview = await private_orchestrator_service.build_route_preview(
+        body.message,
+        conversation_messages=conversation_messages,
+        force_agent=body.force_agent,
+    )
+
     # Call orchestrator
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{ORCHESTRATOR_URL}/route",
+                f"{settings.PRIVATE_ORCHESTRATOR_UPSTREAM_URL}/route",
                 json={
                     "message": body.message,
                     "session_id": str(conversation.id),
                     "user_id": str(current_user.id),
                     "force_agent": body.force_agent,
+                    "route_plan": route_preview,
+                    "memory": route_preview["memory"],
                 },
             )
             resp.raise_for_status()
@@ -116,7 +113,11 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
     messages.append({
         "role": "assistant",
         "content": data["response"],
-        "agent": data["agent_used"],
+        "agent": data.get("agent_used") or route_preview["selected_agent_key"],
+        "route_preview": {
+            "intent": route_preview["intent"],
+            "confidence": route_preview["confidence"],
+        },
         "ts": str(uuid.uuid4()),
     })
     conversation.messages = messages
@@ -130,11 +131,11 @@ async def orchestrate(body: OrchestrateRequest, current_user: CurrentUser, db: D
 
     return OrchestrateResponse(
         response=data["response"],
-        agent_used=data["agent_used"],
-        agent_name=data["agent_name"],
-        confidence=data["confidence"],
+        agent_used=data.get("agent_used") or route_preview["selected_agent_key"],
+        agent_name=data.get("agent_name") or route_preview["selected_agent_name"],
+        confidence=float(data.get("confidence", route_preview["confidence"])),
         conversation_id=str(conversation.id),
-        session_id=data["session_id"],
+        session_id=data.get("session_id", str(conversation.id)),
     )
 
 
@@ -143,7 +144,7 @@ async def list_agents(current_user: CurrentUser):
     """List available agents."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{ORCHESTRATOR_URL}/agents")
+            resp = await client.get(f"{settings.PRIVATE_ORCHESTRATOR_UPSTREAM_URL}/agents")
             return resp.json()
     except Exception:
         return [{"key": "operator", "name": "AI Personal Operator", "description": "Assistant personnel IA"}]

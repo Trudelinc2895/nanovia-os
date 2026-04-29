@@ -9,12 +9,7 @@ import {
   adminOverridePlan,
   type AdminUserDetail,
 } from "@/lib/api";
-
-const PLAN_BADGE: Record<string, string> = {
-  free: "bg-gray-700 text-gray-300",
-  pro: "bg-purple-700/60 text-purple-200",
-  business: "bg-yellow-600/60 text-yellow-200",
-};
+import { getPlanBadgeClass, getPlanDisplayName, PLAN_SLUGS } from "@/lib/monetization";
 
 export default function AdminUserDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -134,10 +129,10 @@ export default function AdminUserDetailPage() {
               value={
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    PLAN_BADGE[user.plan] ?? "bg-gray-700 text-gray-300"
+                    getPlanBadgeClass(user.plan)
                   }`}
                 >
-                  {user.plan}
+                  {getPlanDisplayName(user.plan)}
                 </span>
               }
             />
@@ -247,9 +242,11 @@ export default function AdminUserDetailPage() {
               onChange={(e) => setOverridePlan(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-600"
             >
-              <option value="free">Free</option>
-              <option value="pro">Pro</option>
-              <option value="business">Business</option>
+              {PLAN_SLUGS.map((plan) => (
+                <option key={plan} value={plan}>
+                  {getPlanDisplayName(plan)}
+                </option>
+              ))}
             </select>
             <input
               type="text"

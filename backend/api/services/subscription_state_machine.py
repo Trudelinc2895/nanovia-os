@@ -1,6 +1,6 @@
 """
 backend/api/services/subscription_state_machine.py
-Explicit subscription state machine for TKVerse / KT Monetization OS.
+Explicit subscription state machine for Nanovia OS.
 
 State transitions handled here:
   trialing  ──► active           (trial_will_end warning → handle_trial_will_end)

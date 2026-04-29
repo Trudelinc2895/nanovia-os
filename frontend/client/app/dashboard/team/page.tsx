@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import {
+  getEntitlements,
   getTeamMembers,
   inviteTeamMember,
   removeTeamMember,
+  type Entitlements,
   type TeamMemberItem,
   type TeamMembersResponse,
 } from "@/lib/api";
@@ -26,6 +28,7 @@ export default function TeamPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
 
+  const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [teamData, setTeamData] = useState<TeamMembersResponse | null>(null);
   const [loadingTeam, setLoadingTeam] = useState(true);
   const [teamError, setTeamError] = useState<string | null>(null);
@@ -44,19 +47,30 @@ export default function TeamPage() {
     if (!authLoading && !user) router.push("/login");
   }, [authLoading, user, router]);
 
-  const loadTeam = useCallback(() => {
+  const loadTeam = useCallback(async () => {
+    setLoadingTeam(true);
     setTeamError(null);
-    getTeamMembers()
-      .then(setTeamData)
-      .catch((e: Error) => setTeamError(e.message))
-      .finally(() => setLoadingTeam(false));
+    try {
+      const entitlementsData = await getEntitlements();
+      setEntitlements(entitlementsData);
+
+      if (!entitlementsData.features_enabled.team_seats) {
+        setTeamData(null);
+        return;
+      }
+
+      const data = await getTeamMembers();
+      setTeamData(data);
+    } catch (e) {
+      setTeamError((e as Error).message);
+    } finally {
+      setLoadingTeam(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (user && user.plan === "business") {
-      loadTeam();
-    } else if (user) {
-      setLoadingTeam(false);
+    if (user) {
+      void loadTeam();
     }
   }, [user, loadTeam]);
 
@@ -68,8 +82,10 @@ export default function TeamPage() {
     );
   }
 
-  // Not on business plan
-  if (user.plan !== "business") {
+  const canManageTeam = entitlements?.features_enabled.team_seats ?? false;
+  const effectivePlan = entitlements?.plan ?? user.plan;
+
+  if (!loadingTeam && !canManageTeam) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center px-6">
         <div className="max-w-md w-full text-center bg-gray-900 border border-gray-800 rounded-2xl p-10">
@@ -78,7 +94,8 @@ export default function TeamPage() {
           <p className="text-gray-400 mb-6">
             Team management is available on the{" "}
             <span className="text-yellow-400 font-semibold">Business plan</span>. Upgrade to invite
-            team members and manage access.
+            team members and manage access. Current server-authorized plan:{" "}
+            <span className="font-semibold uppercase">{effectivePlan}</span>.
           </p>
           <Link
             href="/dashboard/billing"
@@ -129,7 +146,7 @@ export default function TeamPage() {
   };
 
   const seatsUsed = teamData?.seats_used ?? 0;
-  const seatsLimit = teamData?.seats_limit ?? 25;
+  const seatsLimit = teamData?.seats_limit ?? entitlements?.limits.team_seats_max ?? 25;
   const members = teamData?.members ?? [];
 
   return (
@@ -139,7 +156,7 @@ export default function TeamPage() {
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/dashboard" className="text-purple-400 font-bold text-xl">
-              ⚡ KT OS
+              ⚡ Nanovia OS
             </Link>
             <span className="text-gray-600">|</span>
             <span className="text-sm text-gray-400">Team</span>

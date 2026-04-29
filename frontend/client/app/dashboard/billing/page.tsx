@@ -17,6 +17,7 @@ import {
   type AddonPublic,
 } from "@/lib/api";
 import { Button, buttonVariants, Badge, Card } from "@/components/ui";
+import { getPlanBadgeVariant } from "@/lib/monetization";
 
 function UsageBar({ count, limit, pct }: { count: number; limit: number; pct: number }) {
   const isUnlimited = limit === -1;
@@ -103,12 +104,6 @@ export default function BillingPage() {
   const isActive = entitlements?.status === "active";
   const upsell = entitlements?.upsell ?? null;
 
-  const planBadge = (plan: string): "info" | "success" | "warning" | "danger" => {
-    if (plan === "business") return "success";
-    if (plan === "pro") return "info";
-    return "warning";
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg-base">
@@ -126,7 +121,7 @@ export default function BillingPage() {
           <span className="text-text-secondary text-sm">Abonnement</span>
         </div>
         <div className="flex items-center gap-4">
-          <Badge variant={planBadge(currentPlan)} size="sm">{currentPlan.toUpperCase()}</Badge>
+          <Badge variant={getPlanBadgeVariant(currentPlan)} size="sm">{currentPlan.toUpperCase()}</Badge>
           <a href="/dashboard" className={buttonVariants("ghost", "sm")}>Tableau de bord</a>
         </div>
       </header>
@@ -159,7 +154,7 @@ export default function BillingPage() {
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Abonnement actuel</h2>
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant={planBadge(currentPlan)}>{currentPlan.toUpperCase()}</Badge>
+                <Badge variant={getPlanBadgeVariant(currentPlan)}>{currentPlan.toUpperCase()}</Badge>
                 {isActive && <Badge variant="success" size="sm">Actif</Badge>}
                 {!isActive && currentPlan !== "free" && <Badge variant="warning" size="sm">Inactif</Badge>}
               </div>

@@ -52,10 +52,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!res.ok) throw new Error("Session invalide");
         const data = await res.json();
         setAccessToken(data.access_token);
-        // Backward compat: persist in localStorage if server returns token (mobile)
-        if (data.refresh_token) {
-          localStorage.setItem("refresh_token", data.refresh_token);
-        }
         const me = await getMe();
         setUser(me);
       } catch {

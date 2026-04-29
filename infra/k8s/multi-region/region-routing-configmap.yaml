@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nanovia-region-routing
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia
+    app.kubernetes.io/component: multi-region
+    app.kubernetes.io/managed-by: kustomize
+data:
+  regions.yaml: |
+    regions:
+      - name: eu-west-1
+        role: primary
+        endpoint: api.nanovia.ca
+        weight: 100
+      - name: us-east-1
+        role: secondary
+        endpoint: api-us.nanovia.ca
+        weight: 0
+    routing:
+      strategy: latency-based
+      dns_ttl: 60
+      health_check_interval: 10s
+    failover:
+      mode: automatic
+      threshold_error_rate: 0.10
+      threshold_latency_p99_ms: 2000
+      cooldown_seconds: 300

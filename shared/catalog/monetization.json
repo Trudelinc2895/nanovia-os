@@ -159,51 +159,111 @@
   },
   "modules": {
     "operator": {
+      "key": "operator",
+      "category": "productivity",
+      "icon": "robot",
+      "enabled": true,
+      "visible_on_mobile": true,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "AI Personal Operator",
       "price_usd": 19,
       "description": "Digital employee managing emails, decisions and tasks 24/7"
     },
     "content": {
+      "key": "content_cloner",
+      "category": "marketing",
+      "icon": "copy",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Content Cloner Engine",
       "price_usd": 15,
       "description": "Clone viral content and republish across all platforms"
     },
     "micro_saas": {
+      "key": "micro_saas",
+      "category": "automation",
+      "icon": "code",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Micro-SaaS Builder",
       "price_usd": 29,
       "description": "Launch a hyper-specific tool in 24h"
     },
     "ghost": {
+      "key": "ghost_agency",
+      "category": "sales",
+      "icon": "ghost",
+      "enabled": false,
+      "visible_on_mobile": true,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Ghost Automation Agency",
       "price_usd": 39,
       "description": "Automate repetitive client tasks - they pay, you deliver"
     },
     "decision": {
+      "key": "decision_engine",
+      "category": "intelligence",
+      "icon": "brain",
+      "enabled": false,
+      "visible_on_mobile": true,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "AI Decision Engine",
       "price_usd": 19,
       "description": "Analyse, structure and recommend - make better decisions faster"
     },
     "knowledge": {
+      "key": "knowledge_weapon",
+      "category": "intelligence",
+      "icon": "book",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Knowledge Weapon System",
       "price_usd": 15,
       "description": "Turn books, videos and courses into immediate action plans"
     },
     "leverage": {
+      "key": "digital_leverage",
+      "category": "automation",
+      "icon": "trending-up",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Digital Leverage Engine",
       "price_usd": 19,
       "description": "Multiply your output without multiplying your hours"
     },
     "reverse": {
+      "key": "reverse_engineering",
+      "category": "intelligence",
+      "icon": "search",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Reverse Engineering Module",
       "price_usd": 25,
       "description": "Decode what works for competitors and replicate it"
     },
     "offer": {
+      "key": "offer_generator",
+      "category": "sales",
+      "icon": "target",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Offer Generator",
       "price_usd": 15,
       "description": "Create irresistible offers in minutes with AI"
     },
     "execution": {
+      "key": "execution_service",
+      "category": "automation",
+      "icon": "zap",
+      "enabled": false,
+      "visible_on_mobile": false,
+      "roles_allowed": ["user", "admin", "vip"],
       "name": "Execution Service",
       "price_usd": 29,
       "description": "Turn every idea into an executable and measurable system"

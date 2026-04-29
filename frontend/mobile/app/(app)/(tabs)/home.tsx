@@ -32,7 +32,7 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>Bonjour, {user?.full_name?.split(" ")[0]} 👋</Text>
-          <Text style={styles.subtitle}>Bienvenue sur KT Monetization OS</Text>
+          <Text style={styles.subtitle}>Bienvenue sur Nanovia OS</Text>
         </View>
         <View style={[styles.planBadge, { backgroundColor: PLAN_COLOR[user?.plan ?? "free"] + "33" }]}>
           <Text style={[styles.planText, { color: PLAN_COLOR[user?.plan ?? "free"] }]}>

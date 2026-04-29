@@ -1,8 +1,9 @@
 """
 backend/api/main.py
-KT Monetization OS — FastAPI production entry point
+Nanovia OS — FastAPI production entry point
 """
 from __future__ import annotations
+import asyncio
 import base64 as _base64
 import json as _json
 import logging
@@ -11,6 +12,10 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from urllib.parse import urlsplit, urlunsplit
+
+if os.name == "nt" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
@@ -18,8 +23,6 @@ import redis.asyncio as _aioredis
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-load_dotenv(".env")
 from sqlalchemy import text
 
 from api.config import settings
@@ -28,7 +31,11 @@ from api.routers import auth, billing, modules, users, health, mobile, orchestra
 from api.routers import micro_saas, decision_engine, knowledge_weapon, digital_leverage, reverse_engineering, offer_generator, execution_service
 from api.routers import notifications
 from api.routers import admin
+from api.routers import admin_orchestrator
 from api.routers import team
+from api.routers import scrape
+from api.scraping.worker import run_worker_forever
+from api.middleware.body_limit import BodySizeLimitMiddleware
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -43,6 +50,35 @@ except ImportError:
 
 
 _startup_logger = logging.getLogger("startup")
+_NON_PROD_ENVS = {"development", "test"}
+
+
+def _redact_connection_url(url: str) -> str:
+    """Remove credentials from connection URLs before logging or surfacing them."""
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return "<invalid-url>"
+
+    if not parsed.scheme or not parsed.netloc:
+        return url
+
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{parsed.port}" if parsed.port else ""
+
+    if parsed.username is None and parsed.password is None:
+        netloc = parsed.netloc
+    else:
+        username = parsed.username or ""
+        if parsed.password is not None:
+            userinfo = f"{username}:***" if username else ":***"
+        else:
+            userinfo = username
+        netloc = f"{userinfo}@{host}{port}" if userinfo else f"{host}{port}"
+
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _validate_billing_startup_config() -> None:
@@ -109,8 +145,9 @@ async def _ensure_expected_schema() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
+    scrape_worker_task: asyncio.Task | None = None
     print(f"[startup] {settings.APP_NAME} v{settings.APP_VERSION} env={settings.APP_ENV}")
-    if settings.APP_ENV == "development":
+    if settings.APP_ENV in _NON_PROD_ENVS:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         print("[startup] DB tables ready (development create_all)")
@@ -124,15 +161,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # ── Redis health check ─────────────────────────────────────────────────────
     import logging as _log
     _redis_logger = _log.getLogger("startup")
+    _safe_redis_url = _redact_connection_url(settings.REDIS_URL)
     try:
         _r = _aioredis.from_url(settings.REDIS_URL, socket_connect_timeout=3)
         await _r.ping()
         await _r.aclose()
-        _redis_logger.info("[startup] Redis ✅ connected at %s", settings.REDIS_URL)
+        _redis_logger.info("[startup] Redis ✅ connected at %s", _safe_redis_url)
     except Exception as _redis_exc:
         if settings.APP_ENV == "production":
             raise RuntimeError(
-                f"FATAL: Redis unavailable in production ({settings.REDIS_URL}). "
+                f"FATAL: Redis unavailable in production ({_safe_redis_url}). "
                 "Set REDIS_URL or provide a reachable Redis instance."
             ) from _redis_exc
         else:
@@ -142,7 +180,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                 _redis_exc,
             )
 
+    if settings.SCRAPING_ENABLED and settings.SCRAPING_RUN_WORKER_IN_API:
+        scrape_worker_task = asyncio.create_task(run_worker_forever())
+        _startup_logger.info("[startup] scrape worker task started in API process")
+
     yield
+
+    if scrape_worker_task is not None:
+        scrape_worker_task.cancel()
+        try:
+            await scrape_worker_task
+        except asyncio.CancelledError:
+            pass
     print("[shutdown] clean exit")
 
 
@@ -162,6 +211,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.API_BODY_SIZE_LIMIT_BYTES)
 
 
 @app.middleware("http")
@@ -205,19 +255,72 @@ def _extract_sub(authorization: str | None) -> str | None:
 
 
 _RATE_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
-_AUTH_RATE_PATHS = {
-    "/api/v1/auth/login",
-    "/api/v1/auth/register",
-    "/api/v1/auth/forgot-password",
-    "/api/v1/auth/reset-password",
+_RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
+    "/api/v1/auth/login": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
+    "/api/v1/auth/register": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
+    "/api/v1/auth/forgot-password": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
+    "/api/v1/auth/reset-password": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
+    "/api/v1/auth/refresh": {"scope": "ip", "limit": 20, "window": 60, "bucket": "refresh"},
+    "/api/v1/auth/resend-verification": {"scope": "ip", "limit": 5, "window": 300, "bucket": "verify"},
+    # Stricter limits for 2FA — prevents TOTP brute force (6-digit = 1M combos)
+    "/api/v1/auth/2fa/verify-login": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 900,
+        "bucket": "2fa",
+        "detail": "Trop de tentatives. Réessaie dans 15 minutes.",
+    },
+    "/api/v1/auth/2fa/enable": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 900,
+        "bucket": "2fa",
+        "detail": "Trop de tentatives. Réessaie dans 15 minutes.",
+    },
+    "/api/v1/auth/2fa/disable": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 900,
+        "bucket": "2fa",
+        "detail": "Trop de tentatives. Réessaie dans 15 minutes.",
+    },
+    "/api/v1/billing/checkout-session": {
+        "scope": "user_or_ip",
+        "limit": 15,
+        "window": 60,
+        "bucket": "billing-checkout",
+    },
+    "/api/v1/billing/module-checkout-session": {
+        "scope": "user_or_ip",
+        "limit": 15,
+        "window": 60,
+        "bucket": "billing-module-checkout",
+    },
+    "/api/v1/billing/portal-session": {
+        "scope": "user_or_ip",
+        "limit": 15,
+        "window": 60,
+        "bucket": "billing-portal",
+    },
+    "/api/v1/billing/credits/purchase": {
+        "scope": "user_or_ip",
+        "limit": 10,
+        "window": 60,
+        "bucket": "billing-credits",
+    },
+    "/api/v1/billing/addon/checkout": {
+        "scope": "user_or_ip",
+        "limit": 10,
+        "window": 60,
+        "bucket": "billing-addon",
+    },
 }
 
-# Stricter limits for 2FA — prevents TOTP brute force (6-digit = 1M combos)
-_STRICT_RATE_PATHS = {
-    "/api/v1/auth/2fa/verify-login",
-    "/api/v1/auth/2fa/enable",
-    "/api/v1/auth/2fa/disable",
-}
+
+def _rate_limit_key(scope: str, bucket: str, ip: str, user_id: str | None) -> str:
+    if scope == "user_or_ip" and user_id:
+        return f"ratelimit:user:{user_id}:{bucket}"
+    return f"ratelimit:ip:{ip}:{bucket}"
 
 
 @app.middleware("http")
@@ -227,45 +330,39 @@ async def rate_limit(request: Request, call_next) -> Response:
         return await call_next(request)
 
     ip = (request.client.host if request.client else "unknown").replace(":", "_")
+    user_id = _extract_sub(request.headers.get("authorization"))
+    rule = _RATE_LIMIT_RULES.get(path)
 
-    if path in _STRICT_RATE_PATHS:
-        # 5 attempts per 15 min per IP — brute force TOTP protection
-        key = f"ratelimit:ip:{ip}:2fa"
-        limit = 5
-        try:
-            redis = await _get_redis()
-            count = await redis.incr(key)
-            if count == 1:
-                await redis.expire(key, 900)  # 15 minutes
-            if count > limit:
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "Trop de tentatives. Réessaie dans 15 minutes."},
-                )
-        except Exception:
-            pass  # Redis unavailable — fail open
-        return await call_next(request)
-    elif path in _AUTH_RATE_PATHS:
-        key = f"ratelimit:ip:{ip}:auth"
-        limit = 10
+    if rule:
+        key = _rate_limit_key(
+            str(rule["scope"]),
+            str(rule["bucket"]),
+            ip,
+            user_id,
+        )
+        limit = int(rule["limit"])
+        window = int(rule["window"])
+        detail = str(rule.get("detail", f"Too many requests. Réessaie dans {window} secondes."))
+    elif path.startswith("/api/v1/admin"):
+        key = _rate_limit_key("user_or_ip", "admin", ip, user_id)
+        limit = 60
+        window = 60
+        detail = "Too many admin requests. Réessaie dans 60 secondes."
     else:
-        user_id = _extract_sub(request.headers.get("authorization"))
-        if user_id:
-            key = f"ratelimit:user:{user_id}"
-            limit = 100
-        else:
-            key = f"ratelimit:ip:{ip}"
-            limit = 30
+        key = _rate_limit_key("user_or_ip", "default", ip, user_id)
+        limit = 100 if user_id else 30
+        window = 60
+        detail = "Too many requests. Réessaie dans 60 secondes."
 
     try:
         redis = await _get_redis()
         count = await redis.incr(key)
         if count == 1:
-            await redis.expire(key, 60)
+            await redis.expire(key, window)
         if count > limit:
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Too many requests. Réessaie dans 60 secondes."},
+                content={"detail": detail},
             )
     except Exception:
         pass  # Redis unavailable — fail open
@@ -301,6 +398,7 @@ app.include_router(ghost_agency.router, prefix="/api/v1", tags=["ghost agency"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+app.include_router(admin_orchestrator.router, prefix="/api/v1/admin", tags=["admin-orchestrator"])
 app.include_router(team.router, prefix="/api/v1", tags=["team"])
 app.include_router(micro_saas.router, prefix="/api/v1", tags=["Micro-SaaS Builder"])
 app.include_router(decision_engine.router, prefix="/api/v1", tags=["Decision Engine"])
@@ -309,5 +407,10 @@ app.include_router(digital_leverage.router, prefix="/api/v1", tags=["Digital Lev
 app.include_router(reverse_engineering.router, prefix="/api/v1", tags=["Reverse Engineering"])
 app.include_router(offer_generator.router, prefix="/api/v1", tags=["Offer Generator"])
 app.include_router(execution_service.router, prefix="/api/v1", tags=["Execution Service"])
+app.include_router(scrape.router, tags=["scraping"])
 from api.routers.contact import router as contact_router
 app.include_router(contact_router, prefix="/api/v1", tags=["contact"])
+
+if settings.CHAOS_ENABLED:
+    from api.routers.chaos import router as chaos_router
+    app.include_router(chaos_router, tags=["chaos"])

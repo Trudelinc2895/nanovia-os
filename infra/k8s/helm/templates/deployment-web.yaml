@@ -1,0 +1,54 @@
+{{- if .Values.web.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nanovia.fullname" . }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nanovia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "nanovia.fullname" . }}-web
+  strategy:
+    type: {{ .Values.web.strategy.type }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.web.strategy.maxUnavailable }}
+      maxSurge: {{ .Values.web.strategy.maxSurge }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "nanovia.fullname" . }}-web
+        {{- include "nanovia.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: web
+          image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.web.port }}
+              name: http
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.web.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.web.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+{{- end }}

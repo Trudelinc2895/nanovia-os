@@ -33,7 +33,7 @@ export function getAccessToken(): string | null {
   return _accessToken;
 }
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   retry = true
@@ -88,10 +88,6 @@ async function refreshAccessToken(): Promise<boolean> {
     if (!res.ok) return false;
     const data = await res.json();
     _accessToken = data.access_token;
-    // Backward compat: if server returns refresh_token in JSON (mobile clients), persist it
-    if (data.refresh_token) {
-      localStorage.setItem("refresh_token", data.refresh_token);
-    }
     return true;
   } catch {
     return false;
@@ -129,10 +125,9 @@ export async function login(email: string, password: string): Promise<LoginRespo
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  // Only persist tokens if 2FA is NOT required
+  // Web keeps the access token in memory only; refresh stays in the httpOnly cookie.
   if (!data.requires_2fa && data.access_token) {
     setAccessToken(data.access_token);
-    localStorage.setItem("refresh_token", data.refresh_token ?? "");
   }
   return data;
 }
@@ -147,7 +142,6 @@ export async function verify2FALogin(
   });
   if (data.access_token) {
     setAccessToken(data.access_token);
-    localStorage.setItem("refresh_token", data.refresh_token ?? "");
   }
   return data;
 }
@@ -187,7 +181,6 @@ export async function register(
     body: JSON.stringify({ email, password, full_name }),
   });
   setAccessToken(data.access_token ?? null);
-  localStorage.setItem("refresh_token", data.refresh_token ?? "");
   return data;
 }
 
@@ -544,6 +537,59 @@ export interface AdminMetrics {
   estimated_mrr_usd: number;
 }
 
+export interface AdminPrivateOrchestratorAccess {
+  admin_only: boolean;
+  feature_flagged: boolean;
+  public_saas_exposure: boolean;
+  destructive_merge_with_my_agent_hub: boolean;
+  requires_private_admin_surface: boolean;
+  production_ip_allowlist_required: boolean;
+}
+
+export interface AdminPrivateOrchestratorCapabilities {
+  agent_catalog_read: boolean;
+  upstream_health_read: boolean;
+  prompt_execution: boolean;
+  terminal_access: boolean;
+  filesystem_access: boolean;
+  browser_access: boolean;
+  billing_mutation: boolean;
+  user_impersonation: boolean;
+}
+
+export interface AdminPrivateOrchestratorUpstream {
+  ok: boolean;
+  status: string;
+  service: string | null;
+  version: string | null;
+  detail: string | null;
+}
+
+export interface AdminPrivateOrchestratorOverview {
+  context_key: string;
+  enabled: boolean;
+  release_stage: string;
+  access: AdminPrivateOrchestratorAccess;
+  capabilities: AdminPrivateOrchestratorCapabilities;
+  allowed_agent_keys: string[];
+  upstream: AdminPrivateOrchestratorUpstream;
+  endpoints: string[];
+  notes: string[];
+}
+
+export interface AdminPrivateOrchestratorAgent {
+  key: string;
+  name: string;
+  description: string;
+  allowed: boolean;
+}
+
+export interface AdminPrivateOrchestratorAgentsResponse {
+  enabled: boolean;
+  source: string;
+  agents: AdminPrivateOrchestratorAgent[];
+}
+
 export async function getAdminUsers(
   page = 1,
   per_page = 50,
@@ -590,6 +636,14 @@ export async function getAdminWebhooks(
 
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>("/api/v1/admin/metrics");
+}
+
+export async function getAdminPrivateOrchestratorOverview(): Promise<AdminPrivateOrchestratorOverview> {
+  return apiFetch<AdminPrivateOrchestratorOverview>("/api/v1/admin/orchestrator/overview");
+}
+
+export async function getAdminPrivateOrchestratorAgents(): Promise<AdminPrivateOrchestratorAgentsResponse> {
+  return apiFetch<AdminPrivateOrchestratorAgentsResponse>("/api/v1/admin/orchestrator/agents");
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────

@@ -20,9 +20,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.models.user_module import UserModule
 from api.models.user import User
+from api.services.module_registry import canonicalize_module_slug, get_module_lookup_slugs
 
 
 # ─── Plan helpers ─────────────────────────────────────────────────────────────
@@ -51,14 +54,22 @@ async def get_entitlements(user: User, db: AsyncSession) -> dict[str, Any]:
         compute_entitlements,
         get_active_subscription,
     )
+    from api.services.credit_service import get_authoritative_credit_balance
     from api.services.usage_service import get_monthly_usage
 
     sub = await get_active_subscription(user.id, db)
     usage = await get_monthly_usage(user.id, db)
 
     entitlements = compute_entitlements(user, sub, usage)
+    entitlements["credits"] = await get_authoritative_credit_balance(user.id, db)
     entitlements["usage"] = usage
     return entitlements
+
+
+async def get_effective_plan(user: User, db: AsyncSession) -> str:
+    """Return the effective plan after subscription-state degradation is applied."""
+    entitlements = await get_entitlements(user, db)
+    return str(entitlements["plan"])
 
 
 def can_use_feature(user: User, feature: str) -> bool:
@@ -71,6 +82,42 @@ def can_use_feature(user: User, feature: str) -> bool:
     from api.services.billing_service import has_feature
     plan = get_active_plan(user)
     return has_feature(plan, feature)
+
+
+async def can_access_feature(user: User, feature: str, db: AsyncSession) -> bool:
+    """Return True when the effective entitlements enable the feature."""
+    entitlements = await get_entitlements(user, db)
+    return bool(entitlements["features_enabled"].get(feature, False))
+
+
+async def has_module_access(user: User, module_slug: str, db: AsyncSession) -> bool:
+    """
+    Return True if the user can access a module via plan inclusion or active
+    à-la-carte purchase.
+    """
+    from api.services.billing_service import MODULES_CONFIG
+
+    canonical_slug = canonicalize_module_slug(module_slug)
+    if not canonical_slug:
+        return False
+
+    module_cfg = MODULES_CONFIG.get(canonical_slug)
+    if not module_cfg:
+        return False
+
+    effective_plan = await get_effective_plan(user, db)
+    if effective_plan in module_cfg.get("included_in_plans", []):
+        return True
+
+    lookup_slugs = get_module_lookup_slugs(canonical_slug)
+    result = await db.execute(
+        select(UserModule).where(
+            UserModule.user_id == user.id,
+            UserModule.module_slug.in_(lookup_slugs),
+        )
+    )
+    module_access = result.scalar_one_or_none()
+    return bool(module_access and module_access.is_active())
 
 
 async def get_remaining_quota(
@@ -159,6 +206,7 @@ async def get_usage_snapshot(user: User, db: AsyncSession) -> dict[str, Any]:
         compute_entitlements,
         get_active_subscription,
     )
+    from api.services.credit_service import get_authoritative_credit_balance
     from api.services.usage_service import get_monthly_usage, get_module_breakdown
 
     # Parallel-friendly: run sub + usage queries together
@@ -167,12 +215,13 @@ async def get_usage_snapshot(user: User, db: AsyncSession) -> dict[str, Any]:
     breakdown = await get_module_breakdown(user.id, db, days=30)
 
     entitlements = compute_entitlements(user, sub, usage_month)
+    authoritative_credits = await get_authoritative_credit_balance(user.id, db)
     quota_ai = await get_remaining_quota(user, db, "ai_messages_per_month")
 
     return {
         "plan": entitlements["plan"],
         "status": entitlements["status"],
-        "credits": entitlements["credits"],
+        "credits": authoritative_credits,
         "quota": {
             "ai_messages": quota_ai,
         },

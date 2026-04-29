@@ -18,7 +18,6 @@ SECURITY:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Annotated
 
@@ -28,6 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
 from api.core.deps import CurrentUser, DB
+from api.core.monetization import (
+    getEntitlements as monetization_get_entitlements,
+    getUsageSnapshot as monetization_get_usage_snapshot,
+)
+from api.core.monetization.webhook_handler_service import handle_stripe_webhook
+from api.core.monetization.pricing_config_service import get_pricing_catalog
 from api.schemas.billing import (
     AddonCheckoutRequest,
     AddonCheckoutResponse,
@@ -51,13 +56,10 @@ from api.services.billing_service import (
     get_active_subscription,
     get_or_create_stripe_customer,
     get_upsell_suggestion,
-    handle_checkout_completed,
     has_feature,
-    claim_webhook_event,
-    update_webhook_status,
-    sync_subscription_from_stripe,
 )
-from api.services.email_service import send_billing_confirmation, send_payment_failed
+from api.services.entitlements_service import get_effective_plan
+from api.services.module_registry import canonicalize_module_slug
 from api.services.usage_service import get_monthly_usage
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,7 @@ except Exception:
 @router.get("/plans", response_model=list[PlanPublic])
 async def list_plans() -> list[PlanPublic]:
     """Return all available plans with pricing, limits, and feature gates."""
+    catalog = get_pricing_catalog()
     return [
         PlanPublic(
             slug=slug,
@@ -108,13 +111,14 @@ async def list_plans() -> list[PlanPublic]:
             features_enabled=cfg["features_enabled"],
             included_modules=cfg["included_modules"],
         )
-        for slug, cfg in PLANS_CONFIG.items()
+        for slug, cfg in catalog["plans"].items()
     ]
 
 
 @router.get("/modules", response_model=list[ModulePublic])
 async def list_modules() -> list[ModulePublic]:
     """Return all available à-la-carte modules with pricing."""
+    catalog = get_pricing_catalog()
     return [
         ModulePublic(
             slug=cfg["slug"],
@@ -124,7 +128,7 @@ async def list_modules() -> list[ModulePublic]:
             available=bool(cfg.get("stripe_price_id")),
             included_in_plans=cfg["included_in_plans"],
         )
-        for cfg in MODULES_CONFIG.values()
+        for cfg in catalog["modules"].values()
     ]
 
 
@@ -148,9 +152,10 @@ async def get_my_modules(current_user: CurrentUser, db: DB):
     )
     purchased_slugs = {row.module_slug for row in result.scalars().all()}
 
+    effective_plan = await get_effective_plan(current_user, db)
     plan_modules = {
         slug for slug, cfg in MODULES_CONFIG.items()
-        if current_user.plan in cfg.get("included_in_plans", [])
+        if effective_plan in cfg.get("included_in_plans", [])
     }
 
     modules_status = []
@@ -176,7 +181,7 @@ async def get_my_modules(current_user: CurrentUser, db: DB):
         })
 
     return {
-        "plan": current_user.plan,
+        "plan": effective_plan,
         "modules": modules_status,
     }
 
@@ -213,9 +218,7 @@ async def get_entitlements(current_user: CurrentUser, db: DB):
     Computed server-side from DB state — never trust client plan claims.
     Includes credits, feature gates, usage, and contextual upsell.
     """
-    sub = await get_active_subscription(current_user.id, db)
-    usage = await get_monthly_usage(current_user.id, db)
-    return compute_entitlements(current_user, sub, usage)
+    return await monetization_get_entitlements(str(current_user.id), db)
 
 
 @router.get("/usage", response_model=UsageResponse)
@@ -224,20 +227,17 @@ async def get_usage(current_user: CurrentUser, db: DB):
     Return current month usage stats for the authenticated user.
     Includes message count, tokens, cost, and credit balance.
     """
-    from api.services.billing_service import PLANS_CONFIG
-    usage = await get_monthly_usage(current_user.id, db)
-    plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
-    limit = plan_cfg["limits"]["ai_messages_per_month"]
-    count = usage["messages_count"]
-    usage_pct = -1.0 if limit == -1 else round((count / limit) * 100, 1) if limit > 0 else 0.0
+    snapshot = await monetization_get_usage_snapshot(str(current_user.id), db)
+    usage = snapshot["usage_this_month"]
+    quota = snapshot["quota"]["ai_messages"]
     return UsageResponse(
         month=usage["month"],
-        messages_count=count,
-        messages_limit=limit,
-        usage_pct=usage_pct,
+        messages_count=usage["messages_count"],
+        messages_limit=quota["limit"],
+        usage_pct=quota["pct_used"],
         tokens_total=usage["tokens_total"],
         cost_usd_total=usage["cost_usd_total"],
-        credits_remaining=current_user.credits,
+        credits_remaining=snapshot["credits"],
     )
 
 
@@ -248,7 +248,8 @@ async def get_upsell(current_user: CurrentUser, db: DB):
     Returns null if already on highest tier.
     """
     usage = await get_monthly_usage(current_user.id, db)
-    return get_upsell_suggestion(current_user.plan, usage)
+    effective_plan = await get_effective_plan(current_user, db)
+    return get_upsell_suggestion(effective_plan, usage)
 
 
 @router.post("/checkout-session", response_model=CheckoutResponse)
@@ -311,7 +312,8 @@ async def create_module_checkout_session(
     Create a Stripe Checkout session for a single module purchase.
     Module slug resolved server-side from MODULES_CONFIG only.
     """
-    mod_cfg = MODULES_CONFIG.get(body.module)
+    module_slug = canonicalize_module_slug(body.module)
+    mod_cfg = MODULES_CONFIG.get(module_slug) if module_slug else None
     if not mod_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown module: {body.module}")
 
@@ -339,19 +341,19 @@ async def create_module_checkout_session(
             subscription_data={
                 "metadata": {
                     "user_id": str(current_user.id),
-                    "module": body.module,
+                    "module": module_slug,
                     "type": "module",
                 },
             },
         )
     except stripe.StripeError as exc:
-        logger.error("[billing] Stripe error creating module checkout module=%s: %s", body.module, exc)
+        logger.error("[billing] Stripe error creating module checkout module=%s: %s", module_slug, exc)
         if _HAS_PROM:
             _payment_errors.labels(reason="stripe_api_error").inc()
         raise HTTPException(status_code=503, detail="Erreur Stripe — réessaie dans quelques instants.")
     logger.info(
         "[billing] Module checkout session %s created user=%s module=%s",
-        session.id, current_user.id, body.module,
+        session.id, current_user.id, module_slug,
     )
     return CheckoutResponse(url=session.url)
 
@@ -488,129 +490,16 @@ async def stripe_webhook(
     event_id = event["id"]
     event_type = event["type"]
 
-    # Atomic idempotency claim — race-safe via DB UNIQUE constraint
-    if not await claim_webhook_event(event_id, event_type, db):
-        logger.info(f"[webhook] Duplicate event {event_id} — acknowledged, skipping")
-        return {"received": True, "status": "duplicate"}
-
     logger.info(f"[webhook] Processing {event_type} id={event_id}")
-    error: str | None = None
 
     try:
-        data = event["data"]["object"]
-
-        if event_type == "checkout.session.completed":
-            await handle_checkout_completed(data, db)
-
-        elif event_type in (
-            "customer.subscription.created",
-            "customer.subscription.updated",
-        ):
-            await sync_subscription_from_stripe(data, db)
-
-            if event_type == "customer.subscription.created":
-                # Look up user email to send billing confirmation
-                try:
-                    from sqlalchemy import select as _select
-                    from api.models.user import User as _User
-                    stripe_customer_id = data.get("customer")
-                    result = await db.execute(
-                        _select(_User).where(_User.stripe_customer_id == stripe_customer_id)
-                    )
-                    user = result.scalar_one_or_none()
-                    if user:
-                        plan = data.get("metadata", {}).get("plan", "Pro")
-                        items = data.get("items", {}).get("data", [])
-                        amount = items[0]["price"]["unit_amount"] / 100 if items else 0.0
-                        asyncio.create_task(
-                            send_billing_confirmation(user.email, plan, amount)
-                        )
-                except Exception as _exc:
-                    logger.warning("[webhook] Could not queue billing email: %s", _exc)
-
-        elif event_type == "customer.subscription.deleted":
-            # Subscription cancelled — sync status, user.plan → free
-            await sync_subscription_from_stripe(data, db)
-
-        elif event_type == "invoice.payment_succeeded":
-            # Renewal — subscription already updated by subscription.updated event
-            # Log for audit / MRR tracking
-            logger.info(
-                f"[webhook] Payment succeeded for customer {data.get('customer')} "
-                f"amount={data.get('amount_paid')} invoice={data.get('id')}"
-            )
-
-        elif event_type == "invoice.payment_failed":
-            # Payment failure — Stripe will retry; subscription status updated via
-            # customer.subscription.updated (status → past_due)
-            logger.warning(
-                f"[webhook] Payment FAILED for customer {data.get('customer')} "
-                f"attempt={data.get('attempt_count')} invoice={data.get('id')}"
-            )
-            try:
-                from sqlalchemy import select as _select
-                from api.models.user import User as _User
-                from api.models.subscription import Subscription as _Sub
-                from api.services.subscription_state_machine import handle_payment_failed
-                stripe_customer_id = data.get("customer")
-                result = await db.execute(
-                    _select(_User).where(_User.stripe_customer_id == stripe_customer_id)
-                )
-                user = result.scalar_one_or_none()
-                if user:
-                    sub_result = await db.execute(
-                        _select(_Sub).where(_Sub.user_id == user.id)
-                        .order_by(_Sub.created_at.desc()).limit(1)
-                    )
-                    sub = sub_result.scalar_one_or_none()
-                    await handle_payment_failed(user, sub, db)
-            except Exception as _exc:
-                logger.warning("[webhook] Could not handle payment-failed: %s", _exc)
-
-        elif event_type == "customer.subscription.trial_will_end":
-            logger.info(f"[webhook] Trial ending soon for customer {data.get('customer')}")
-            try:
-                from sqlalchemy import select as _select
-                from datetime import datetime, timezone
-                from api.models.user import User as _User
-                from api.models.subscription import Subscription as _Sub
-                from api.services.subscription_state_machine import handle_trial_will_end
-                stripe_customer_id = data.get("customer")
-                result = await db.execute(
-                    _select(_User).where(_User.stripe_customer_id == stripe_customer_id)
-                )
-                user = result.scalar_one_or_none()
-                if user:
-                    sub_result = await db.execute(
-                        _select(_Sub).where(_Sub.user_id == user.id)
-                        .order_by(_Sub.created_at.desc()).limit(1)
-                    )
-                    sub = sub_result.scalar_one_or_none()
-                    trial_end_ts = data.get("trial_end")
-                    days_left = 3
-                    if trial_end_ts:
-                        trial_end_dt = datetime.fromtimestamp(trial_end_ts, tz=timezone.utc)
-                        delta = trial_end_dt - datetime.now(timezone.utc)
-                        days_left = max(1, delta.days)
-                    if sub:
-                        await handle_trial_will_end(user, sub, days_left, db)
-            except Exception as _exc:
-                logger.warning("[webhook] Could not handle trial_will_end: %s", _exc)
-
-        else:
-            logger.debug(f"[webhook] Unhandled event type: {event_type}")
-            await update_webhook_status(event_id, "ignored", None, db)
-            return {"received": True, "status": "ignored"}
-
-        await update_webhook_status(event_id, "processed", None, db)
-
+        result = await handle_stripe_webhook(event_id, event_type, event["data"]["object"], db)
     except Exception as exc:
-        error = str(exc)
         logger.exception("[webhook] Error processing %s id=%s: %s", event_type, event_id, exc)
         if _HAS_PROM:
             _webhook_errors.labels(event_type=event_type).inc()
-        await update_webhook_status(event_id, "failed", error, db)
         # Return 200 to prevent Stripe from retrying non-retriable errors.
         # For transient DB errors, let it raise (Stripe will retry).
+        return {"received": True, "status": "failed", "type": event_type}
 
-    return {"received": True, "status": "processed", "type": event_type}
+    return {"received": True, "status": result["status"], "type": event_type}

@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, require_feature
 from api.models.team_member import TeamMember
-from api.services.billing_service import PLANS_CONFIG, has_feature
+from api.services.billing_service import PLANS_CONFIG
+from api.services.entitlements_service import get_effective_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,7 +43,8 @@ async def list_team_members(
     members = result.scalars().all()
 
     # Get seat limits from plan config
-    plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
+    effective_plan = await get_effective_plan(current_user, db)
+    plan_cfg = PLANS_CONFIG.get(effective_plan, PLANS_CONFIG["free"])
     seats_limit = plan_cfg["limits"].get("team_seats_max", 1)
 
     return {
@@ -67,16 +69,12 @@ async def invite_member(
     body: InviteRequest,
     current_user: CurrentUser,
     db: DB,
+    _: Annotated[CurrentUser, Depends(require_feature("team_seats"))],
 ):
     """Invite a team member. Requires team_seats feature (Business plan)."""
-    if not has_feature(current_user.plan, "team_seats"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Team seats require the Business plan.",
-        )
-
     # Check seat limit
-    plan_cfg = PLANS_CONFIG.get(current_user.plan, PLANS_CONFIG["free"])
+    effective_plan = await get_effective_plan(current_user, db)
+    plan_cfg = PLANS_CONFIG.get(effective_plan, PLANS_CONFIG["free"])
     seats_limit = plan_cfg["limits"].get("team_seats_max", 1)
 
     # Check seat limit using SQL COUNT — avoids loading all rows into memory
