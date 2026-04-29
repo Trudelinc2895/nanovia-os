@@ -188,6 +188,24 @@ export default function ModulesPage() {
           </div>
         )}
 
+        {/* Custom Modules CTA — Business/Enterprise only */}
+        {(plan === "business" || plan === "enterprise") && (
+          <div className="bg-violet-950/40 border border-violet-700/40 rounded-2xl p-6 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-bold text-white text-base mb-1">✨ Custom Modules</h2>
+              <p className="text-sm text-gray-400">
+                Créez vos propres modules IA (Plan Business)
+              </p>
+            </div>
+            <Link
+              href="/dashboard/modules/custom"
+              className="shrink-0 bg-violet-700 hover:bg-violet-600 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition"
+            >
+              Gérer →
+            </Link>
+          </div>
+        )}
+
         {/* Filter tabs */}
         <div className="flex gap-2">
           {(["all", "active", "locked"] as const).map((f) => {

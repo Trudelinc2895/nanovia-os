@@ -335,3 +335,87 @@ async def send_verification_email(to_email: str, name: str, verify_url: str) -> 
 
 # Alias for billing router compatibility
 send_billing_confirmation = send_subscription_email
+
+
+async def send_team_invitation(to: str, inviter_name: str, invite_url: str) -> bool:
+    """Send team invitation email with branded HTML template."""
+    inviter_display = str(escape(inviter_name or "Un membre de l'équipe"))
+    html = _wrap(f"""
+      <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
+        👥 Tu as été invité(e) à rejoindre une équipe
+      </h1>
+      <p style="margin:0 0 12px;">
+        <strong style="color:#A78BFA;">{inviter_display}</strong> t'invite à rejoindre
+        son espace de travail sur <strong>Nanovia OS</strong>.
+      </p>
+      <p style="margin:0 0 28px;">
+        Clique sur le bouton ci-dessous pour accepter l'invitation et accéder
+        à votre espace collaboratif.
+      </p>
+      {_btn(invite_url, "Rejoindre l'équipe →")}
+      <p style="margin:28px 0 0;color:#9CA3AF;font-size:13px;">
+        Si tu ne connais pas cette personne, ignore ce message.
+        Ce lien expire dans <strong>48 heures</strong>.
+      </p>
+    """)
+    return await _send(to, f"👥 {inviter_display} t'invite à rejoindre Nanovia OS", html)
+
+
+async def send_custom_module_created(to: str, name: str, module_name: str) -> bool:
+    """Notify user that their custom module has been created successfully."""
+    display = str(escape(name or to))
+    module_display = str(escape(module_name))
+    modules_url = f"{_DASHBOARD_URL}/modules/custom"
+    html = _wrap(f"""
+      <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
+        ✨ Module personnalisé créé
+      </h1>
+      <p style="margin:0 0 12px;">
+        Salut <strong style="color:#A78BFA;">{display}</strong> 👋,
+      </p>
+      <p style="margin:0 0 12px;">
+        Ton module IA personnalisé <strong style="color:#A78BFA;">«&nbsp;{module_display}&nbsp;»</strong>
+        a été créé avec succès et est maintenant disponible dans ton espace.
+      </p>
+      <p style="margin:0 0 28px;">
+        Tu peux l'utiliser, le modifier ou en créer d'autres depuis ton tableau de bord.
+      </p>
+      {_btn(modules_url, "Voir mes modules →")}
+      <p style="margin:28px 0 0;color:#9CA3AF;font-size:13px;">
+        Des questions ? Réponds directement à cet e-mail.
+      </p>
+    """)
+    return await _send(to, f"✨ Module «{module_name}» créé avec succès", html)
+
+
+async def send_plan_downgraded(to: str, name: str, old_plan: str, new_plan: str) -> bool:
+    """Notify user that their plan has been downgraded."""
+    display = str(escape(name or to))
+    old_display = old_plan.capitalize()
+    new_display = new_plan.capitalize()
+    html = _wrap(f"""
+      <h1 style="margin:0 0 16px;color:#F9FAFB;font-size:24px;font-weight:800;">
+        📉 Changement de plan
+      </h1>
+      <p style="margin:0 0 12px;">
+        Salut <strong style="color:#A78BFA;">{display}</strong>,
+      </p>
+      <p style="margin:0 0 12px;">
+        Ton abonnement a été modifié :
+        <strong style="color:#F87171;">Plan {old_display}</strong>
+        → <strong style="color:#A78BFA;">Plan {new_display}</strong>.
+      </p>
+      <p style="margin:0 0 12px;">
+        Certaines fonctionnalités peuvent ne plus être disponibles.
+        Ton accès sera mis à jour à la fin de ta période de facturation en cours.
+      </p>
+      <p style="margin:0 0 28px;">
+        Tu peux upgrader à nouveau à tout moment depuis ton tableau de bord.
+      </p>
+      {_btn(_DASHBOARD_URL + "/billing", "Gérer mon abonnement →")}
+      <p style="margin:28px 0 0;color:#9CA3AF;font-size:13px;">
+        Une question ? Réponds à cet e-mail, nous sommes là pour toi.
+      </p>
+    """)
+    return await _send(to, f"📉 Ton plan a changé : {old_display} → {new_display}", html)
+

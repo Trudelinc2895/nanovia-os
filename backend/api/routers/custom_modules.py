@@ -4,13 +4,14 @@ import re
 import uuid
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from api.database import get_db
 from api.core.deps import CurrentUser
 from api.models.custom_module import CustomModule
+from api.models.audit import AuditLog
 
 router = APIRouter()
 
@@ -84,6 +85,7 @@ async def list_custom_modules(
 @router.post("/modules/custom", response_model=CustomModuleResponse, status_code=201)
 async def create_custom_module(
     body: CustomModuleCreate,
+    request: Request,
     user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
@@ -103,6 +105,14 @@ async def create_custom_module(
         prompt_template=body.prompt_template,
     )
     db.add(module)
+    db.add(AuditLog(
+        user_id=user.id,
+        action="custom_module.created",
+        resource=f"module:{slug}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        status="success",
+    ))
     await db.commit()
     await db.refresh(module)
     return CustomModuleResponse.from_orm_safe(module)
@@ -110,6 +120,7 @@ async def create_custom_module(
 @router.delete("/modules/custom/{module_id}", status_code=204)
 async def delete_custom_module(
     module_id: str,
+    request: Request,
     user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
@@ -125,4 +136,12 @@ async def delete_custom_module(
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
     module.is_active = False
+    db.add(AuditLog(
+        user_id=user.id,
+        action="custom_module.deleted",
+        resource=f"module:{module.slug}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        status="success",
+    ))
     await db.commit()

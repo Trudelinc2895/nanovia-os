@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import {
   getEntitlements,
   getMyModules,
+  apiFetch,
   type Entitlements,
   type ModuleAccess,
 } from "@/lib/api";
@@ -18,6 +19,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [modules, setModules] = useState<ModuleAccess[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -29,6 +31,9 @@ export default function DashboardPage() {
     getMyModules()
       .then((data) => setModules(data.modules))
       .catch(console.error);
+    apiFetch<{ unread_count: number }>("/api/v1/notifications")
+      .then((data) => setUnreadCount(data.unread_count ?? 0))
+      .catch(() => {});
   }, [user]);
 
   if (loading || !user) {
@@ -64,6 +69,19 @@ export default function DashboardPage() {
             <Badge variant={planVariant[effectivePlan] ?? "info"}>
               Plan {effectivePlan.toUpperCase()}
             </Badge>
+            {/* Notification bell */}
+            <Link href="/dashboard" className="relative text-text-muted hover:text-text-primary transition">
+              <span className="text-lg">🔔</span>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
+            </Link>
+            {/* Settings */}
+            <Link href="/dashboard/settings" className="text-text-muted hover:text-text-primary transition text-lg">
+              ⚙️
+            </Link>
             <Button
               variant="ghost"
               size="sm"
@@ -141,6 +159,42 @@ export default function DashboardPage() {
           {modules.map((mod) => (
             <ModuleCard key={mod.slug} mod={mod} />
           ))}
+        </div>
+
+        {/* Quick navigation cards */}
+        <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          <Link
+            href="/dashboard/settings"
+            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
+          >
+            <span className="text-2xl">⚙️</span>
+            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Paramètres</span>
+            <span className="text-xs text-text-muted">Profil & sécurité</span>
+          </Link>
+          <Link
+            href="/dashboard/billing"
+            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
+          >
+            <span className="text-2xl">💳</span>
+            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Facturation</span>
+            <span className="text-xs text-text-muted">Plans & paiements</span>
+          </Link>
+          <Link
+            href="/dashboard/analytics"
+            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
+          >
+            <span className="text-2xl">📊</span>
+            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Analytics</span>
+            <span className="text-xs text-text-muted">Usage & stats</span>
+          </Link>
+          <Link
+            href="/dashboard/security"
+            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
+          >
+            <span className="text-2xl">🔒</span>
+            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Sécurité</span>
+            <span className="text-xs text-text-muted">2FA & audit</span>
+          </Link>
         </div>
 
         {!isPaidPlan && (

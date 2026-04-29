@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { label: "Users", href: "/admin/users", icon: "👥" },
   { label: "Webhooks", href: "/admin/webhooks", icon: "🔗" },
   { label: "Metrics", href: "/admin/metrics", icon: "📊" },
+  { label: "Branding", href: "/admin/branding", icon: "🎨" },
   ...(isPrivateOrchestratorUiEnabled()
     ? [{ label: "Orchestrator", href: "/admin/orchestrator", icon: "🔒" }]
     : []),

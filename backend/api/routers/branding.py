@@ -1,13 +1,14 @@
 """White-label branding endpoints (admin-only)."""
 from __future__ import annotations
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from api.database import get_db
 from api.core.deps import AdminUser
 from api.models.branding import Branding
+from api.models.audit import AuditLog
 import uuid
 
 router = APIRouter()
@@ -56,6 +57,7 @@ async def get_branding(
 @router.put("/admin/branding", response_model=BrandingResponse)
 async def update_branding(
     body: BrandingUpdate,
+    request: Request,
     _admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ):
@@ -66,6 +68,14 @@ async def update_branding(
         db.add(row)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(row, field, value)
+    db.add(AuditLog(
+        user_id=_admin.id,
+        action="branding.updated",
+        resource=f"workspace:{_DEFAULT_WORKSPACE}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        status="success",
+    ))
     await db.commit()
     await db.refresh(row)
     return BrandingResponse.model_validate(row)

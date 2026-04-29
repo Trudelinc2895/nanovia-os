@@ -316,6 +316,18 @@ _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
         "window": 60,
         "bucket": "billing-addon",
     },
+    "/api/v1/admin/branding": {
+        "scope": "user_or_ip",
+        "limit": 30,
+        "window": 60,
+        "bucket": "admin-branding",
+    },
+    "/api/v1/modules/custom": {
+        "scope": "user_or_ip",
+        "limit": 20,
+        "window": 60,
+        "bucket": "modules-custom",
+    },
 }
 
 
