@@ -14,11 +14,11 @@ vault kv put secret/nanovia \
   SECRET_KEY="REPLACE_WITH_openssl_rand_hex_32" \
   DATABASE_URL="postgresql+psycopg://ktadmin:REPLACE@postgres:5432/ktmonetization" \
   REDIS_URL="redis://redis:6379/0" \
-  OPENAI_API_KEY="sk-svcacct-REPLACE" \
-  STRIPE_SECRET_KEY="stripe_test_51TEr82ARjyNV3UuR_REPLACE" \
-  STRIPE_PUBLISHABLE_KEY="stripe_public_test_51TEr82ARjyNV3UuR_REPLACE" \
-  STRIPE_WEBHOOK_SECRET="stripe_webhook_REPLACE" \
-  RESEND_API_KEY="re_REPLACE"
+  OPENAI_API_KEY="REPLACE_WITH_OPENAI_API_KEY" \
+  STRIPE_SECRET_KEY="REPLACE_WITH_STRIPE_SECRET_KEY" \
+  STRIPE_PUBLISHABLE_KEY="REPLACE_WITH_STRIPE_PUBLISHABLE_KEY" \
+  STRIPE_WEBHOOK_SECRET="REPLACE_WITH_STRIPE_WEBHOOK_SECRET" \
+  RESEND_API_KEY="REPLACE_WITH_RESEND_API_KEY"
 
 echo "Secrets stored. Verify with:"
 echo "vault kv get secret/nanovia"

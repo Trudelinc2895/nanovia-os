@@ -7,7 +7,7 @@
 set -e
 DOMAIN="nanovia.ca"
 APP_DIR="/opt/kt-monetization-os"
-ED25519_KEY="<ed25519-public-key>C3NzaC1lZDI1NTE5AAAAIEkMjUt0dkkQgMdlkBc9uhcJ60256s6Dgc6vCHHqoec9 kt-vps-2026"
+ED25519_KEY="${ED25519_PUBKEY:-}"
 
 echo "══════════════════════════════════════════"
 echo "  Nanovia Recovery + HTTPS Deploy v3"
@@ -36,13 +36,17 @@ echo "  OK UFW restored — SSH/HTTP/HTTPS open"
 
 # ── STEP 3: Add SSH key for passwordless access ──────────────
 echo "[3/9] Adding ed25519 SSH key..."
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-grep -v "kt-vps-2026" /root/.ssh/authorized_keys > /tmp/ak 2>/dev/null || true
-mv /tmp/ak /root/.ssh/authorized_keys 2>/dev/null || true
-echo "$ED25519_KEY" >> /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
-echo "  OK ed25519 key added ($(wc -l < /root/.ssh/authorized_keys) keys total)"
+if [ -n "$ED25519_KEY" ]; then
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    grep -vF "$ED25519_KEY" /root/.ssh/authorized_keys > /tmp/ak 2>/dev/null || true
+    mv /tmp/ak /root/.ssh/authorized_keys 2>/dev/null || true
+    echo "$ED25519_KEY" >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    echo "  OK ed25519 key added ($(wc -l < /root/.ssh/authorized_keys) keys total)"
+else
+    echo "  SKIP no ED25519_PUBKEY provided"
+fi
 
 # ── STEP 4: Restore security services ───────────────────────
 echo "[4/9] Restarting security services..."
@@ -124,7 +128,7 @@ if [ "$DNS_OK" = true ]; then
     echo "══ LIVE ══════════════════════════════════"
     echo "  https://$DOMAIN"
     echo "  https://$DOMAIN/api/v1"
-    echo "  SSH: ssh -i ~/.ssh/id_ed25519 root@167.114.155.166"
+    echo "  SSH: use your configured deploy key"
 else
     echo "══ ADD DNS A RECORDS IN OVH MANAGER ═════"
     echo "  nanovia.ca         -> 167.114.155.166"
