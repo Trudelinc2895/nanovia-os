@@ -28,7 +28,7 @@ RUN apt-get update -qq \
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-RUN python -m playwright install --with-deps chromium
+RUN python -m playwright install chromium
 
 COPY backend/ .
 COPY shared/ /shared/
