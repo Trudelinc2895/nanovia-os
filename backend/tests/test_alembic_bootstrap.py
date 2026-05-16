@@ -1,7 +1,10 @@
 from api.core.alembic_bootstrap import (
+    BRANDING_REVISION,
     HEAD_REVISION,
     INITIAL_SCHEMA_REVISION,
+    MERGED_HEAD_REVISION,
     TOTP_REVISION,
+    WORKSPACE_BILLING_REVISION,
     missing_required_auth_columns,
     resolve_legacy_revision,
     select_revision_to_stamp,
@@ -58,12 +61,47 @@ def test_resolve_legacy_revision_detects_head_from_email_verification_columns():
     )
 
 
+def test_resolve_legacy_revision_detects_workspace_billing_branch():
+    assert (
+        resolve_legacy_revision(
+            {"users", "workspaces", "plans"},
+            {"id", "email"},
+        )
+        == WORKSPACE_BILLING_REVISION
+    )
+
+
+def test_resolve_legacy_revision_detects_branding_branch():
+    assert (
+        resolve_legacy_revision(
+            {"users", "branding_settings"},
+            {"id", "email"},
+        )
+        == BRANDING_REVISION
+    )
+
+
+def test_resolve_legacy_revision_detects_merged_heads():
+    assert (
+        resolve_legacy_revision(
+            {"users", "workspaces", "branding_settings"},
+            {"id", "email"},
+        )
+        == MERGED_HEAD_REVISION
+    )
+
+
 def test_select_revision_to_stamp_for_unmanaged_database():
     assert select_revision_to_stamp([], INITIAL_SCHEMA_REVISION) == INITIAL_SCHEMA_REVISION
 
 
 def test_select_revision_to_stamp_advances_stale_alembic_version():
     assert select_revision_to_stamp([TOTP_REVISION], HEAD_REVISION) == HEAD_REVISION
+
+
+def test_select_revision_to_stamp_advances_branch_heads_to_merge():
+    assert select_revision_to_stamp([WORKSPACE_BILLING_REVISION], MERGED_HEAD_REVISION) == MERGED_HEAD_REVISION
+    assert select_revision_to_stamp([BRANDING_REVISION], MERGED_HEAD_REVISION) == MERGED_HEAD_REVISION
 
 
 def test_select_revision_to_stamp_ignores_current_or_newer_revision():
