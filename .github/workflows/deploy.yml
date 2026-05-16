@@ -344,11 +344,33 @@ jobs:
               printf 'EDGE_MODE=%s\n' "${EDGE_MODE}" >&2
               printf 'PUBLIC_HOST=%s\n' "${PUBLIC_HOST}" >&2
             else
-              curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}/api/v1/health/ready" >/dev/null || {
-                echo "❌ staging API ready probe failed"
-                compose logs --tail=200 api
-                exit 1
+              probe_staging_api_from_host() {
+                curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}/api/v1/health/ready" >/dev/null
               }
+
+              probe_staging_api_from_container() {
+                compose exec -T api python -c "import sys, urllib.request; resp = urllib.request.urlopen('http://127.0.0.1:8010/api/v1/health/ready', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
+              }
+
+              for i in $(seq 1 12); do
+                probe_staging_api_from_host && break
+
+                if [ "${i}" -eq 12 ]; then
+                  if probe_staging_api_from_container; then
+                    echo "❌ staging API is healthy in-container but host port ${STAGING_API_PORT} is unreachable on ${STAGING_BIND_ADDRESS}"
+                    compose ps
+                    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+                    docker port "${API_CONTAINER}" 8010 || true
+                  else
+                    echo "❌ staging API ready probe failed"
+                    compose logs --tail=200 api
+                  fi
+                  exit 1
+                fi
+
+                sleep 5
+              done
+
               curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}/login" | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/staging title: \1/p' >&2
               printf 'STAGING_TUNNEL=ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s deploy@%s\n' "${STAGING_WEB_PORT}" "${STAGING_WEB_PORT}" "${STAGING_API_PORT}" "${STAGING_API_PORT}" "${VPS_HOST:-${PUBLIC_IP_VALUE}}" >&2
             fi
