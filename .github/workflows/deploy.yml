@@ -220,6 +220,12 @@ jobs:
               upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}"
               upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
               upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT},http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
+              CURRENT_JWT_SECRET=$(grep '^JWT_SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2- || true)
+              if [ -z "${CURRENT_JWT_SECRET}" ] || printf '%s' "${CURRENT_JWT_SECRET}" | grep -Eq 'CHANGE_ME|REPLACE_ME|GENERATE_WITH'; then
+                CURRENT_JWT_SECRET="$(generate_hex_secret)"
+                upsert_env "${ENV_FILE}" JWT_SECRET_KEY "${CURRENT_JWT_SECRET}"
+              fi
+              upsert_env "${ENV_FILE}" SECRET_KEY "${CURRENT_JWT_SECRET}"
             fi
 
             STRIPE_SECRET=$(grep '^STRIPE_SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2- || true)
