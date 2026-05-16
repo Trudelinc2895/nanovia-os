@@ -281,7 +281,7 @@ jobs:
             if [ "${TARGET_ENV}" = "production" ]; then
               compose up -d --force-recreate --no-deps caddy api ai-orchestrator scraper-worker
             else
-              compose up -d --force-recreate --no-deps --scale caddy=0 api ai-orchestrator scraper-worker web admin
+              compose up -d --force-recreate --no-deps api ai-orchestrator scraper-worker web admin
             fi
 
             API_CONTAINER=$(compose ps -q api)
