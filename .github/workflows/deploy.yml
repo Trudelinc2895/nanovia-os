@@ -254,6 +254,22 @@ jobs:
             PREV_API=$(docker inspect --format='{{.Id}}' "${COMPOSE_PROJECT}-api-1" 2>/dev/null || echo "none")
 
             compose up -d postgres redis
+            POSTGRES_CONTAINER=$(compose ps -q postgres)
+            REDIS_CONTAINER=$(compose ps -q redis)
+            for i in $(seq 1 24); do
+              POSTGRES_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "${POSTGRES_CONTAINER}" 2>/dev/null || echo "unknown")
+              REDIS_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "${REDIS_CONTAINER}" 2>/dev/null || echo "unknown")
+              if [ "${POSTGRES_HEALTH}" = "healthy" ] && [ "${REDIS_HEALTH}" = "healthy" ]; then
+                break
+              fi
+              if [ "${i}" -eq 24 ]; then
+                echo "❌ Postgres/Redis did not become healthy before migrations"
+                compose ps
+                compose logs --tail=200 postgres redis
+                exit 1
+              fi
+              sleep 5
+            done
             if [ "${TARGET_ENV}" = "production" ]; then
               compose build api ai-orchestrator scraper-worker
             else
