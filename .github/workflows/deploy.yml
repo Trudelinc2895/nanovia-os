@@ -102,6 +102,22 @@ jobs:
               fi
             }
 
+            generate_hex_secret() {
+              openssl rand -hex 32
+            }
+
+            generate_password() {
+              openssl rand -base64 24 | tr -d '+/=' | head -c 24
+            }
+
+            generate_fernet_key() {
+              python3 - <<'PY'
+import base64
+import os
+print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+PY
+            }
+
             compose() {
               docker compose -p "${COMPOSE_PROJECT}" "${COMPOSE_FILES[@]}" --env-file "${ENV_FILE}" "$@"
             }
@@ -123,10 +139,38 @@ jobs:
               COMPOSE_FILES=(-f infra/docker-compose.prod.yml)
             else
               ENV_FILE=".env.staging"
-              [ -f "${ENV_FILE}" ] || {
-                echo "❌ Missing ${ENV_FILE}. Copy infra/env/.env.staging.example on the VPS before deploying staging."
-                exit 1
-              }
+              if [ ! -f "${ENV_FILE}" ]; then
+                [ -f "infra/env/.env.staging.example" ] || {
+                  echo "❌ Missing infra/env/.env.staging.example in the deploy checkout"
+                  exit 1
+                }
+                cp "infra/env/.env.staging.example" "${ENV_FILE}"
+                DB_PASSWORD="$(generate_password)"
+                REDIS_PASSWORD_VALUE="$(generate_password)"
+                JWT_SECRET_VALUE="$(generate_hex_secret)"
+                APP_SECRET_VALUE="$(generate_hex_secret)"
+                TOTP_KEY_VALUE="$(generate_fernet_key)"
+                GRAFANA_PASSWORD_VALUE="$(generate_password)"
+                upsert_env "${ENV_FILE}" SECRET_KEY "${APP_SECRET_VALUE}"
+                upsert_env "${ENV_FILE}" JWT_SECRET_KEY "${JWT_SECRET_VALUE}"
+                upsert_env "${ENV_FILE}" POSTGRES_PASSWORD "${DB_PASSWORD}"
+                upsert_env "${ENV_FILE}" DATABASE_URL "postgresql+psycopg://ktadmin:${DB_PASSWORD}@postgres:5432/ktmonetization"
+                upsert_env "${ENV_FILE}" REDIS_PASSWORD "${REDIS_PASSWORD_VALUE}"
+                upsert_env "${ENV_FILE}" REDIS_URL "redis://:${REDIS_PASSWORD_VALUE}@redis:6379/0"
+                upsert_env "${ENV_FILE}" TOTP_ENCRYPTION_KEY "${TOTP_KEY_VALUE}"
+                upsert_env "${ENV_FILE}" GRAFANA_ADMIN_PASSWORD "${GRAFANA_PASSWORD_VALUE}"
+                upsert_env "${ENV_FILE}" OPENAI_API_KEY ""
+                upsert_env "${ENV_FILE}" RESEND_API_KEY ""
+                upsert_env "${ENV_FILE}" STRIPE_SECRET_KEY ""
+                upsert_env "${ENV_FILE}" STRIPE_PUBLIC_KEY ""
+                upsert_env "${ENV_FILE}" STRIPE_WEBHOOK_SECRET ""
+                upsert_env "${ENV_FILE}" STRIPE_PRICE_PRO_MONTHLY_ID ""
+                upsert_env "${ENV_FILE}" STRIPE_PRICE_PRO_YEARLY_ID ""
+                upsert_env "${ENV_FILE}" STRIPE_PRICE_BUSINESS_MONTHLY_ID ""
+                upsert_env "${ENV_FILE}" STRIPE_PRICE_BUSINESS_YEARLY_ID ""
+                upsert_env "${ENV_FILE}" STRIPE_CREDIT_PRICE_ID ""
+                echo "Bootstrapped ${ENV_FILE} from infra/env/.env.staging.example with generated local staging secrets"
+              fi
               COMPOSE_PROJECT="nanovia-staging"
               COMPOSE_FILES=(-f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml)
             fi
