@@ -2,7 +2,7 @@ name: Deploy — OVH staging/production
 
 on:
   push:
-    branches: [staging, main]
+    branches: [staging, main, production-hardening-vps]
   workflow_dispatch:
     inputs:
       environment:
