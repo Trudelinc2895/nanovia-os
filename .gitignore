@@ -46,3 +46,15 @@ Thumbs.db
 # IDE
 .vscode/settings.json
 .idea/
+# Nanovia local secrets / generated Stripe outputs
+stripe_nanovia_sandbox_output.env
+stripe_nanovia_sandbox_ids.json
+stripe_nanovia_output.env
+backups/
+# Nanovia private commercial strategy - do not publish in public repo
+config/nanovia.modules.ts
+config/nanovia.plans.ts
+config/nanovia.env.example
+docs/MODULES_NANOVIA_GUIDE.md
+docs/STRIPE_SANDBOX_SETUP.md
+docs/NANOVIA_PHASE_1_REPORT.md
