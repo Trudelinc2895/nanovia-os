@@ -16,6 +16,7 @@ _SENSITIVE_PATTERNS = (
 _ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY"),
     ("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
+    ("TURNSTILE_SITE_KEY", "NEXT_PUBLIC_TURNSTILE_SITE_KEY"),
     ("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
     ("PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"),
 )
@@ -27,16 +28,25 @@ _KNOWN_ENV_KEYS = {
     "ADMIN_PORT",
     "AI_ORCHESTRATOR_PORT",
     "ALLOWED_ORIGINS_RAW",
+    "API_URL",
     "API_BASE_URL",
     "API_HOST",
     "API_PORT",
+    "ADMIN_URL",
+    "AGENTS_ENABLED",
+    "AI_MODEL",
+    "APP_DOMAIN",
     "APP_ENV",
     "APP_NAME",
     "APP_REGION",
     "APP_RUNTIME_ENV_FILE",
+    "APP_URL",
     "APP_VERSION",
+    "AUDIT_LOG_ENABLED",
+    "BOTS_ENABLED",
     "CHAOS_ENABLED",
     "DATABASE_URL",
+    "DANGEROUS_ACTIONS_REQUIRE_CONFIRMATION",
     "DOMAIN",
     "ENABLE_SCRAPE_PROXY",
     "GRAFANA_ADMIN_PASSWORD",
@@ -56,10 +66,17 @@ _KNOWN_ENV_KEYS = {
     "OLLAMA_DEFAULT_MODEL",
     "OPENAI_API_KEY",
     "OPENAI_API_KEY_REF",
+    "OPENAI_COST_GUARD_ENABLED",
+    "OPENAI_MAX_MONTHLY_COST_USD",
+    "OPENAI_TARGET_GROSS_MARGIN_PCT",
+    "ORCHESTRATOR_ENABLED",
     "POSTGRES_DB",
+    "POSTGRES_HOST",
     "POSTGRES_PASSWORD",
     "POSTGRES_PASSWORD_REF",
+    "POSTGRES_PORT",
     "POSTGRES_USER",
+    "MEMORY_ENABLED",
     "PRIVATE_ADMIN_URL",
     "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS",
     "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
@@ -127,8 +144,10 @@ _KNOWN_ENV_KEYS = {
     "STAGING_API_PORT",
     "STAGING_BIND_ADDRESS",
     "STAGING_WEB_PORT",
+    "SUPER_ADMIN_EMAIL",
     "STRIPE_CREDIT_PACK_SIZE",
     "STRIPE_CREDIT_PRICE_ID",
+    "STRIPE_MODE",
     "STRIPE_PRICE_ADDON_API_PACK",
     "STRIPE_PRICE_ADDON_STORAGE_10GB",
     "STRIPE_PRICE_BUSINESS_MONTHLY_ID",
@@ -144,6 +163,7 @@ _KNOWN_ENV_KEYS = {
     "STRIPE_PRICE_MODULE_OFFER",
     "STRIPE_PRICE_MODULE_OPERATOR",
     "STRIPE_PRICE_MODULE_REVERSE",
+    "STRIPE_PRICE_STARTER_MONTHLY_ID",
     "STRIPE_PRICE_PRO_MONTHLY_ID",
     "STRIPE_PRICE_PRO_YEARLY_ID",
     "STRIPE_PUBLIC_KEY",
@@ -152,6 +172,16 @@ _KNOWN_ENV_KEYS = {
     "STRIPE_SECRET_KEY_REF",
     "STRIPE_WEBHOOK_SECRET",
     "STRIPE_WEBHOOK_SECRET_REF",
+    "TURNSTILE_ALLOWED_HOSTNAMES_RAW",
+    "TURNSTILE_ENABLED",
+    "TURNSTILE_PROTECT_BILLING",
+    "TURNSTILE_PROTECT_CONTACT",
+    "TURNSTILE_PROTECT_LOGIN",
+    "TURNSTILE_PROTECT_REGISTER",
+    "TURNSTILE_SECRET_KEY",
+    "TURNSTILE_SECRET_KEY_REF",
+    "TURNSTILE_SITEVERIFY_URL",
+    "TURNSTILE_SITE_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_BOT_TOKEN_REF",
     "TELEGRAM_CHAT_ID",
@@ -161,6 +191,16 @@ _KNOWN_ENV_KEYS = {
     "VAULT_REQUEST_TIMEOUT_SECONDS",
     "VAULT_TOKEN",
     "WEB_PORT",
+    "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_ZONE_ID",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "OVH_ENDPOINT",
+    "OVH_APPLICATION_KEY",
+    "OVH_APPLICATION_SECRET",
+    "OVH_CONSUMER_KEY",
+    "OVH_SERVICE_NAME",
+    "SANDBOX_ALLOW_LIVE_KEYS",
 }
 
 
@@ -287,7 +327,7 @@ def validate_runtime_env(
     allow_placeholders: bool = False,
 ) -> list[str]:
     errors: list[str] = []
-    if target_env not in {"development", "staging", "production"}:
+    if target_env not in {"development", "staging", "production", "sandbox"}:
         return [f"Unsupported target environment: {target_env}"]
 
     errors.extend(_validate_known_keys(values))
@@ -331,6 +371,7 @@ def validate_runtime_env(
         ("REDIS_PASSWORD", "REDIS_PASSWORD_REF"),
         ("STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_REF"),
         ("STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET_REF"),
+        ("TURNSTILE_SECRET_KEY", "TURNSTILE_SECRET_KEY_REF"),
         ("TOTP_ENCRYPTION_KEY", "TOTP_ENCRYPTION_KEY_REF"),
         ("RESEND_API_KEY", "RESEND_API_KEY_REF"),
         ("OPENAI_API_KEY", "OPENAI_API_KEY_REF"),
@@ -344,6 +385,9 @@ def validate_runtime_env(
         ) or secret_ref_enabled
 
     for key in (
+        "APP_URL",
+        "ADMIN_URL",
+        "API_URL",
         "API_BASE_URL",
         "PUBLIC_WEB_URL",
         "PRIVATE_ADMIN_URL",
@@ -351,6 +395,7 @@ def validate_runtime_env(
         "OLLAMA_CLIENT_BASE_URL",
         "OLLAMA_ADMIN_BASE_URL",
         "VAULT_ADDR",
+        "TURNSTILE_SITEVERIFY_URL",
     ):
         _validate_http_urlish(values, key, errors)
 
@@ -376,8 +421,12 @@ def validate_runtime_env(
     stripe_secret = _first_present(values, "STRIPE_SECRET_KEY")
     stripe_public = _first_present(values, "STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY")
     stripe_webhook = _first_present(values, "STRIPE_WEBHOOK_SECRET")
+    turnstile_site_key = _first_present(values, "TURNSTILE_SITE_KEY", "NEXT_PUBLIC_TURNSTILE_SITE_KEY")
+    turnstile_secret = _first_present(values, "TURNSTILE_SECRET_KEY")
+    turnstile_enabled = values.get("TURNSTILE_ENABLED", "").strip().lower() == "true"
     stripe_secret_ref = values.get("STRIPE_SECRET_KEY_REF", "").strip()
     stripe_webhook_ref = values.get("STRIPE_WEBHOOK_SECRET_REF", "").strip()
+    turnstile_secret_ref = values.get("TURNSTILE_SECRET_KEY_REF", "").strip()
     totp_ref = values.get("TOTP_ENCRYPTION_KEY_REF", "").strip()
     stripe_live_secret_prefix = "sk" + "_live_"
     stripe_live_public_prefix = "pk" + "_live_"
@@ -388,6 +437,19 @@ def validate_runtime_env(
             errors.append("Development refuses live Stripe secret keys")
         if stripe_public.startswith(stripe_live_public_prefix):
             errors.append("Development refuses live Stripe public keys")
+        return errors
+
+    if target_env == "sandbox":
+        stripe_mode = values.get("STRIPE_MODE", "").strip().lower()
+        if stripe_mode and stripe_mode != "test":
+            errors.append("Sandbox requires STRIPE_MODE=test")
+        if stripe_secret.startswith(stripe_live_secret_prefix):
+            errors.append("Sandbox refuses live Stripe secret keys")
+        if stripe_public.startswith(stripe_live_public_prefix):
+            errors.append("Sandbox refuses live Stripe public keys")
+        bind_address = values.get("STAGING_BIND_ADDRESS", "").strip()
+        if bind_address and not _is_loopback_host(bind_address):
+            errors.append("Sandbox requires STAGING_BIND_ADDRESS to stay loopback-only when provided")
         return errors
 
     if not totp_ref and not values.get("TOTP_ENCRYPTION_KEY", "").strip().startswith("vault://"):
@@ -407,6 +469,8 @@ def validate_runtime_env(
             errors.append("Staging refuses live Stripe keys")
         if stripe_public.startswith(stripe_live_public_prefix):
             errors.append("Staging refuses live Stripe public keys")
+        if turnstile_enabled and not turnstile_site_key:
+            errors.append("Staging TURNSTILE_ENABLED=true requires TURNSTILE_SITE_KEY/NEXT_PUBLIC_TURNSTILE_SITE_KEY")
         return errors
 
     if not stripe_secret and not stripe_secret_ref:
@@ -423,6 +487,12 @@ def validate_runtime_env(
         errors.append("Production requires a Stripe webhook signing secret")
     elif not stripe_webhook_ref and not allow_placeholders and not stripe_webhook.startswith(stripe_webhook_prefix):
         errors.append("Production requires a Stripe webhook signing secret")
+
+    if turnstile_enabled:
+        if not turnstile_site_key:
+            errors.append("Production TURNSTILE_ENABLED=true requires TURNSTILE_SITE_KEY/NEXT_PUBLIC_TURNSTILE_SITE_KEY")
+        if not turnstile_secret and not turnstile_secret_ref:
+            errors.append("Production TURNSTILE_ENABLED=true requires TURNSTILE_SECRET_KEY")
 
     next_public_api_url = values.get("NEXT_PUBLIC_API_URL", "").strip()
     api_base_url = values.get("API_BASE_URL", "").strip()
@@ -453,7 +523,7 @@ def validate_runtime_env(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate deploy-time runtime env invariants.")
     parser.add_argument("--env-file", required=True)
-    parser.add_argument("--target-env", required=True, choices=("development", "staging", "production"))
+    parser.add_argument("--target-env", required=True, choices=("development", "staging", "production", "sandbox"))
     parser.add_argument(
         "--allow-placeholders",
         action="store_true",

@@ -9,6 +9,7 @@ _SPEC = importlib.util.spec_from_file_location("validate_runtime_env_script", _S
 assert _SPEC and _SPEC.loader
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
+load_env_file = _MODULE.load_env_file
 resolve_target_env = _MODULE.resolve_target_env
 validate_runtime_env = _MODULE.validate_runtime_env
 
@@ -42,6 +43,33 @@ def test_production_runtime_env_accepts_safe_values():
             "STRIPE_SECRET_KEY": "sk" + "_live_prod",
             "STRIPE_PUBLIC_KEY": "pk" + "_live_prod",
             "STRIPE_WEBHOOK_SECRET": "wh" + "sec_prod",
+            "ADMIN_ALLOWED_IP": "203.0.113.10/32",
+            "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://www.nanovia.ca",
+            "API_BASE_URL": "https://nanovia.ca",
+            "PUBLIC_WEB_URL": "https://nanovia.ca",
+            "PRIVATE_ADMIN_URL": "https://nanovia.ca",
+            "NEXT_PUBLIC_API_URL": "https://nanovia.ca",
+        },
+        target_env="production",
+    )
+
+    assert errors == []
+
+
+def test_production_runtime_env_accepts_turnstile_when_enabled():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "production",
+            "DATABASE_URL": "postgresql+psycopg://user:pass@postgres:5432/nanovia",
+            "REDIS_URL": "redis://redis:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "TOTP_ENCRYPTION_KEY": "safe-fernet-key-placeholder-free",
+            "STRIPE_SECRET_KEY": "sk" + "_live_prod",
+            "STRIPE_PUBLIC_KEY": "pk" + "_live_prod",
+            "STRIPE_WEBHOOK_SECRET": "wh" + "sec_prod",
+            "TURNSTILE_ENABLED": "true",
+            "TURNSTILE_SITE_KEY": "site-key",
+            "TURNSTILE_SECRET_KEY": "secret-key",
             "ADMIN_ALLOWED_IP": "203.0.113.10/32",
             "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://www.nanovia.ca",
             "API_BASE_URL": "https://nanovia.ca",
@@ -223,3 +251,12 @@ def test_resolve_target_env_for_examples():
     assert resolve_target_env("infra/env/.env.example", {"APP_ENV": "development"}) == "production"
     assert resolve_target_env("infra/env/.env.staging.example", {"APP_ENV": "development"}) == "staging"
     assert resolve_target_env(".env.example", {"APP_ENV": "development"}) == "development"
+
+
+def test_sandbox_env_example_accepts_known_keys_and_sandbox_rules():
+    env_path = Path(__file__).resolve().parents[2] / ".env.sandbox.example"
+    values = load_env_file(env_path)
+
+    errors = validate_runtime_env(values, target_env="sandbox", allow_placeholders=True)
+
+    assert errors == []

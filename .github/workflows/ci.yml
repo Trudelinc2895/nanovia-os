@@ -14,8 +14,8 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: kttest
-          POSTGRES_USER: ktuser
+          POSTGRES_DB: nanovia_test
+          POSTGRES_USER: nanovia_ci
           POSTGRES_PASSWORD: testpass
         ports: ["5432:5432"]
 
@@ -31,11 +31,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install deps
-        run: cd backend && pip install -r requirements.txt pytest pytest-asyncio
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
 
       - name: Run tests
         env:
-          DATABASE_URL: postgresql+psycopg://ktuser:testpass@localhost:5432/kttest
+          DATABASE_URL: postgresql+psycopg://nanovia_ci:testpass@localhost:5432/nanovia_test
           REDIS_URL: redis://localhost:6379/0
           JWT_SECRET_KEY: testsecretkeyminimum32characters
           SECRET_KEY: testsecretkey
@@ -62,6 +65,10 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend/client
         run: npm ci
+
+      - name: Audit frontend lockfile
+        working-directory: frontend/client
+        run: npm audit --package-lock-only --audit-level=high
 
       - name: Build frontend
         working-directory: frontend/client

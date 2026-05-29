@@ -2,9 +2,9 @@ name: 🔐 Security — Full Scan
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
   schedule:
     - cron: '0 3 * * *'  # Daily 3h UTC
 
@@ -29,7 +29,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: TruffleHog — verified secrets only
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@v3.95.3
         with:
           path: ./
           extra_args: --only-verified
@@ -46,7 +46,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install tools
-        run: pip install bandit pip-audit
+        run: pip install bandit pip-audit==2.10.0
 
       - name: Bandit SAST (HIGH severity = fail)
         run: |
@@ -63,9 +63,9 @@ jobs:
       - name: pip-audit CVE scan (report — non-blocking)
         continue-on-error: true
         run: |
-          pip-audit -r backend/requirements.txt \
+          python -m pip_audit -r backend/requirements.txt \
             --format json -o pip-audit-report.json || true
-          pip-audit -r backend/requirements.txt \
+          python -m pip_audit -r backend/requirements.txt \
             --vulnerability-service osv
 
       - uses: actions/upload-artifact@v4
@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Trivy on filesystem
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -142,6 +142,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Hadolint — Dockerfile best practices
         run: |
@@ -150,14 +153,16 @@ jobs:
           chmod +x /usr/local/bin/hadolint
           hadolint --failure-threshold error infra/docker/*.Dockerfile
 
+      - name: Install Checkov
+        run: pip install checkov==3.2.530
+
       - name: Checkov — IaC security
-        uses: bridgecrewio/checkov-action@master
-        with:
-          directory: infra/
-          framework: dockerfile
-          soft_fail: true
-          output_format: sarif
-          output_file_path: checkov.sarif
+        run: |
+          checkov -d infra/ \
+            --framework dockerfile \
+            --soft-fail \
+            --output sarif \
+            --output-file-path checkov.sarif
 
       - name: Upload Checkov SARIF
         uses: github/codeql-action/upload-sarif@v3
