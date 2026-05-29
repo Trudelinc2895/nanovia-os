@@ -5,6 +5,7 @@ import ipaddress
 import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,7 +46,7 @@ def _looks_placeholder(value: str) -> bool:
 
 
 class Settings(BaseSettings):
-    APP_ENV: Literal["development", "staging", "production", "test"] = "development"
+    APP_ENV: Literal["development", "staging", "production", "test", "sandbox"] = "development"
     APP_NAME: str = "Nanovia OS"
     APP_VERSION: str = "1.0.0"
     DOMAIN: str = "nanovia.ca"
@@ -104,10 +105,32 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
     )
+    STRIPE_MODE: Literal["test", "live"] = "test"
     STRIPE_SECRET_KEY_REF: str = ""
     STRIPE_WEBHOOK_SECRET_REF: str = ""
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+    TURNSTILE_SITE_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices("TURNSTILE_SITE_KEY", "NEXT_PUBLIC_TURNSTILE_SITE_KEY"),
+    )
+    TURNSTILE_SECRET_KEY_REF: str = ""
+    TURNSTILE_SECRET_KEY: str = ""
+    TURNSTILE_ENABLED: bool = False
+    TURNSTILE_PROTECT_LOGIN: bool = True
+    TURNSTILE_PROTECT_REGISTER: bool = True
+    TURNSTILE_PROTECT_CONTACT: bool = True
+    TURNSTILE_PROTECT_BILLING: bool = True
+    TURNSTILE_SITEVERIFY_URL: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    TURNSTILE_ALLOWED_HOSTNAMES_RAW: str = ""
+    AGENTS_ENABLED: bool = True
+    ORCHESTRATOR_ENABLED: bool = True
+    MEMORY_ENABLED: bool = True
+    BOTS_ENABLED: bool = True
+    DANGEROUS_ACTIONS_REQUIRE_CONFIRMATION: bool = True
+    SANDBOX_ALLOW_LIVE_KEYS: bool = False
+    AUDIT_LOG_ENABLED: bool = True
+    STRIPE_PRICE_STARTER_MONTHLY_ID: str = ""
     STRIPE_PRICE_PRO_MONTHLY_ID: str = ""
     STRIPE_PRICE_PRO_YEARLY_ID: str = ""
     STRIPE_PRICE_BUSINESS_MONTHLY_ID: str = ""
@@ -147,6 +170,18 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY_REF: str = ""
     OPENAI_API_KEY: str = ""
+    AI_MODEL: str = "gpt-4.1-mini"
+    OPENAI_COST_GUARD_ENABLED: bool = True
+    OPENAI_MAX_MONTHLY_COST_USD: float = Field(default=45.0, ge=0)
+    OPENAI_TARGET_GROSS_MARGIN_PCT: int = Field(default=70, ge=0, le=100)
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    CORTEX_SUMMARY_MODEL: str = "gpt-4o-mini"
+    CORTEX_ENABLED: bool = False
+    CORTEX_TOP_K: int = Field(default=3, ge=1, le=10)
+    CORTEX_MAX_SUMMARY_ITEMS: int = Field(default=5, ge=1, le=20)
+    CORTEX_EMBEDDING_DIMENSIONS: int = Field(default=1536, ge=1)
+    CORTEX_AUTO_SUMMARY_INTERVAL: int = Field(default=50, ge=1)
+    CORTEX_FREE_MAX_MEMORIES_PER_USER: int = Field(default=25, ge=1)
     OLLAMA_CLIENT_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_ADMIN_BASE_URL: str = "http://127.0.0.1:11435"
     OLLAMA_DEFAULT_MODEL: str = "llama3"
@@ -286,6 +321,24 @@ class Settings(BaseSettings):
         return f"{self.PUBLIC_WEB_URL}/dashboard"
 
     @property
+    def TURNSTILE_ALLOWED_HOSTNAMES(self) -> list[str]:
+        hostnames = {
+            hostname.strip().lower()
+            for hostname in self.TURNSTILE_ALLOWED_HOSTNAMES_RAW.split(",")
+            if hostname and hostname.strip()
+        }
+        for candidate in (self.DOMAIN, self.PUBLIC_WEB_URL, self.PRIVATE_ADMIN_URL):
+            if not candidate:
+                continue
+            if candidate.startswith(("http://", "https://")):
+                parsed = urlparse(candidate)
+                if parsed.hostname:
+                    hostnames.add(parsed.hostname.lower())
+                continue
+            hostnames.add(candidate.strip().lower())
+        return sorted(hostnames)
+
+    @property
     def RESEND_FROM(self) -> str:
         return f"{self.RESEND_FROM_NAME} <{self.RESEND_FROM_EMAIL}>"
 
@@ -355,6 +408,7 @@ class Settings(BaseSettings):
             ("REDIS_PASSWORD", "REDIS_PASSWORD_REF"),
             ("STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_REF"),
             ("STRIPE_WEBHOOK_SECRET", "STRIPE_WEBHOOK_SECRET_REF"),
+            ("TURNSTILE_SECRET_KEY", "TURNSTILE_SECRET_KEY_REF"),
             ("TOTP_ENCRYPTION_KEY", "TOTP_ENCRYPTION_KEY_REF"),
             ("RESEND_API_KEY", "RESEND_API_KEY_REF"),
             ("OPENAI_API_KEY", "OPENAI_API_KEY_REF"),
@@ -472,6 +526,13 @@ class Settings(BaseSettings):
                 errors.append("TOTP_ENCRYPTION_KEY is required in production")
             elif _looks_placeholder(self.TOTP_ENCRYPTION_KEY):
                 errors.append("TOTP_ENCRYPTION_KEY cannot use placeholder values in production")
+            if self.TURNSTILE_ENABLED:
+                if not self.TURNSTILE_SITE_KEY:
+                    errors.append("TURNSTILE_SITE_KEY/NEXT_PUBLIC_TURNSTILE_SITE_KEY is required when TURNSTILE_ENABLED=true")
+                if not self.TURNSTILE_SECRET_KEY:
+                    errors.append("TURNSTILE_SECRET_KEY is required when TURNSTILE_ENABLED=true")
+                elif _looks_placeholder(self.TURNSTILE_SECRET_KEY):
+                    errors.append("TURNSTILE_SECRET_KEY cannot use placeholder values in production")
             origins = self.ALLOWED_ORIGINS
             if "*" in origins:
                 errors.append("Wildcard CORS not allowed in production")
@@ -486,6 +547,33 @@ class Settings(BaseSettings):
                     errors.append(f"Dev origin {o!r} not allowed in production ALLOWED_ORIGINS_RAW")
             if errors:
                 raise ValueError("Production config errors:\n" + "\n".join(f"  - {e}" for e in errors))
+        return self
+
+    @model_validator(mode="after")
+    def validate_sandbox_secrets(self) -> "Settings":
+        if self.APP_ENV != "sandbox":
+            return self
+
+        if self.STRIPE_MODE != "test":
+            raise ValueError("STRIPE_MODE must be 'test' in sandbox")
+
+        live_key_prefixes = ("sk_live_", "pk_live_")
+        if (
+            not self.SANDBOX_ALLOW_LIVE_KEYS
+            and (
+                self.STRIPE_SECRET_KEY.startswith(live_key_prefixes)
+                or self.STRIPE_PUBLIC_KEY.startswith(live_key_prefixes)
+            )
+        ):
+            raise ValueError("Live Stripe keys are forbidden when SANDBOX_ALLOW_LIVE_KEYS=false")
+
+        if (
+            not self.SANDBOX_ALLOW_LIVE_KEYS
+            and self.STRIPE_WEBHOOK_SECRET
+            and self.STRIPE_WEBHOOK_SECRET.lower().startswith("whsec_live")
+        ):
+            raise ValueError("Live Stripe webhook secrets are forbidden when SANDBOX_ALLOW_LIVE_KEYS=false")
+
         return self
 
     model_config = SettingsConfigDict(

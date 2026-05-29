@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.sandbox.example
 stripe/stripe_ids.json
 
 # Secrets — never commit env files with real values
@@ -50,7 +51,14 @@ Thumbs.db
 stripe_nanovia_sandbox_output.env
 stripe_nanovia_sandbox_ids.json
 stripe_nanovia_output.env
+stripe/sandbox/stripe-output.sandbox.json
+data/audit/sandbox-audit.jsonl
 backups/
+infra/cloudflare/terraform.tfvars
+infra/cloudflare/*.tfstate
+infra/cloudflare/*.tfstate.*
+infra/cloudflare/.terraform/
+infra/cloudflare/.terraform.lock.hcl
 # Nanovia private commercial strategy - do not publish in public repo
 config/nanovia.modules.ts
 config/nanovia.plans.ts

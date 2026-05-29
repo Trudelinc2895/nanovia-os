@@ -1,0 +1,17 @@
+[
+  {
+    "id": "starter",
+    "name": "Nanovia Starter",
+    "description": "Core platform, billing foundations, and basic support in Stripe test mode."
+  },
+  {
+    "id": "pro",
+    "name": "Nanovia Pro",
+    "description": "Starter plus AI orchestrator, memory system, and base analytics."
+  },
+  {
+    "id": "business",
+    "name": "Nanovia Business",
+    "description": "Full Nanovia sandbox including security, DevOps control, bots, and advanced admin."
+  }
+]

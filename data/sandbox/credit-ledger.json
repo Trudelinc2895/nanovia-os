@@ -1,0 +1,20 @@
+[
+  {
+    "id": "ledger_seed_pro",
+    "workspace_id": "sandbox_pro",
+    "amount": 150,
+    "reason": "seed sandbox adjustment",
+    "actor": "system",
+    "created_at": "2026-05-29T00:00:00+00:00",
+    "type": "manual_admin_adjustment"
+  },
+  {
+    "id": "ledger_seed_business",
+    "workspace_id": "sandbox_business",
+    "amount": 500,
+    "reason": "seed sandbox adjustment",
+    "actor": "system",
+    "created_at": "2026-05-29T00:00:00+00:00",
+    "type": "manual_admin_adjustment"
+  }
+]

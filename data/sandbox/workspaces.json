@@ -1,0 +1,61 @@
+{
+  "workspaces": [
+    {
+      "id": "sandbox_workspace",
+      "name": "Sandbox Workspace",
+      "plan": "starter",
+      "override_plan": null,
+      "subscription_status": "active",
+      "blocked": false,
+      "blocked_reason": null,
+      "stripe_customer_id": null,
+      "stripe_subscription_id": null,
+      "stripe_checkout_session_id": null,
+      "usage_summary": {
+        "period": "2026-05",
+        "credits_used": 0,
+        "estimated_openai_cost_usd": 0.0
+      },
+      "created_at": "2026-05-29T00:00:00+00:00",
+      "updated_at": "2026-05-29T00:00:00+00:00"
+    },
+    {
+      "id": "sandbox_pro",
+      "name": "Sandbox Pro",
+      "plan": "pro",
+      "override_plan": null,
+      "subscription_status": "active",
+      "blocked": false,
+      "blocked_reason": null,
+      "stripe_customer_id": null,
+      "stripe_subscription_id": null,
+      "stripe_checkout_session_id": null,
+      "usage_summary": {
+        "period": "2026-05",
+        "credits_used": 240,
+        "estimated_openai_cost_usd": 1.124
+      },
+      "created_at": "2026-05-29T00:00:00+00:00",
+      "updated_at": "2026-05-29T00:00:00+00:00"
+    },
+    {
+      "id": "sandbox_business",
+      "name": "Sandbox Business",
+      "plan": "business",
+      "override_plan": null,
+      "subscription_status": "active",
+      "blocked": false,
+      "blocked_reason": null,
+      "stripe_customer_id": null,
+      "stripe_subscription_id": null,
+      "stripe_checkout_session_id": null,
+      "usage_summary": {
+        "period": "2026-05",
+        "credits_used": 900,
+        "estimated_openai_cost_usd": 4.812
+      },
+      "created_at": "2026-05-29T00:00:00+00:00",
+      "updated_at": "2026-05-29T00:00:00+00:00"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "usage_seed_pro",
+    "workspace_id": "sandbox_pro",
+    "period": "2026-05",
+    "kind": "ai_request",
+    "model": "gpt-4.1-mini",
+    "units": 240,
+    "input_tokens": 180000,
+    "output_tokens": 36000,
+    "credits_used": 240,
+    "estimated_openai_cost_usd": 1.124,
+    "reason": "seed sandbox usage",
+    "actor": "system",
+    "created_at": "2026-05-29T00:00:00+00:00"
+  },
+  {
+    "id": "usage_seed_business",
+    "workspace_id": "sandbox_business",
+    "period": "2026-05",
+    "kind": "ai_request",
+    "model": "gpt-4.1-mini",
+    "units": 900,
+    "input_tokens": 720000,
+    "output_tokens": 180000,
+    "credits_used": 900,
+    "estimated_openai_cost_usd": 4.812,
+    "reason": "seed sandbox usage",
+    "actor": "system",
+    "created_at": "2026-05-29T00:00:00+00:00"
+  }
+]

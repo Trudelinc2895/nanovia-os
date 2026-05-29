@@ -36,6 +36,7 @@ from api.routers import admin
 from api.routers import admin_orchestrator
 from api.routers import branding
 from api.routers import custom_modules
+from api.routers import sandbox
 from api.routers import team
 from api.routers import scrape
 from api.scraping.worker import run_worker_forever
@@ -54,7 +55,7 @@ except ImportError:
 
 
 _startup_logger = logging.getLogger("startup")
-_NON_PROD_ENVS = {"development", "test"}
+_NON_PROD_ENVS = {"development", "test", "sandbox"}
 
 # ── Shutdown/drain state ───────────────────────────────────────────────────────
 _shutting_down: bool = False
@@ -454,6 +455,13 @@ _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
         "bucket": "2fa",
         "detail": "Trop de tentatives. Réessaie dans 15 minutes.",
     },
+    "/api/v1/contact": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 300,
+        "bucket": "contact",
+        "detail": "Trop de messages de contact. Réessaie dans 5 minutes.",
+    },
     "/api/v1/billing/checkout-session": {
         "scope": "user_or_ip",
         "limit": 15,
@@ -596,6 +604,10 @@ async def security_headers(request: Request, call_next) -> Response:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["Origin-Agent-Cluster"] = "?1"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if settings.APP_ENV == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -613,6 +625,8 @@ if HAS_PROMETHEUS:
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 app.include_router(health.router, tags=["health"])
+if settings.APP_ENV == "sandbox":
+    app.include_router(sandbox.router, tags=["sandbox"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(billing.router, prefix="/api/v1/billing", tags=["billing"])

@@ -1,0 +1,23 @@
+[
+  {
+    "product_id": "starter",
+    "lookup_key": "nanovia_starter_monthly",
+    "unit_amount": 2900,
+    "currency": "usd",
+    "interval": "month"
+  },
+  {
+    "product_id": "pro",
+    "lookup_key": "nanovia_pro_monthly",
+    "unit_amount": 7900,
+    "currency": "usd",
+    "interval": "month"
+  },
+  {
+    "product_id": "business",
+    "lookup_key": "nanovia_business_monthly",
+    "unit_amount": 14900,
+    "currency": "usd",
+    "interval": "month"
+  }
+]

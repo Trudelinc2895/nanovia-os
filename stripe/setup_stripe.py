@@ -6,14 +6,14 @@ Usage:
     python stripe/setup_stripe.py
 
 Creates / reuses:
-  - Products & Prices for Pro ($79/mo, $790/yr) and Business ($149/mo, $1,490/yr)
+  - Products & Prices for Starter ($29/mo), Pro ($79/mo, $790/yr) and Business ($149/mo, $1,490/yr)
   - API / storage / credits add-on prices
   - 10 individual module prices
   - Credit pack price
   - Webhook endpoint
   - Customer portal configuration
 
-Outputs: stripe/stripe_ids.json + .env snippet to copy
+Outputs: stripe/stripe_ids.json, stripe/sandbox/stripe-output.sandbox.json + .env snippet to copy
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
-for env_path in (REPO_ROOT / ".env", REPO_ROOT / ".env.production", REPO_ROOT / ".env.staging"):
+for env_path in (REPO_ROOT / ".env", REPO_ROOT / ".env.sandbox", REPO_ROOT / ".env.production", REPO_ROOT / ".env.staging"):
     if env_path.is_file():
         load_dotenv(env_path, override=False)
 load_dotenv(override=False)
@@ -68,6 +68,8 @@ def _webhook_url() -> str:
     explicit = os.getenv("STRIPE_WEBHOOK_URL", "").strip().rstrip("/")
     if explicit:
         return explicit
+    if os.getenv("APP_ENV", "").strip().lower() == "sandbox":
+        return f"{_api_origin()}/stripe/webhook"
     return f"{_api_origin()}/api/v1/billing/webhook"
 
 
@@ -79,6 +81,13 @@ print(f"[stripe-setup] mode={MODE}  domain={DOMAIN}  api={API_BASE_URL}")
 
 # ─── Plan prices ──────────────────────────────────────────────────────────────
 PLANS = [
+    {
+        "key": "starter",
+        "name": "Nanovia Starter",
+        "usd_monthly": 2900,
+        "usd_yearly": 2900 * 12,
+        "description": "Core platform, billing, support base, and conservative AI sandbox guardrails",
+    },
     {
         "key": "pro",
         "name": "Nanovia Pro",
@@ -151,6 +160,8 @@ WEBHOOK_EVENTS = [
     "invoice.payment_succeeded",
     "invoice.payment_failed",
     "customer.subscription.trial_will_end",
+    "customer.updated",
+    "payment_method.attached",
 ]
 SHOW_WEBHOOK_SECRET = os.getenv("STRIPE_SHOW_WEBHOOK_SECRET", "").strip().lower() in {"1", "true", "yes"}
 
@@ -436,6 +447,7 @@ def main():
     setup_portal(plan_results)
 
     env_values = {
+        "STRIPE_PRICE_STARTER_MONTHLY_ID": plan_results["starter"]["price_monthly_id"],
         "STRIPE_PRICE_PRO_MONTHLY_ID": plan_results["pro"]["price_monthly_id"],
         "STRIPE_PRICE_PRO_YEARLY_ID": plan_results["pro"]["price_yearly_id"],
         "STRIPE_PRICE_BUSINESS_MONTHLY_ID": plan_results["business"]["price_monthly_id"],
@@ -465,6 +477,11 @@ def main():
             "credits": CREDIT_PACK["credits"],
         },
         "credit_price_id": credit_pack["price_id"],
+        "products": {
+            "STRIPE_PRODUCT_STARTER": plan_results["starter"]["product_id"],
+            "STRIPE_PRODUCT_PRO": plan_results["pro"]["product_id"],
+            "STRIPE_PRODUCT_BUSINESS": plan_results["business"]["product_id"]
+        },
         "webhook": {"id": wh.id, "url": WEBHOOK_URL},
         "webhook_id": wh.id,
         "env": env_values,
@@ -472,9 +489,14 @@ def main():
     output_path = SCRIPT_DIR / "stripe_ids.json"
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
+    sandbox_output_path = SCRIPT_DIR / "sandbox" / "stripe-output.sandbox.json"
+    sandbox_output_path.parent.mkdir(parents=True, exist_ok=True)
+    with sandbox_output_path.open("w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
 
     print("\n" + "=" * 60)
     print(f"✅  {output_path.relative_to(REPO_ROOT)} saved")
+    print(f"✅  {sandbox_output_path.relative_to(REPO_ROOT)} saved")
     print("=" * 60)
     print("\n--- COPY THESE TO YOUR .env ---\n")
     for env_key, value in env_values.items():
