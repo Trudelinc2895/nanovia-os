@@ -9,7 +9,7 @@ The main `nanovia-api` service selector is patched to point at the active versio
 
 1. Deploy new version to green:
    ```
-   kubectl set image deployment/nanovia-api-green api=ghcr.io/trudelinc2895/kt-monetization-os/api:NEW_TAG -n nanovia
+   kubectl set image deployment/nanovia-api-green api=ghcr.io/trudelinc2895/nanovia-os/api:NEW_TAG -n nanovia
    ```
 
 2. Wait for rollout:
@@ -46,3 +46,4 @@ Reverse the steps above, using `blue` as the target.
 - Ensure the new image is fully tested in staging before cutting over.
 - Monitor error rate and latency for at least 15 minutes after cutover.
 - Keep old deployment scaled down (not deleted) for 24 hours to allow quick rollback.
+

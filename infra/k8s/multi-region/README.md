@@ -1,7 +1,7 @@
 # Multi-Region Strategy
 
 ## Objective
-Prepare clean multi-region routing for `kt-monetization-os` without introducing unnecessary operational complexity.
+Prepare clean multi-region routing for `nanovia-os` without introducing unnecessary operational complexity.
 
 ## Recommended topology
 
@@ -81,3 +81,4 @@ Use staging or a controlled drill before production rollout:
 - complex service mesh routing
 
 This phase keeps the design pragmatic: **primary + warm fallback**, regional isolation, and documented failover.
+

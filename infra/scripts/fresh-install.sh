@@ -14,8 +14,8 @@ set -euo pipefail
 
 DOMAIN="${1:-}"
 ACME_EMAIL="${2:-}"
-APP_DIR="/opt/kt-monetization-os"
-REPO="https://github.com/Trudelinc2895/kt-monetization-os.git"
+APP_DIR="/opt/nanovia-os"
+REPO="https://github.com/Trudelinc2895/nanovia-os.git"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}  ✓ $1${NC}"; }
@@ -311,3 +311,4 @@ echo "  1. nano $APP_DIR/.env  (ajouter STRIPE_SECRET_KEY + OPENAI_API_KEY)"
 echo "  2. docker compose -f infra/docker-compose.prod.yml exec api python scripts/create_admin.py"
 echo "  3. cd $APP_DIR && bash infra/scripts/backup.sh  (tester backup)"
 echo ""
+

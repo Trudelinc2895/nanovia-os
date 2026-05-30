@@ -725,7 +725,7 @@ ssh -L 13000:127.0.0.1:13000 -L 13020:127.0.0.1:13020 -L 18010:127.0.0.1:18010 d
 
 ```bash
 # Terminal 1 — Backend
-cd kt-monetization-os
+cd nanovia-os
 $env:PYTHONPATH = "backend"
 $env:PYTHONIOENCODING = "utf-8"
 uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload

@@ -1,5 +1,5 @@
 Nanovia OS — Project Tree
-Root: C:\Users\Alienware\kt-monetization-os\
+Root: C:\Users\Alienware\nanovia-os\
 Generated: 2026-04-02 | Excludes: node_modules, .git, __pycache__, .next, .venv, dist, build
 
 nanovia-os/
@@ -119,3 +119,4 @@ nanovia-os/
     ├── NEXT_STEPS.md
     ├── KNOWN_BUGS.md
     └── COPILOT_PROMPT.md
+

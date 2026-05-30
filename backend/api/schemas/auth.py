@@ -13,6 +13,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     full_name: str = Field(default="", max_length=255)
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
     @field_validator("password")
     @classmethod
@@ -27,6 +28,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class RefreshRequest(BaseModel):

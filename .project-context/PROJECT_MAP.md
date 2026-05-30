@@ -4,7 +4,7 @@
 - **Domaine :** nanovia.ca
 - **Owner :** Kevin Trudel (trudelinc11@gmail.com)
 - **Mode :** SaaS multi-modules — production-grade, budget < $10/mois
-- **Repo actuel :** https://github.com/Trudelinc2895/kt-monetization-os
+- **Repo actuel :** https://github.com/Trudelinc2895/nanovia-os
 
 ---
 
@@ -174,3 +174,4 @@ alembic==1.14.0          prometheus-fastapi-instrumentator
 next==15.5.14   react==19.0.0   tailwindcss==3.4.1
 ```
 ⚠️ **MANQUANT :** `@stripe/react-stripe-js` et `@stripe/stripe-js`
+

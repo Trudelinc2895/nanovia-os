@@ -107,6 +107,10 @@ export interface LoginResponse {
   partial_token?: string;
 }
 
+type TurnstilePayload = {
+  turnstile_token?: string | null;
+};
+
 export interface User {
   id: string;
   email: string;
@@ -120,10 +124,10 @@ export interface User {
   created_at: string;
 }
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export async function login(email: string, password: string, turnstileToken?: string | null): Promise<LoginResponse> {
   const data = await apiFetch<LoginResponse>("/api/v1/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, turnstile_token: turnstileToken ?? null }),
   });
   // Web keeps the access token in memory only; refresh stays in the httpOnly cookie.
   if (!data.requires_2fa && data.access_token) {
@@ -174,11 +178,12 @@ export async function disable2FA(totpCode?: string, password?: string): Promise<
 export async function register(
   email: string,
   password: string,
-  full_name?: string
+  full_name?: string,
+  turnstileToken?: string | null,
 ): Promise<LoginResponse> {
   const data = await apiFetch<LoginResponse>("/api/v1/auth/register", {
     method: "POST",
-    body: JSON.stringify({ email, password, full_name }),
+    body: JSON.stringify({ email, password, full_name, turnstile_token: turnstileToken ?? null }),
   });
   setAccessToken(data.access_token ?? null);
   return data;
@@ -376,24 +381,28 @@ export async function getPublicEntrypointHealth(): Promise<PublicEntrypointHealt
   return apiFetch<PublicEntrypointHealth>("/api/v1/health/public-entrypoint", {}, false);
 }
 
-export async function createCheckoutSession(plan: string, interval: "monthly" | "yearly") {
+export async function createCheckoutSession(
+  plan: string,
+  interval: "monthly" | "yearly",
+  turnstileToken?: string | null,
+) {
   return apiFetch<{ url: string }>("/api/v1/billing/checkout-session", {
     method: "POST",
-    body: JSON.stringify({ plan, interval }),
+    body: JSON.stringify({ plan, interval, turnstile_token: turnstileToken ?? null }),
   });
 }
 
-export async function createAddonCheckout(addon: string) {
+export async function createAddonCheckout(addon: string, turnstileToken?: string | null) {
   return apiFetch<{ url: string; addon_name: string; price_usd: number }>(
     "/api/v1/billing/addon/checkout",
-    { method: "POST", body: JSON.stringify({ addon }) }
+    { method: "POST", body: JSON.stringify({ addon, turnstile_token: turnstileToken ?? null }) }
   );
 }
 
-export async function createPortalSession() {
+export async function createPortalSession(turnstileToken?: string | null) {
   return apiFetch<{ url: string }>("/api/v1/billing/portal-session", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ turnstile_token: turnstileToken ?? null }),
   });
 }
 
@@ -473,10 +482,10 @@ export async function getMyModules() {
   return apiFetch<{ plan: string; modules: ModuleAccess[] }>("/api/v1/billing/my-modules");
 }
 
-export async function createModuleCheckout(moduleSlug: string) {
+export async function createModuleCheckout(moduleSlug: string, turnstileToken?: string | null) {
   return apiFetch<{ url: string }>("/api/v1/billing/module-checkout-session", {
     method: "POST",
-    body: JSON.stringify({ module: moduleSlug }),
+    body: JSON.stringify({ module: moduleSlug, turnstile_token: turnstileToken ?? null }),
   });
 }
 
@@ -741,4 +750,3 @@ export async function createCustomModule(data: { name: string; description?: str
 export async function deleteCustomModule(id: string): Promise<void> {
   return apiFetch(`/api/v1/modules/custom/${id}`, { method: "DELETE" });
 }
-

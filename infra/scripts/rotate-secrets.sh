@@ -6,7 +6,7 @@ set -euo pipefail
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║         KT Monetization OS — Secret Rotation             ║"
+echo "║         Nanovia OS — Secret Rotation                     ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  New values generated below.                             ║"
 echo "║  Update your .env.prod manually — this script            ║"

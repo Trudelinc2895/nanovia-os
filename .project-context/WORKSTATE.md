@@ -108,7 +108,7 @@
 ## COMMANDE DE DÉMARRAGE API
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 $env:PYTHONPATH = "backend"
 uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 ```
@@ -216,6 +216,7 @@ uvicorn api.main:app --host 127.0.0.1 --port 8010 --reload
 | Dossier | Rôle | À utiliser |
 |---------|------|-----------|
 | monorepo legacy archivé | Ancien squelette | Référence architecture seulement |
-| `kt-monetization-os/` | OS de monétisation — actif | **C'est celui-ci** |
-| `kt-monetization-os-needed-copy-.../` | Backup identique | Ignorer |
+| `nanovia-os/` | OS de monétisation — actif | **C'est celui-ci** |
+| `nanovia-os-needed-copy-.../` | Backup identique | Ignorer |
 | clean extract legacy | Extract minimal | Ignorer |
+

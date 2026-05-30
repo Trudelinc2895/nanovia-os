@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================
-# KT Monetization OS — VPS Rescue Recovery Script
+# Nanovia OS — VPS Rescue Recovery Script
 # Run this INSIDE rescue mode SSH session
 # ============================================================
 set -e
 
-echo "=== KT OS VPS Recovery ==="
+echo "=== Nanovia OS VPS Recovery ==="
 echo "Step 1: Finding data disk..."
 lsblk -f
 
@@ -28,7 +28,7 @@ mount $DISK /mnt 2>/dev/null || true
 mount -t ext4 $DISK /mnt 2>/dev/null || true
 
 echo "Step 3: Verifying KT project on disk..."
-ls /mnt/opt/kt-monetization-os/ 2>/dev/null && echo "PROJECT FOUND" || echo "PROJECT NOT FOUND"
+ls /mnt/opt/nanovia-os/ 2>/dev/null && echo "PROJECT FOUND" || echo "PROJECT NOT FOUND"
 
 echo "Step 4: Resetting root password..."
 for fs in proc sys dev dev/pts; do
@@ -50,3 +50,4 @@ echo "=== DONE. NOW:"
 echo "1. Go to OVH Manager > VPS > Boot > Hard Disk (normal mode)"
 echo "2. Click Restart VPS"
 echo "3. Wait 2 min then SSH: ssh -i ~/.ssh/id_rsa root@167.114.155.166"
+

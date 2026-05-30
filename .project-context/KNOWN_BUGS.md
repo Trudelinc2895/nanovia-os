@@ -57,5 +57,6 @@
 
 ## ℹ️ CONTEXTE
 
-- `C:\Users\Alienware\kt-monetization-os\` → repo actif
-- `C:\Users\Alienware\kt-monetization-os-needed-copy-20260327-112659\` → backup local à ignorer
+- `C:\Users\Alienware\nanovia-os\` → repo actif
+- `C:\Users\Alienware\nanovia-os-needed-copy-20260327-112659\` → backup local à ignorer
+

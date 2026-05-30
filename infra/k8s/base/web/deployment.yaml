@@ -30,7 +30,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: web
-          image: ghcr.io/trudelinc2895/kt-monetization-os/web:latest
+          image: ghcr.io/trudelinc2895/nanovia-os/web:latest
           ports:
             - containerPort: 3000
               name: http
@@ -55,3 +55,4 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 3
+

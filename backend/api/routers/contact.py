@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, EmailStr, field_validator
 
 from api.services.email_service import _send as send_email
+from api.services.turnstile_service import enforce_turnstile
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,6 +36,7 @@ class ContactRequest(BaseModel):
     email: EmailStr
     subject: str
     message: str
+    turnstile_token: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -71,6 +73,7 @@ async def contact_form(body: ContactRequest, request: Request):
     Always returns 200 to avoid enumeration.
     Logs submission regardless of email delivery.
     """
+    await enforce_turnstile(request, body.turnstile_token, surface="contact")
     ip = request.client.host if request.client else "unknown"
     subject_label = SUBJECTS.get(body.subject, body.subject)
 

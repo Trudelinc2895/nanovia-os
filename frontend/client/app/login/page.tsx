@@ -5,15 +5,19 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AuthApiDiagnostic } from "@/components/auth-api-diagnostic";
 import { AuthEntryWarning } from "@/components/auth-entry-warning";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { useAuth } from "@/lib/auth-context";
 import { verify2FALogin } from "@/lib/api";
 import { Button, Card, Input } from "@/components/ui";
+
+const TURNSTILE_ENABLED = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   // 2FA step state
   const [requires2FA, setRequires2FA] = useState(false);
@@ -30,9 +34,13 @@ export default function LoginPage() {
       setError("Veuillez remplir tous les champs.");
       return;
     }
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Valide la protection anti-bot avant de continuer.");
+      return;
+    }
     setLoading(true);
     try {
-      const result = await login(email, password);
+      const result = await login(email, password, turnstileToken);
       // login() in auth-context calls apiLogin and then getMe()
       // But we need to handle 2FA — override with raw API call here
       if ((result as any)?.requires_2fa) {
@@ -181,6 +189,8 @@ export default function LoginPage() {
             <Button type="submit" variant="primary" fullWidth loading={loading}>
               Se connecter
             </Button>
+
+            <TurnstileWidget action="login" onTokenChange={setTurnstileToken} />
 
             <p className="text-center text-sm text-gray-500">
               Pas de compte ?{" "}

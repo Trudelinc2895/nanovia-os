@@ -16,8 +16,11 @@ import {
   type UsageStats,
   type AddonPublic,
 } from "@/lib/api";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { Button, buttonVariants, Badge, Card } from "@/components/ui";
 import { getPlanBadgeVariant } from "@/lib/monetization";
+
+const TURNSTILE_ENABLED = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
 function UsageBar({ count, limit, pct }: { count: number; limit: number; pct: number }) {
   const isUnlimited = limit === -1;
@@ -46,6 +49,7 @@ export default function BillingPage() {
   const [addons, setAddons] = useState<AddonPublic[]>([]);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -64,10 +68,14 @@ export default function BillingPage() {
   }, [user]);
 
   const handleSubscribe = async (planSlug: string, cadence: "monthly" | "yearly") => {
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Valide la protection Cloudflare avant de lancer le paiement.");
+      return;
+    }
     setActionLoading(planSlug + "_" + cadence);
     setError(null);
     try {
-      const { url } = await createCheckoutSession(planSlug, cadence);
+      const { url } = await createCheckoutSession(planSlug, cadence, turnstileToken);
       if (url) window.location.href = url;
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur checkout");
@@ -77,9 +85,13 @@ export default function BillingPage() {
   };
 
   const handleAddon = async (slug: string) => {
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Valide la protection Cloudflare avant de lancer le paiement.");
+      return;
+    }
     setActionLoading(slug);
     try {
-      const { url } = await createAddonCheckout(slug);
+      const { url } = await createAddonCheckout(slug, turnstileToken);
       if (url) window.location.href = url;
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur addon");
@@ -89,9 +101,13 @@ export default function BillingPage() {
   };
 
   const handlePortal = async () => {
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Valide la protection Cloudflare avant d'ouvrir le portail.");
+      return;
+    }
     setActionLoading("portal");
     try {
-      const { url } = await createPortalSession();
+      const { url } = await createPortalSession(turnstileToken);
       if (url) window.location.href = url;
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur portail");
@@ -130,6 +146,18 @@ export default function BillingPage() {
         {error && (
           <div className="rounded-lg bg-danger/10 border border-danger/30 text-danger-text p-3 text-sm">{error}</div>
         )}
+
+        <Card variant="outlined">
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">Verification Cloudflare</h2>
+              <p className="text-sm text-text-secondary">
+                Requise avant toute action Stripe sensible.
+              </p>
+            </div>
+            <TurnstileWidget action="billing_checkout" onTokenChange={setTurnstileToken} />
+          </div>
+        </Card>
 
         {usage && usage.usage_pct >= 80 && (
           <div className={`rounded-xl border p-4 flex items-start gap-3 ${
@@ -278,4 +306,3 @@ export default function BillingPage() {
     </div>
   );
 }
-

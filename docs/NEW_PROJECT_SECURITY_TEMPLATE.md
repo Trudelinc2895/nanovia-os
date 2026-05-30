@@ -37,8 +37,8 @@ EOF
 mkdir -p .github/workflows src tests infra/docker docs
 
 # Copier les templates
-cp /path/to/kt-monetization-os/.github/workflows/security.yml .github/workflows/
-cp /path/to/kt-monetization-os/docs/SECURITY_CHECKLIST.md docs/
+cp /path/to/nanovia-os/.github/workflows/security.yml .github/workflows/
+cp /path/to/nanovia-os/docs/SECURITY_CHECKLIST.md docs/
 ```
 
 ## 2. .env.example OBLIGATOIRE
@@ -203,7 +203,7 @@ api.{$DOMAIN} {
 
 ## 5. GITHUB ACTIONS OBLIGATOIRES
 
-Copier depuis `kt-monetization-os/.github/workflows/security.yml` :
+Copier depuis `nanovia-os/.github/workflows/security.yml` :
 - Gitleaks + TruffleHog (secrets)
 - Bandit + pip-audit (SAST Python)
 - CodeQL (analyse sémantique)
@@ -252,3 +252,4 @@ updates:
     schedule:
       interval: "weekly"
 ```
+

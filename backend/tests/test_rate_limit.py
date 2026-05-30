@@ -164,6 +164,18 @@ def test_load_multiplier_disabled_in_development(monkeypatch):
     assert _get_load_multiplier() == 1.0
 
 
+def test_contact_route_has_strict_rate_limit():
+    from api.main import _RATE_LIMIT_RULES
+
+    assert _RATE_LIMIT_RULES["/api/v1/contact"] == {
+        "scope": "ip",
+        "limit": 5,
+        "window": 300,
+        "bucket": "contact",
+        "detail": "Trop de messages de contact. Réessaie dans 5 minutes.",
+    }
+
+
 # ── health — /live endpoint ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio

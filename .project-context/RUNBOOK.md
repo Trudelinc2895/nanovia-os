@@ -14,7 +14,7 @@
 
 ### Installer les dépendances
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 pip install -r backend/requirements.txt
 ```
 
@@ -32,7 +32,7 @@ pip install -r backend/requirements.txt
 
 ### Lancer l'API (dev)
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 $env:PYTHONPATH = "backend"
 uvicorn api.main:app --reload --host 127.0.0.1 --port 8010
 ```
@@ -52,7 +52,7 @@ Ouvrir dans un navigateur : http://localhost:8010/docs
 
 ### Installer les dépendances
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os\frontend\client
+cd C:\Users\Alienware\nanovia-os\frontend\client
 npm install
 ```
 
@@ -101,7 +101,7 @@ stripe trigger checkout.session.completed
 ## 4. Bootstrap Stripe (créer produits/prix — 1 fois)
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 python stripe/setup_stripe.py
 # → Génère stripe/stripe_ids.json avec les IDs
 # → Copier les price_ids dans .env
@@ -112,7 +112,7 @@ python stripe/setup_stripe.py
 ## 5. Démarrage Complet (Docker — prod)
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 
 # Production public stack
 Copy-Item infra\env\.env.example .env.production
@@ -207,7 +207,7 @@ Get-Content logs\api.log -Tail 50
 Get-Content logs\api_err.log -Tail 20
 
 # Tester la config Python
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 python -c "import sys; sys.path.insert(0,'backend'); from api.config import settings; print(settings.APP_NAME)"
 
 # Vérifier les routes disponibles
@@ -486,3 +486,4 @@ kubectl logs -n nanovia deploy/nanovia-api --tail=100 | grep '"traceId"'
 3. If `scrape_worker_active` is `0`, restart the worker deployment and confirm fresh heartbeats appear before restoring traffic assumptions.
 4. If logs lost correlation IDs, verify upstream proxy still forwards `X-Request-ID` / `X-Correlation-ID` or let the API generate them.
 5. If logs show secrets, inspect recent logger changes touching dict payloads, auth headers, or exception formatting, then roll back the offending deploy.
+

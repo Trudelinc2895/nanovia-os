@@ -1,4 +1,4 @@
--- KT Monetization OS — PostgreSQL Schema v1.0
+-- Nanovia OS — PostgreSQL Schema v1.0
 -- Production-grade: RLS, indexes, triggers, audit
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";

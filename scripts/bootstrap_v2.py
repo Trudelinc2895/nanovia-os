@@ -5,7 +5,7 @@ import paramiko, time, sys, os
 HOST = '167.114.155.166'
 USER = 'root'
 KEY_PATH = r'C:\Users\Alienware\.ssh\id_rsa'
-ENV_PATH = r'C:\Users\Alienware\kt-monetization-os\.env'
+ENV_PATH = r'C:\Users\Alienware\nanovia-os\.env'
 
 BOOTSTRAP_SH = r"""#!/bin/bash
 set -e
@@ -54,18 +54,18 @@ echo "  fail2ban OK"
 
 # 5. Clone repo
 echo "[5/7] Clone repo..."
-mkdir -p /opt/kt-monetization-os
-if [ -d "/opt/kt-monetization-os/.git" ]; then
-  cd /opt/kt-monetization-os && git pull origin main
+mkdir -p /opt/nanovia-os
+if [ -d "/opt/nanovia-os/.git" ]; then
+  cd /opt/nanovia-os && git pull origin main
   echo "  Repo mis a jour"
 else
-  git clone https://github.com/Trudelinc2895/kt-monetization-os.git /opt/kt-monetization-os
+  git clone https://github.com/Trudelinc2895/nanovia-os.git /opt/nanovia-os
   echo "  Repo clone"
 fi
 
 # 6. Verifier .env
 echo "[6/7] Verification .env..."
-if [ -f "/opt/kt-monetization-os/.env" ]; then
+if [ -f "/opt/nanovia-os/.env" ]; then
   echo "  .env present OK"
 else
   echo "  ATTENTION: .env manquant! Sera copie apres."
@@ -73,7 +73,7 @@ fi
 
 # 7. Docker Compose
 echo "[7/7] Docker Compose up..."
-cd /opt/kt-monetization-os
+cd /opt/nanovia-os
 docker compose -f infra/docker-compose.prod.yml pull --quiet || true
 docker compose -f infra/docker-compose.prod.yml up -d --build
 sleep 5
@@ -99,7 +99,7 @@ with sftp.open('/tmp/kt_bootstrap.sh', 'w') as f:
 
 # Upload .env
 if os.path.exists(ENV_PATH):
-    sftp.put(ENV_PATH, '/opt/kt-monetization-os/.env')
+    sftp.put(ENV_PATH, '/opt/nanovia-os/.env')
     print("  .env pre-copie (si dossier existe)")
 sftp.close()
 
@@ -136,7 +136,7 @@ while time.time() - start < 600:  # max 10 min
 print("\n[POST] Copie .env finale...")
 if os.path.exists(ENV_PATH):
     sftp2 = ssh.open_sftp()
-    sftp2.put(ENV_PATH, '/opt/kt-monetization-os/.env')
+    sftp2.put(ENV_PATH, '/opt/nanovia-os/.env')
     sftp2.close()
     print("  .env copie sur VPS ✅")
 
@@ -148,3 +148,4 @@ print(result)
 
 ssh.close()
 print("\nDONE. VPS bootstrap complet.")
+

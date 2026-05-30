@@ -12,10 +12,10 @@ def run(cmd, timeout=30):
 
 # git pull + restart caddy only
 print('[1] git pull...')
-print(run('cd /opt/kt-monetization-os && git pull origin main 2>&1'))
+print(run('cd /opt/nanovia-os && git pull origin main 2>&1'))
 
 print('\n[2] Verify Caddyfile on VPS...')
-print(run('head -5 /opt/kt-monetization-os/infra/docker/Caddyfile'))
+print(run('head -5 /opt/nanovia-os/infra/docker/Caddyfile'))
 
 print('\n[3] Restart Caddy...')
 print(run('docker restart infra-caddy-1 2>&1'))
@@ -44,3 +44,4 @@ print(f'  API /health: {out}')
 
 ssh.close()
 print('\n=== DONE ===')
+

@@ -270,3 +270,79 @@ async def test_process_stripe_event_handles_trial_will_end():
     assert trial_mock.await_args.args[1] == sub
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[2] == "customer_subscription_trial_will_end"
+
+
+@pytest.mark.asyncio
+async def test_plan_checkout_omits_payment_method_types(monkeypatch):
+    from api.routers import billing as billing_router
+    from api.schemas.billing import CheckoutRequest
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.email = "checkout@test.com"
+    user.plan = "free"
+    user.stripe_customer_id = None
+
+    monkeypatch.setitem(billing_router.PLANS_CONFIG["pro"], "stripe_price_monthly", "price_pro_monthly")
+    monkeypatch.setattr(
+        billing_router,
+        "get_or_create_stripe_customer",
+        AsyncMock(return_value="cus_checkout"),
+    )
+
+    session = MagicMock()
+    session.url = "https://checkout.stripe.test/session"
+    create_mock = MagicMock(return_value=session)
+    monkeypatch.setattr(billing_router.stripe.checkout.Session, "create", create_mock)
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock(host="127.0.0.1")
+
+    response = await billing_router.create_checkout_session(
+        CheckoutRequest(plan="pro", interval="monthly"),
+        request,
+        user,
+        AsyncMock(),
+    )
+
+    assert response.url == session.url
+    assert "payment_method_types" not in create_mock.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_credit_checkout_omits_payment_method_types(monkeypatch):
+    from api.routers import billing as billing_router
+    from api.schemas.billing import CreditPurchaseRequest
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.email = "credits@test.com"
+    user.plan = "pro"
+    user.stripe_customer_id = None
+
+    monkeypatch.setattr(
+        billing_router,
+        "get_or_create_stripe_customer",
+        AsyncMock(return_value="cus_credits"),
+    )
+    monkeypatch.setattr(billing_router.settings, "STRIPE_CREDIT_PRICE_ID", "price_credits")
+    monkeypatch.setattr(billing_router.settings, "STRIPE_CREDIT_PACK_SIZE", 50)
+
+    session = MagicMock()
+    session.url = "https://checkout.stripe.test/credits"
+    create_mock = MagicMock(return_value=session)
+    monkeypatch.setattr(billing_router.stripe.checkout.Session, "create", create_mock)
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock(host="127.0.0.1")
+
+    response = await billing_router.purchase_credits(
+        CreditPurchaseRequest(quantity=2),
+        request,
+        user,
+        AsyncMock(),
+    )
+
+    assert response.url == session.url
+    assert response.credits_to_add == 100
+    assert "payment_method_types" not in create_mock.call_args.kwargs

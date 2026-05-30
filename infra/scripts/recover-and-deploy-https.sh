@@ -2,11 +2,11 @@
 # ============================================================
 # Nanovia OS — Recovery + HTTPS Deploy Script v3
 # Run ONCE after VPS recovery to restore everything
-# Usage: bash /opt/kt-monetization-os/infra/scripts/recover-and-deploy-https.sh
+# Usage: bash /opt/nanovia-os/infra/scripts/recover-and-deploy-https.sh
 # ============================================================
 set -e
 DOMAIN="nanovia.ca"
-APP_DIR="/opt/kt-monetization-os"
+APP_DIR="/opt/nanovia-os"
 ED25519_KEY="${ED25519_PUBKEY:-}"
 
 echo "══════════════════════════════════════════"
@@ -50,7 +50,7 @@ fi
 
 # ── STEP 4: Restore security services ───────────────────────
 echo "[4/9] Restarting security services..."
-for svc in fail2ban crowdsec kt-spy-agent kt-watchdog; do
+for svc in fail2ban crowdsec nanovia-spy-agent nanovia-watchdog; do
     systemctl start $svc 2>/dev/null && echo "  OK $svc" || echo "  SKIP $svc"
 done
 
@@ -113,7 +113,7 @@ echo "  OK Containers started"
 # ── STEP 9: Final status ─────────────────────────────────────
 echo "[9/9] Final status..."
 echo ""
-for svc in ufw fail2ban crowdsec kt-spy-agent kt-watchdog; do
+for svc in ufw fail2ban crowdsec nanovia-spy-agent nanovia-watchdog; do
     STATUS=$(systemctl is-active $svc 2>/dev/null || echo "inactive")
     [ "$STATUS" = "active" ] && echo "  OK $svc" || echo "  INFO $svc → $STATUS"
 done
@@ -136,3 +136,4 @@ else
     echo "  (optional) admin.nanovia.ca   -> 167.114.155.166"
     echo "  (optional) monitor.nanovia.ca -> 167.114.155.166"
 fi
+

@@ -33,7 +33,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: api
-          image: ghcr.io/trudelinc2895/kt-monetization-os/api:latest
+          image: ghcr.io/trudelinc2895/nanovia-os/api:latest
           ports:
             - containerPort: 8010
               name: http
@@ -89,3 +89,4 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+

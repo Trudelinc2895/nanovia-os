@@ -34,6 +34,7 @@ from api.models.audit import AuditLog
 from api.models.user import User
 from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserPublic, ForgotPasswordRequest, ResetPasswordRequest, TwoFASetupResponse, TwoFAEnableRequest, TwoFADisableRequest, TwoFALoginRequest, LoginResponse
 from api.services.email_service import send_welcome_email, send_password_reset_email, send_verification_email
+from api.services.turnstile_service import enforce_turnstile
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ def _set_refresh_cookie(response: FastAPIResponse, refresh_token: str) -> None:
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(body: RegisterRequest, request: Request, response: FastAPIResponse, db: DB):
+    await enforce_turnstile(request, body.turnstile_token, surface="register")
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Cet email est déjà utilisé")
@@ -134,6 +136,7 @@ async def register(body: RegisterRequest, request: Request, response: FastAPIRes
 
 @router.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request, response: FastAPIResponse, db: DB):
+    await enforce_turnstile(request, body.turnstile_token, surface="login")
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
     ip = request.client.host if request.client else None

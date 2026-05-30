@@ -9,14 +9,14 @@ def run(cmd, timeout=30):
     return (o.read() + e.read()).decode().strip()
 
 # Verify .env has HS256
-print("JWT_ALGORITHM in .env:", run("grep JWT_ALGORITHM /opt/kt-monetization-os/.env"))
+print("JWT_ALGORITHM in .env:", run("grep JWT_ALGORITHM /opt/nanovia-os/.env"))
 
 # Force recreate api container to re-read env_file
 print("\nRecreating api container (to reload .env)...")
 result = run(
-    "cd /opt/kt-monetization-os && "
+    "cd /opt/nanovia-os && "
     "docker compose -f infra/docker-compose.prod.yml "
-    "--env-file /opt/kt-monetization-os/.env "
+    "--env-file /opt/nanovia-os/.env "
     "up -d --force-recreate api 2>&1",
     timeout=60
 )
@@ -33,3 +33,4 @@ print("\nStartup logs:")
 print(run("docker logs infra-api-1 --tail 5 2>&1"))
 
 ssh.close()
+

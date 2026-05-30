@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/kt-monetization-os"
+APP_DIR="/opt/nanovia-os"
 DEPLOY_USER="deploy"
 LOG="/var/log/setup-deploy-user.log"
 
@@ -71,15 +71,15 @@ else
 fi
 
 # ── 5. Backup cron ────────────────────────────────────────────────────────────
-CRON_FILE="/etc/cron.d/kt-backup"
+CRON_FILE="/etc/cron.d/nanovia-backup"
 if [[ -f "$CRON_FILE" ]]; then
   log "Cron job $CRON_FILE already exists — skipping"
 else
   cat > "$CRON_FILE" <<'CRON'
-# KT Monetization OS — daily backup at 03:00 UTC
+# Nanovia OS — daily backup at 03:00 UTC
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 3 * * * deploy bash /opt/kt-monetization-os/infra/scripts/backup.sh >> /var/log/kt-backup.log 2>&1
+0 3 * * * deploy bash /opt/nanovia-os/infra/scripts/backup.sh >> /var/log/nanovia-backup.log 2>&1
 CRON
   chmod 644 "$CRON_FILE"
   log "Created backup cron: $CRON_FILE"
@@ -91,7 +91,7 @@ if [[ -f "$LOGROTATE_FILE" ]]; then
   log "Logrotate config already exists — skipping"
 else
   cat > "$LOGROTATE_FILE" <<'LOGROTATE'
-/var/log/caddy/*.log /var/log/kt-backup.log {
+/var/log/caddy/*.log /var/log/nanovia-backup.log {
     daily
     rotate 30
     compress
@@ -168,3 +168,4 @@ log "  1. In a new terminal: ssh deploy@<VPS_IP> — confirm access"
 log "  2. Edit /etc/ssh/sshd_config: change 'AllowUsers root deploy' → 'AllowUsers deploy'"
 log "  3. systemctl restart sshd"
 log "  4. Confirm GitHub Actions deploy succeeds with VPS_SSH_PRIVATE_KEY"
+

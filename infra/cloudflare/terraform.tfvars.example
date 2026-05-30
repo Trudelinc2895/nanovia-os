@@ -1,0 +1,8 @@
+cloudflare_api_token = "replace-me"
+cloudflare_zone_id   = "replace-me"
+root_domain          = "nanovia.ca"
+origin_ipv4          = "167.114.155.166"
+proxied              = true
+enable_admin_record  = true
+enable_vps_record    = true
+turnstile_widget_name = "Nanovia"

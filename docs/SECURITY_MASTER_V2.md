@@ -1,7 +1,7 @@
-# 🛡️ SECURITY MASTER V2 — KT Monetization OS
+# 🛡️ SECURITY MASTER V2 — Nanovia OS
 **Version:** 2.0 | **Date:** 2026-03-28 | **Classificaton:** INTERNE CONFIDENTIEL  
-**Propriétaire:** Kevin Trudel — TKVerse / Trudelinc2895  
-**Périmètre:** tkverse.ca · VPS OVH (167.114.155.166) · GitHub · Tous futurs projets
+**Propriétaire:** Kevin Trudel — Nanovia / Trudelinc2895  
+**Périmètre:** nanovia.ca · VPS OVH (167.114.155.166) · GitHub · Tous futurs projets
 
 ---
 
@@ -49,7 +49,7 @@
 ### 🟢 FAIBLE (monitoring continu)
 | Risque | Impact | Vecteur | Statut |
 |--------|--------|---------|--------|
-| Attaques honeypot | Reconnaissance | Internet | ✅ kt-spy-agent actif, 36 IPs bannies |
+| Attaques honeypot | Reconnaissance | Internet | ✅ nanovia-spy-agent actif, 36 IPs bannies |
 | Forks malveillants | Réputation | GitHub | ✅ Repo privé ou audit régulier |
 | Dépendances obsolètes | Tech debt vulnérable | Indirect | ✅ Dependabot actif |
 
@@ -64,34 +64,34 @@
 - [x] Port 25 Postfix fermé
 - [x] Kernel hardening (rp_filter, ASLR, log_martians)
 - [x] fail2ban actif avec 36 IPs bannies
-- [x] Honeypot kt-spy-agent sur ports 21/23/445/1433/3389/8888
+- [x] Honeypot nanovia-spy-agent sur ports 21/23/445/1433/3389/8888
 - [x] Backup AES-256-CBC PostgreSQL quotidien 02h00
 - [x] CI/CD sécurité: Gitleaks, TruffleHog, CodeQL, Trivy, Checkov, Hadolint
 - [x] Dependabot activé (pip/npm/docker/github-actions)
 - [x] 9 containers stack stable 3h+ uptime
-- [x] Autostart systemd (kt-stack + kt-dns-watch + kt-spy-agent)
+- [x] Autostart systemd (nanovia-stack + nanovia-dns-watch + nanovia-spy-agent)
 - [x] GitHub requirements.txt CVEs patchés
 
 ### 📅 30 JOURS (d'ici fin avril 2026)
 ```
 PRIORITÉ 1 — DNS + HTTPS
 [ ] Ajouter les 6 records A dans OVH Manager:
-    tkverse.ca → 167.114.155.166
-    www.tkverse.ca → 167.114.155.166
-    api.tkverse.ca → 167.114.155.166
-    app.tkverse.ca → 167.114.155.166
-    admin.tkverse.ca → 167.114.155.166
-    monitor.tkverse.ca → 167.114.155.166
-[ ] HTTPS auto-activé par kt-dns-watch.service (aucune action supplémentaire)
+    nanovia.ca → 167.114.155.166
+    www.nanovia.ca → 167.114.155.166
+    api.nanovia.ca → 167.114.155.166
+    app.nanovia.ca → 167.114.155.166
+    admin.nanovia.ca → 167.114.155.166
+    monitor.nanovia.ca → 167.114.155.166
+[ ] HTTPS auto-activé par nanovia-dns-watch.service (aucune action supplémentaire)
 
 PRIORITÉ 2 — Secrets production
 [ ] Remplacer clés Stripe test → LIVE dans .env
 [ ] Remplir OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, SMTP_USER/PASSWORD
-[ ] Backup de /etc/kt-backup.key dans gestionnaire de mots de passe (CRITIQUE)
+[ ] Backup de /etc/nanovia-backup.key dans gestionnaire de mots de passe (CRITIQUE)
 
 PRIORITÉ 3 — Backup off-VPS
 [ ] Configurer backup secondaire: Backblaze B2 (gratuit jusqu'à 10GB) OU Rclone S3
-[ ] Commande: rclone copy /opt/backups/kt-monetization b2:kt-backups/
+[ ] Commande: rclone copy /opt/backups/nanovia b2:nanovia-backups/
 [ ] Tester restore complet backup chiffré
 
 PRIORITÉ 4 — MFA et comptes
@@ -109,7 +109,7 @@ LOGS ET MONITORING
 [ ] Dashboard Grafana sécurité: bans fail2ban, erreurs auth, anomalies
 
 SÉCURITÉ APPLICATIVE
-[ ] Test de pénétration léger: OWASP ZAP scan sur api.tkverse.ca
+[ ] Test de pénétration léger: OWASP ZAP scan sur api.nanovia.ca
 [ ] Vérifier headers HTTP: X-Frame-Options, CSP, HSTS
 [ ] Audit CORS: list explicite des origins autorisés
 [ ] Rotation des secrets (SECRET_KEY, POSTGRES_PASSWORD) — 90 jours
@@ -120,7 +120,7 @@ INFRASTRUCTURE
 [ ] UFW audit: `ufw status numbered` → supprimer règles inutiles
 
 CONFORMITÉ
-[ ] Privacy Policy page sur tkverse.ca (RGPD si utilisateurs UE)
+[ ] Privacy Policy page sur nanovia.ca (RGPD si utilisateurs UE)
 [ ] Terms of Service live
 [ ] Cookie consent banner si analytics activé
 ```
@@ -155,7 +155,7 @@ GOUVERNANCE
 /etc/ssh/sshd_config: PasswordAuthentication no
 
 # Fichier secrets
-chmod 600 /opt/kt-monetization-os/.env
+chmod 600 /opt/nanovia-os/.env
 
 # Désactivation services dangereux
 systemctl mask nftables
@@ -170,13 +170,13 @@ ufw deny 25/tcp
   net.ipv4.tcp_syncookies = 1
 
 # Autostart
-systemctl enable --now kt-stack.service
-systemctl enable --now kt-dns-watch.service
-systemctl enable --now kt-spy-agent.service (honeypot)
+systemctl enable --now nanovia-stack.service
+systemctl enable --now nanovia-dns-watch.service
+systemctl enable --now nanovia-spy-agent.service (honeypot)
 
 # Backup quotidien
-crontab: 0 2 * * * /usr/local/bin/kt-backup backup
-crontab: 0 3 * * 0 /usr/local/bin/kt-backup test
+crontab: 0 2 * * * /usr/local/bin/nanovia-backup backup
+crontab: 0 3 * * 0 /usr/local/bin/nanovia-backup test
 ```
 
 ### Sur GitHub
@@ -228,10 +228,10 @@ echo "POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '=+/')" >> $PROJECT_NA
 echo "REDIS_PASSWORD=$(openssl rand -base64 24 | tr -d '=+/')" >> $PROJECT_NAME/.env
 chmod 600 $PROJECT_NAME/.env
 
-# 4. Copier workflows sécurité depuis kt-monetization-os
-cp /path/to/kt-monetization-os/.github/workflows/security.yml $PROJECT_NAME/.github/workflows/
-cp /path/to/kt-monetization-os/.github/dependabot.yml $PROJECT_NAME/.github/
-cp /path/to/kt-monetization-os/docs/SECURITY_CHECKLIST.md $PROJECT_NAME/docs/
+# 4. Copier workflows sécurité depuis nanovia-os
+cp /path/to/nanovia-os/.github/workflows/security.yml $PROJECT_NAME/.github/workflows/
+cp /path/to/nanovia-os/.github/dependabot.yml $PROJECT_NAME/.github/
+cp /path/to/nanovia-os/docs/SECURITY_CHECKLIST.md $PROJECT_NAME/docs/
 
 echo "✅ Projet $PROJECT_NAME initialisé avec sécurité de base"
 echo "⚠️  RAPPEL: Ajouter les vraies clés API dans .env AVANT de coder"
@@ -365,7 +365,7 @@ RÉPONSE IMMÉDIATE (< 5 minutes):
 
 2. Générer nouvelle clé + mettre à jour .env sur VPS:
    ssh root@167.114.155.166
-   nano /opt/kt-monetization-os/.env
+   nano /opt/nanovia-os/.env
    docker compose restart api
 
 3. Audit d'impact (< 30 minutes):
@@ -492,7 +492,7 @@ check "9 containers en marche" \
 check "Health check API répond" \
   "curl -sf http://167.114.155.166/health"
 check "Backup actif" \
-  "ssh root@167.114.155.166 'crontab -l | grep -q kt-backup'"
+  "ssh root@167.114.155.166 'crontab -l | grep -q nanovia-backup'"
 
 echo ""
 echo "=== RÉSULTAT: $PASS ✅ / $FAIL ❌ ==="
@@ -507,18 +507,18 @@ exit $FAIL
 > Copier-coller ce prompt pour briefer rapidement une IA ou un membre d'équipe sécurité:
 
 ```
-Tu travailles sur le projet KT Monetization OS (Kevin Trudel / TKVerse).
+Tu travailles sur le projet Nanovia OS (Kevin Trudel / Nanovia).
 Stack: FastAPI + PostgreSQL + Redis + Caddy + Docker sur VPS OVH Ubuntu 24.04.
-Repo: github.com/Trudelinc2895/kt-monetization-os
+Repo: github.com/Trudelinc2895/nanovia-os
 VPS: 167.114.155.166 (SSH key only, root@)
 
 CONTEXTE SÉCURITÉ ACTUEL:
 - SSH: clé ed25519 uniquement, PasswordAuth désactivé
 - Firewall: UFW actif, nftables masqué, fail2ban actif
-- Honeypot: kt-spy-agent sur ports 21/23/445/1433/3389/8888
-- Backup: AES-256-CBC quotidien 02h00, clé dans /etc/kt-backup.key
+- Honeypot: nanovia-spy-agent sur ports 21/23/445/1433/3389/8888
+- Backup: AES-256-CBC quotidien 02h00, clé dans /etc/nanovia-backup.key
 - CI/CD: Gitleaks + TruffleHog + CodeQL + Trivy + Checkov + Hadolint
-- DNS: tkverse.ca NXDOMAIN (OVH records à ajouter), HTTPS prêt via kt-dns-watch.service
+- DNS: nanovia.ca NXDOMAIN (OVH records à ajouter), HTTPS prêt via nanovia-dns-watch.service
 
 RÈGLES ABSOLUES:
 1. JAMAIS committer .env, clés, tokens
@@ -552,30 +552,30 @@ ssh root@167.114.155.166 "sqlite3 /var/lib/kt-spy/threats.db 'SELECT * FROM conn
 
 # ===== BACKUP =====
 # Déclencher backup manuel
-ssh root@167.114.155.166 "/usr/local/bin/kt-backup backup"
+ssh root@167.114.155.166 "/usr/local/bin/nanovia-backup backup"
 
 # Tester intégrité du backup
-ssh root@167.114.155.166 "/usr/local/bin/kt-backup test"
+ssh root@167.114.155.166 "/usr/local/bin/nanovia-backup test"
 
 # Voir backups disponibles
-ssh root@167.114.155.166 "ls -lh /opt/backups/kt-monetization/"
+ssh root@167.114.155.166 "ls -lh /opt/backups/nanovia/"
 
 # ===== SECRETS =====
 # Générer un nouveau secret sécurisé
 openssl rand -hex 32
 
 # Voir la clé de chiffrement backup (à sauvegarder off-VPS!)
-ssh root@167.114.155.166 "cat /etc/kt-backup.key"
+ssh root@167.114.155.166 "cat /etc/nanovia-backup.key"
 
 # Rotation du SECRET_KEY
-ssh root@167.114.155.166 "sed -i 's/SECRET_KEY=.*/SECRET_KEY=$(openssl rand -hex 32)/' /opt/kt-monetization-os/.env && docker compose restart api"
+ssh root@167.114.155.166 "sed -i 's/SECRET_KEY=.*/SECRET_KEY=$(openssl rand -hex 32)/' /opt/nanovia-os/.env && docker compose restart api"
 
 # ===== DNS =====
 # Vérifier propagation DNS
-nslookup tkverse.ca 8.8.8.8
+nslookup nanovia.ca 8.8.8.8
 
 # Statut DNS watcher
-ssh root@167.114.155.166 "systemctl status kt-dns-watch && journalctl -u kt-dns-watch -n 20"
+ssh root@167.114.155.166 "systemctl status nanovia-dns-watch && journalctl -u nanovia-dns-watch -n 20"
 ```
 
 ---
@@ -583,3 +583,4 @@ ssh root@167.114.155.166 "systemctl status kt-dns-watch && journalctl -u kt-dns-
 *Dernière mise à jour: 2026-03-28*  
 *Prochaine révision sécurité: Q2 2026 (juin)*  
 *Score actuel: 73/100 → Cible 95/100*
+

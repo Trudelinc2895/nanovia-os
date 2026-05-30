@@ -36,6 +36,7 @@ from api.services.module_registry import (
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+stripe.api_version = "2026-04-22.dahlia"
 
 # ─── Plan configuration — server-side ONLY, never from client ────────────────
 def _build_plans() -> dict[str, dict]:

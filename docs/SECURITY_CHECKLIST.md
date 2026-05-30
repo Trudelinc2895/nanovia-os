@@ -65,7 +65,7 @@
 - [ ] **C5** CodeQL activé sur le repo
 
 ## 🏗️ SECTION 8 — INFRASTRUCTURE
-- [ ] **I1** `kt-stack.service` autostart activé: `systemctl is-enabled kt-stack`
+- [ ] **I1** `nanovia-stack.service` autostart activé: `systemctl is-enabled nanovia-stack`
 - [ ] **I2** `unattended-upgrades` actif pour patches automatiques
 - [ ] **I3** Disque < 80% plein: `df -h /`
 - [ ] **I4** Backup clé SSH stockée hors VPS (local + gestionnaire de mots de passe)
@@ -85,3 +85,4 @@ ssh root@167.114.155.166 "
 
 ---
 *Checklist générée le 2026-03-28 — Mise à jour requise à chaque nouvelle surface d'attaque*
+

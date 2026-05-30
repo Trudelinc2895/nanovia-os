@@ -1,4 +1,4 @@
-# Security Policy — KT Verse
+# Security Policy — Nanovia
 
 ## Supported Versions
 
@@ -10,7 +10,7 @@
 
 **DO NOT** open a public GitHub issue for security vulnerabilities.
 
-**Contact:** security@tkverse.ca  
+**Contact:** security@nanovia.ca  
 **Response time:** 24h acknowledgement, 72h initial assessment
 
 Please include:

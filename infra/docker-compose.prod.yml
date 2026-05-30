@@ -25,7 +25,7 @@ services:
       # Restrict private admin surfaces to this IP (CIDR). Default = localhost only.
       ADMIN_ALLOWED_IP: ${ADMIN_ALLOWED_IP:-127.0.0.1/32}
     depends_on: [api]
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     cap_add: ["NET_BIND_SERVICE"]
     security_opt: ["no-new-privileges:true"]
@@ -41,6 +41,7 @@ services:
       dockerfile: infra/docker/web.Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
         BACKEND_INTERNAL_URL: http://api:8010
         API_BASE_URL: http://api:8010
     restart: unless-stopped
@@ -49,6 +50,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
       BACKEND_INTERNAL_URL: http://api:8010
       API_BASE_URL: http://api:8010
     healthcheck:
@@ -56,7 +58,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -80,7 +82,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -107,7 +109,7 @@ services:
       timeout: 5s
       retries: 3
     depends_on: [postgres, redis]
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -131,7 +133,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -148,7 +150,7 @@ services:
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on: [redis]
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -172,7 +174,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [kt-net]
+    networks: [nanovia-net]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
@@ -192,7 +194,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [kt-net]
+    networks: [nanovia-net]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
@@ -214,7 +216,7 @@ services:
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     depends_on: [node-exporter, postgres-exporter, redis-exporter]
-    networks: [kt-net]
+    networks: [nanovia-net]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
@@ -235,7 +237,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-    networks: [kt-net]
+    networks: [nanovia-net]
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
@@ -257,7 +259,7 @@ services:
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on: [prometheus]
-    networks: [kt-net]
+    networks: [nanovia-net]
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
@@ -275,7 +277,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
-    networks: [kt-net]
+    networks: [nanovia-net]
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
@@ -287,7 +289,7 @@ services:
     environment:
       DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     depends_on: [postgres]
-    networks: [kt-net]
+    networks: [nanovia-net]
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
@@ -300,7 +302,7 @@ services:
       REDIS_ADDR: redis://redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on: [redis]
-    networks: [kt-net]
+    networks: [nanovia-net]
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
@@ -315,5 +317,6 @@ volumes:
   alertmanager_data:
 
 networks:
-  kt-net:
+  nanovia-net:
     driver: bridge
+

@@ -1,5 +1,5 @@
 # 📋 RAPPORT COMPLET — COLLABORATION JOUR 1 À AUJOURD'HUI
-## Kevin Trudel × GitHub Copilot | Projet: KT Monetization OS
+## Kevin Trudel × GitHub Copilot | Projet: Nanovia OS
 ## Généré: 2026-03-27
 
 ---
@@ -18,9 +18,9 @@ ensemble un **SaaS de niveau professionnel complet** avec :
 - ✅ 59 todos complétés sur GitHub
 
 **Stack technique:** Python/FastAPI + Next.js + PostgreSQL + Redis + Caddy + Docker
-**Repo:** github.com/Trudelinc2895/kt-monetization-os
+**Repo:** github.com/Trudelinc2895/nanovia-os
 **VPS:** OVH Ubuntu 24.04 — 167.114.155.166
-**Domaine cible:** tkverse.ca
+**Domaine cible:** nanovia.ca
 
 ---
 
@@ -30,7 +30,7 @@ ensemble un **SaaS de niveau professionnel complet** avec :
 ```
 ✅ Vision définie: 10 modules IA monetisables
 ✅ Architecture complète planifiée (backend + frontend + infra)
-✅ Repo GitHub créé: Trudelinc2895/kt-monetization-os
+✅ Repo GitHub créé: Trudelinc2895/nanovia-os
 ✅ Branches par module créées (feature/module-1 à feature/module-10)
 ✅ Structure de fichiers complète:
     backend/api/        → FastAPI
@@ -144,7 +144,7 @@ Redis queue pour tâches asynchrones
 
 ### Ce qui a été fait
 ```
-✅ Next.js landing page (tkverse.ca)
+✅ Next.js landing page (nanovia.ca)
     - Hero section avec CTA
     - Section pricing (Free/Pro/Business)
     - Section fonctionnalités 10 modules
@@ -206,7 +206,7 @@ Redis queue pour tâches asynchrones
 ✅ Sécurité Docker:
     - Tous ports liés à 127.0.0.1 (pas 0.0.0.0)
     - Seul Caddy expose 80/443 publiquement
-    - Réseau interne kt-net isolé
+    - Réseau interne nanovia-net isolé
 ```
 
 ---
@@ -216,10 +216,10 @@ Redis queue pour tâches asynchrones
 ### Ce qui a été fait
 ```
 ✅ Caddyfile complet:
-    tkverse.ca + www   → Next.js web
-    api.tkverse.ca     → FastAPI (rate limit 100/min)
-    admin.tkverse.ca   → Panel admin
-    monitor.tkverse.ca → Grafana
+    nanovia.ca + www   → Next.js web
+    api.nanovia.ca     → FastAPI (rate limit 100/min)
+    admin.nanovia.ca   → Panel admin
+    monitor.nanovia.ca → Grafana
 
 ✅ Let's Encrypt auto-TLS (ACME)
 ✅ HTTP → HTTPS redirect permanent
@@ -378,7 +378,7 @@ SECURITY_MASTER.md                     → Audit sécurité + playbooks complets
    → SSH port 22 FERMÉ (VPS offline temporairement)
    → Dès que réinstallé: lancer fresh-install.sh
 
-❌ DNS: tkverse.ca → NXDOMAIN
+❌ DNS: nanovia.ca → NXDOMAIN
    → OVH Manager → Zone DNS → 6 A records → 167.114.155.166
    
 ❌ SSH: MaxAuthTries actuellement = 2 (sera changé à 5)
@@ -393,9 +393,9 @@ SECURITY_MASTER.md                     → Audit sécurité + playbooks complets
 1. VPS terminé de réinstaller → OVH envoie email avec mot de passe
 2. SSH avec ed25519 key (devrait marcher si clé ajoutée à l'install)
    OU mot de passe email OVH → une fois connecté:
-3. curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/kt-monetization-os/main/infra/scripts/fresh-install.sh | bash
+3. curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/nanovia-os/main/infra/scripts/fresh-install.sh | bash
 4. OVH Manager → Zone DNS → ajouter 6 A records
-5. tkverse.ca = LIVE en HTTPS
+5. nanovia.ca = LIVE en HTTPS
 
 MODULES SUIVANTS À BUILDER:
   Module 3: Micro-SaaS Builder

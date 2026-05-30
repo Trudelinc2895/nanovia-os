@@ -9,7 +9,7 @@ Colle ce bloc au début d'une nouvelle session GitHub Copilot CLI pour reprendre
 ```
 Poursuivons le projet Nanovia.
 
-REPO ACTIF : C:\Users\Alienware\kt-monetization-os\  (repo Nanovia actuel)
+REPO ACTIF : C:\Users\Alienware\nanovia-os\  (repo Nanovia actuel)
 (Ne jamais travailler dans le monorepo archivé ni dans un backup local du repo actif.)
 
 STACK :
@@ -34,7 +34,7 @@ RÈGLES :
 - Point d'entrée API : backend/api/main.py → uvicorn api.main:app
 
 COMMANDE DE DÉMARRAGE RAPIDE :
-  cd C:\Users\Alienware\kt-monetization-os
+  cd C:\Users\Alienware\nanovia-os
   $env:PYTHONPATH = "backend"
   uvicorn api.main:app --reload --host 127.0.0.1 --port 8010
 
@@ -147,3 +147,4 @@ PROCHAINE TÂCHE (vérifier NEXT_STEPS.md pour l'état exact) :
 | `frontend/client/package.json` | Ajout `@stripe/react-stripe-js` + `@stripe/stripe-js` |
 | `.env` | Ajout placeholders `STRIPE_PRICE_PRO_YEARLY_ID`, `STRIPE_PRICE_BUSINESS_YEARLY_ID`, `STRIPE_CREDIT_PRICE_ID`, `RESEND_API_KEY` |
 | `.project-context/` | Créé : PROJECT_TREE, PROJECT_MAP, RUNBOOK, WORKSTATE, NEXT_STEPS, KNOWN_BUGS, COPILOT_PROMPT |
+

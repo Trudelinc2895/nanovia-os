@@ -1,4 +1,4 @@
-# KT Monetization OS — Caddyfile HTTPS (activate once tkverse.ca DNS resolves)
+# Nanovia OS — Caddyfile HTTPS (activate once nanovia.ca DNS resolves)
 # Replace Caddyfile with this file content once DNS propagates
 # Caddy will auto-obtain Let's Encrypt certs
 
@@ -13,7 +13,7 @@
     }
 }
 
-tkverse.ca {
+nanovia.ca {
     handle /api/* {
         reverse_proxy api:8010
     }

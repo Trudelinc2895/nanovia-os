@@ -59,10 +59,12 @@ class PlanPublic(BaseModel):
 class CheckoutRequest(BaseModel):
     plan: str = Field(..., pattern="^(pro|business)$")
     interval: str = Field(default="monthly", pattern="^(monthly|yearly)$")
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class ModuleCheckoutRequest(BaseModel):
     module: str = Field(..., description="Module slug (e.g. 'operator', 'ghost', 'content')")
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class ModulePublic(BaseModel):
@@ -81,6 +83,10 @@ class CheckoutResponse(BaseModel):
 
 class PortalResponse(BaseModel):
     url: str
+
+
+class PortalSessionRequest(BaseModel):
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class SubscriptionInfo(BaseModel):
@@ -115,6 +121,7 @@ class EntitlementsResponse(BaseModel):
 
 class CreditPurchaseRequest(BaseModel):
     quantity: int = Field(default=1, ge=1, le=100)
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class CreditPurchaseResponse(BaseModel):
@@ -135,6 +142,7 @@ class AddonPublic(BaseModel):
 
 class AddonCheckoutRequest(BaseModel):
     addon: str = Field(..., description="Add-on slug (e.g. api_calls_500, storage_10gb, credits_50)")
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class AddonCheckoutResponse(BaseModel):

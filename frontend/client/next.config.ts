@@ -9,8 +9,17 @@ const BACKEND_URL = (process.env.BACKEND_INTERNAL_URL ?? process.env.API_BASE_UR
 const connectSrc = [
   "'self'",
   "https://api.stripe.com",
+  "https://r.stripe.com",
+  "https://challenges.cloudflare.com",
   ...(isDev ? ["http://localhost:*", "http://127.0.0.1:*"] : []),
   ...(PUBLIC_API_URL ? [PUBLIC_API_URL] : []),
+].join(" ");
+
+const scriptSrc = [
+  "'self'",
+  "'unsafe-inline'",
+  "https://challenges.cloudflare.com",
+  ...(isDev ? ["'unsafe-eval'"] : []),
 ].join(" ");
 
 const securityHeaders = [
@@ -19,19 +28,26 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-XSS-Protection", value: "1; mode=block" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+  { key: "Origin-Agent-Cluster", value: "?1" },
+  { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
   {
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // unsafe-eval needed for Next.js dev
+      `script-src ${scriptSrc}`,
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
-      "font-src 'self'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
       `connect-src ${connectSrc}`,
-      "frame-src https://js.stripe.com https://hooks.stripe.com",
+      "frame-src https://challenges.cloudflare.com https://js.stripe.com https://hooks.stripe.com",
+      "form-action 'self' https://checkout.stripe.com",
+      "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
+      ...(isDev ? [] : ["upgrade-insecure-requests"]),
     ].join("; "),
   },
   ...(isDev ? [] : [

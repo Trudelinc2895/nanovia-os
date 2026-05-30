@@ -1,4 +1,4 @@
-# 🛡️ KT SECURITY MASTER — Audit & Plan de Sécurisation Complet
+# 🛡️ NANOVIA SECURITY MASTER — Audit & Plan de Sécurisation Complet
 ## Périmètre: Tous projets actuels et futurs | Niveau: MAXIMAL
 ## Dernière mise à jour: 2026-03-27
 
@@ -48,7 +48,7 @@
 ## 2. ÉTAT ACTUEL — CE QUI EST DÉPLOYÉ
 ## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### ✅ Sécurité déjà en place (KT Monetization OS)
+### ✅ Sécurité déjà en place (Nanovia OS)
 ```
 RÉSEAU
   ✅ UFW: 22/80/443 uniquement
@@ -71,7 +71,7 @@ CADDY (reverse proxy)
   ✅ HSTS preload (max-age=31536000; includeSubDomains)
   ✅ CSP strict
   ✅ WAF rules: block scanners, SQLi, path traversal, bad methods
-  ✅ Rate limit: 100 req/min par IP sur api.tkverse.ca
+  ✅ Rate limit: 100 req/min par IP sur api.nanovia.ca
   ✅ Security headers: X-Frame DENY, X-Content-Type-Options, etc.
 
 CI/CD SÉCURITÉ
@@ -217,7 +217,7 @@ echo "Backup: $BACKUP_DIR/kt_db_$DATE.sql.gz.enc"
 
 ### Cron (ajouter avec `crontab -e`):
 ```
-0 2 * * * /opt/kt-monetization-os/infra/scripts/backup-db.sh >> /var/log/kt-backup.log 2>&1
+0 2 * * * /opt/nanovia-os/infra/scripts/backup-db.sh >> /var/log/nanovia-backup.log 2>&1
 ```
 
 ---
@@ -284,7 +284,7 @@ ACCÈS
    
 3. DÉPLOYER
    → ssh root@VPS
-   → nano /opt/kt-monetization-os/.env
+   → nano /opt/nanovia-os/.env
    → Remplacer les clés
    → docker compose restart api ai-orchestrator
    
@@ -416,7 +416,7 @@ EOF
 
 # 5. GitHub Actions security pipeline
 mkdir -p .github/workflows
-# → Copier depuis kt-monetization-os/.github/workflows/sast.yml
+# → Copier depuis nanovia-os/.github/workflows/sast.yml
 ```
 
 ---
@@ -444,3 +444,4 @@ REVUES PÉRIODIQUES
   Trimestriel:  rotation secrets + revue accès + pentest
   Annuel:       révision politique sécurité complète
 ```
+

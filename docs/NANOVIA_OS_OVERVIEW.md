@@ -1,6 +1,6 @@
-# 🚀 KT MONETIZATION OS — VUE COMPLÈTE DU PROJET
+# 🚀 NANOVIA OS — VUE COMPLÈTE DU PROJET
 ## Le SaaS d'IA qui travaille pour toi 24/7
-## Version: 1.0 | Domaine: tkverse.ca | Budget: <10$/mois
+## Version: 1.0 | Domaine: nanovia.ca | Budget: <10$/mois
 
 ---
 
@@ -129,7 +129,7 @@ Prix: 299-999$/projet
    ┌──────▼──────┐  ┌──────▼──────┐  ┌──────────▼──────┐
    │  web:3000   │  │  api:8010   │  │  admin:3020     │
    │  Next.js    │  │  FastAPI    │  │  Panel admin    │
-   │ tkverse.ca  │  │ api.tkverse │  │ admin.tkverse   │
+   │ nanovia.ca  │  │ api.nanovia │  │ admin.nanovia   │
    └─────────────┘  └──────┬──────┘  └─────────────────┘
                            │
               ┌────────────┼───────────────┐
@@ -139,9 +139,9 @@ Prix: 299-999$/projet
        │  :5432  │  │  :6379  │  │    :8020        │
        └─────────┘  └─────────┘  └─────────────────┘
 
-MONITORING (interne kt-net):
+MONITORING (interne nanovia-net):
   prometheus:9090 → alertmanager:9093 → Telegram
-  grafana:3030 ← monitor.tkverse.ca
+  grafana:3030 ← monitor.nanovia.ca
   node-exporter:9100 + postgres-exporter:9187 + redis-exporter:9121
 ```
 
@@ -297,15 +297,15 @@ Merge main → Auto-deploy:
 
 ```
 URLS FINALES:
-  https://tkverse.ca           → Landing page + pricing
-  https://www.tkverse.ca       → Redirect vers tkverse.ca
-  https://api.tkverse.ca       → API REST + Swagger docs
-  https://api.tkverse.ca/docs  → Documentation interactive
-  https://admin.tkverse.ca     → Panel admin (accès restreint)
-  https://monitor.tkverse.ca   → Grafana dashboard
+  https://nanovia.ca           → Landing page + pricing
+  https://www.nanovia.ca       → Redirect vers nanovia.ca
+  https://api.nanovia.ca       → API REST + Swagger docs
+  https://api.nanovia.ca/docs  → Documentation interactive
+  https://admin.nanovia.ca     → Panel admin (accès restreint)
+  https://monitor.nanovia.ca   → Grafana dashboard
 
 DNS À AJOUTER (OVH Manager):
-  tkverse.ca         A  167.114.155.166  TTL 300
+  nanovia.ca         A  167.114.155.166  TTL 300
   www                A  167.114.155.166  TTL 300
   api                A  167.114.155.166  TTL 300
   app                A  167.114.155.166  TTL 300
@@ -313,7 +313,7 @@ DNS À AJOUTER (OVH Manager):
   monitor            A  167.114.155.166  TTL 300
 
 DÉPLOIEMENT ONE-SHOT (après réinstall VPS):
-  curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/kt-monetization-os/main/infra/scripts/fresh-install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/nanovia-os/main/infra/scripts/fresh-install.sh | bash
 ```
 
 ---
@@ -322,7 +322,7 @@ DÉPLOIEMENT ONE-SHOT (après réinstall VPS):
 
 ```
 PHASE A (maintenant)
-  → VPS opérationnel + tkverse.ca live HTTPS
+  → VPS opérationnel + nanovia.ca live HTTPS
   → Module 1 accessible via web
   → Premier client payant
 

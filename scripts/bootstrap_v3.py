@@ -5,7 +5,7 @@ import paramiko, time, os, base64, re
 HOST = '167.114.155.166'
 USER = 'root'
 KEY_PATH = r'C:\Users\Alienware\.ssh\id_rsa'
-ENV_PATH = r'C:\Users\Alienware\kt-monetization-os\.env'
+ENV_PATH = r'C:\Users\Alienware\nanovia-os\.env'
 
 def clean(text):
     return re.sub(r'\x1b\[[0-9;]*[mGKHF]|\r', '', text)
@@ -80,19 +80,19 @@ systemctl enable fail2ban && systemctl start fail2ban || true
 echo "  fail2ban OK"
 
 echo "[4/6] Clone repo..."
-mkdir -p /opt/kt-monetization-os
-if [ -d "/opt/kt-monetization-os/.git" ]; then
-  cd /opt/kt-monetization-os && git pull origin main 2>&1
+mkdir -p /opt/nanovia-os
+if [ -d "/opt/nanovia-os/.git" ]; then
+  cd /opt/nanovia-os && git pull origin main 2>&1
 else
-  git clone https://github.com/Trudelinc2895/kt-monetization-os.git /opt/kt-monetization-os 2>&1
+  git clone https://github.com/Trudelinc2895/nanovia-os.git /opt/nanovia-os 2>&1
 fi
-echo "  repo OK: $(ls /opt/kt-monetization-os | tr '\\n' ' ')"
+echo "  repo OK: $(ls /opt/nanovia-os | tr '\\n' ' ')"
 
 echo "[5/6] Verification .env..."
-[ -f /opt/kt-monetization-os/.env ] && echo "  .env OK" || echo "  MANQUANT"
+[ -f /opt/nanovia-os/.env ] && echo "  .env OK" || echo "  MANQUANT"
 
 echo "[6/6] Docker Compose..."
-cd /opt/kt-monetization-os
+cd /opt/nanovia-os
 docker compose -f infra/docker-compose.prod.yml up -d --build 2>&1 | tail -20
 sleep 5
 echo ""
@@ -131,10 +131,10 @@ print(f"  {out.strip()}")
 
 # ── STEP 1: Upload .env ───────────────────────────────
 print("\n[1/7] Upload .env...")
-run(ssh, 'mkdir -p /opt/kt-monetization-os')
+run(ssh, 'mkdir -p /opt/nanovia-os')
 if os.path.exists(ENV_PATH):
-    upload_b64(ssh, ENV_PATH, '/opt/kt-monetization-os/.env')
-    rc, out = run(ssh, 'wc -l /opt/kt-monetization-os/.env')
+    upload_b64(ssh, ENV_PATH, '/opt/nanovia-os/.env')
+    rc, out = run(ssh, 'wc -l /opt/nanovia-os/.env')
     print(f"  .env copie: {out.strip()} lignes ✅")
 else:
     print("  ERREUR: .env introuvable localement!")
@@ -188,3 +188,4 @@ print(f"\nAPI health: {out2}")
 
 ssh.close()
 print("\n=== BOOTSTRAP COMPLET ===")
+

@@ -1,7 +1,7 @@
-# 🧠 MASTER TRACE — KT Monetization OS
+# 🧠 MASTER TRACE — Nanovia OS
 **Owner:** Kevin Trudel (@Trudelinc2895)
-**Repo:** https://github.com/Trudelinc2895/kt-monetization-os
-**Domain:** tkverse.ca | **Email:** trudelinc11@gmail.com
+**Repo:** https://github.com/Trudelinc2895/nanovia-os
+**Domain:** nanovia.ca | **Email:** admin@nanovia.ca
 **Updated:** 2026-03-25 | **Budget:** $0–10 USD
 **Mode:** SAAS EXPERT GENIUS OPERATOR — production-grade
 
@@ -81,14 +81,14 @@ INTERNET ──HTTPS──► CADDY (TLS auto, rate-limit, headers sécurité)
 | Ollama Client | 11434 | ❌ interne | |
 | Ollama Admin | 11435 | ❌ interne | |
 | Prometheus | 9090 | ❌ interne | |
-| Grafana | 3030 | ❌ via Caddy auth | monitor.tkverse.ca |
+| Grafana | 3030 | ❌ via Caddy auth | monitor.nanovia.ca |
 
 ### Docker Services
 Fichier: `infra/docker-compose.prod.yml`
 - caddy, web, admin, api, ai-orchestrator
 - postgres:16, redis:7, vault, prometheus, grafana
 - Healthchecks sur postgres et redis
-- Network isolé: kt-net
+- Network isolé: nanovia-net
 
 ---
 
@@ -217,7 +217,7 @@ bash scripts/bootstrap_vps.sh
 
 ### Stack
 - Prometheus :9090 → scrape API, postgres, redis, caddy
-- Grafana :3030 → dashboards (monitor.tkverse.ca)
+- Grafana :3030 → dashboards (monitor.nanovia.ca)
 - Config: `infra/monitoring/prometheus.yml`
 
 ### KPIs Business
@@ -273,7 +273,7 @@ main (prod stable)
 ## CATÉGORIE 10 — ROADMAP & ACTIONS IMMÉDIATES
 
 ### JOUR 1–2 (Maintenant)
-- [x] Repo kt-monetization-os créé
+- [x] Repo nanovia-os créé
 - [x] Structure fichiers complète
 - [x] MASTER_TRACE.md généré
 - [ ] Pousser sur GitHub + créer toutes les branches
@@ -311,7 +311,7 @@ main (prod stable)
 | DATABASE_URL | localhost:5432 | postgres:5432 (Docker) |
 | REDIS_URL | localhost:6379 | redis:6379 (Docker) |
 | STRIPE_SECRET_KEY | clé Stripe de test | clé Stripe live (via Vault) |
-| API_BASE_URL | http://127.0.0.1:8010 | https://api.tkverse.ca |
+| API_BASE_URL | http://127.0.0.1:8010 | https://api.nanovia.ca |
 
 Fichier de référence: `.env.example`
 
@@ -319,7 +319,7 @@ Fichier de référence: `.env.example`
 
 ## CATÉGORIE 12 — DNS & DOMAINE
 
-### Cloudflare DNS (tkverse.ca)
+### Cloudflare DNS (nanovia.ca)
 | Type | Nom | Valeur | Proxy |
 |------|-----|--------|-------|
 | A | @ | IP_VPS | ✅ |
@@ -418,5 +418,6 @@ ChromaDB (vectorstore local $0) · LangChain
 ---
 
 *Mode: SAAS EXPERT GENIUS OPERATOR*
-*Généré par GitHub Copilot CLI — Kevin Trudel / TKVerse*
+*Généré par GitHub Copilot CLI — Kevin Trudel / Nanovia*
 *Ne jamais committer de secrets. Ce fichier = source de vérité.*
+

@@ -21,8 +21,8 @@ import {
 interface AuthState {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<LoginResponse | void>;
-  register: (email: string, password: string, name?: string) => Promise<void>;
+  login: (email: string, password: string, turnstileToken?: string | null) => Promise<LoginResponse | void>;
+  register: (email: string, password: string, name?: string, turnstileToken?: string | null) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -63,8 +63,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, []);
 
-  const login = useCallback(async (email: string, password: string): Promise<LoginResponse | void> => {
-    const result = await apiLogin(email, password);
+  const login = useCallback(async (email: string, password: string, turnstileToken?: string | null): Promise<LoginResponse | void> => {
+    const result = await apiLogin(email, password, turnstileToken);
     // Only fetch user if login is fully complete (not a 2FA partial)
     if (!result?.requires_2fa) {
       const me = await getMe();
@@ -74,8 +74,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const register = useCallback(
-    async (email: string, password: string, name?: string) => {
-      await apiRegister(email, password, name);
+    async (email: string, password: string, name?: string, turnstileToken?: string | null) => {
+      await apiRegister(email, password, name, turnstileToken);
       const me = await getMe();
       setUser(me);
     },

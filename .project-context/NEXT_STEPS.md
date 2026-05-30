@@ -10,7 +10,7 @@ Les étapes sont ordonnées par impact/urgence. Attaquer une à la fois.
 **Pourquoi :** Le code et la stack sont prêts, mais Stripe/Resend restent dépendants de vraies valeurs externes.
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 Copy-Item infra\env\.env.dev.example .env.dev
 # Remplir ensuite dans .env.dev :
 # - STRIPE_SECRET_KEY / STRIPE_PUBLIC_KEY / STRIPE_WEBHOOK_SECRET
@@ -25,7 +25,7 @@ Copy-Item infra\env\.env.dev.example .env.dev
 **Pourquoi :** Les abonnements mensuels/annuels et packs dépendent des `price_id` réellement présents dans Stripe.
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 python stripe\setup_stripe.py
 ```
 
@@ -40,7 +40,7 @@ python stripe\setup_stripe.py
 **Pourquoi :** C'est désormais le chemin de dev propre et reproductible.
 
 ```powershell
-cd C:\Users\Alienware\kt-monetization-os
+cd C:\Users\Alienware\nanovia-os
 docker compose --env-file .env.dev -f infra\docker-compose.dev.yml up --build
 ```
 
@@ -86,3 +86,4 @@ stripe trigger checkout.session.completed
 2. Vérifier si la session a besoin de vraies intégrations externes ou seulement d'un run local
 3. Ne pas supposer que `frontend/admin` est la vraie surface admin
 4. Mettre à jour `KNOWN_BUGS.md` et ce fichier dès qu'un point change réellement
+

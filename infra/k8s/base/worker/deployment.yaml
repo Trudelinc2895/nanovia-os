@@ -32,7 +32,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: worker
-          image: ghcr.io/trudelinc2895/kt-monetization-os/api:latest
+          image: ghcr.io/trudelinc2895/nanovia-os/api:latest
           command: ["python", "-m", "api.scraping.worker"]
           env:
             - name: SCRAPING_RUN_WORKER_IN_API
@@ -86,3 +86,4 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+

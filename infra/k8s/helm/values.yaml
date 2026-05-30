@@ -1,13 +1,13 @@
 global:
   image:
-    registry: ghcr.io/trudelinc2895/kt-monetization-os
+    registry: ghcr.io/trudelinc2895/nanovia-os
     pullPolicy: IfNotPresent
   namespace: nanovia
 
 api:
   enabled: true
   image:
-    repository: ghcr.io/trudelinc2895/kt-monetization-os/api
+    repository: ghcr.io/trudelinc2895/nanovia-os/api
     tag: latest
   replicas: 3
   resources:
@@ -39,7 +39,7 @@ api:
 web:
   enabled: true
   image:
-    repository: ghcr.io/trudelinc2895/kt-monetization-os/web
+    repository: ghcr.io/trudelinc2895/nanovia-os/web
     tag: latest
   replicas: 2
   resources:
@@ -58,7 +58,7 @@ web:
 worker:
   enabled: true
   image:
-    repository: ghcr.io/trudelinc2895/kt-monetization-os/api
+    repository: ghcr.io/trudelinc2895/nanovia-os/api
     tag: latest
   replicas: 2
   strategy:
@@ -160,3 +160,4 @@ secrets:
   # Use ExternalSecret or SealedSecret in production
   create: false
   name: nanovia-secrets
+

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AuthApiDiagnostic } from "@/components/auth-api-diagnostic";
 import { AuthEntryWarning } from "@/components/auth-entry-warning";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { useAuth } from "@/lib/auth-context";
 import { Button, Card, Input } from "@/components/ui";
 
@@ -13,6 +14,7 @@ const PASSWORD_RULES = [
   { label: "Une majuscule", test: (p: string) => /[A-Z]/.test(p) },
   { label: "Un chiffre", test: (p: string) => /\d/.test(p) },
 ];
+const TURNSTILE_ENABLED = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
@@ -22,6 +24,7 @@ export default function RegisterPage() {
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const { register } = useAuth();
   const router = useRouter();
 
@@ -42,9 +45,13 @@ export default function RegisterPage() {
       setError("Vous devez accepter les conditions d'utilisation.");
       return;
     }
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Valide la protection anti-bot avant de continuer.");
+      return;
+    }
     setLoading(true);
     try {
-      await register(email, password, name || undefined);
+      await register(email, password, name || undefined, turnstileToken);
       router.push("/dashboard");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Erreur lors de la création du compte.");
@@ -174,6 +181,8 @@ export default function RegisterPage() {
             >
               Commencer gratuitement
             </Button>
+
+            <TurnstileWidget action="register" onTokenChange={setTurnstileToken} />
 
             <p className="text-center text-sm text-text-muted">
               Déjà un compte ?{" "}

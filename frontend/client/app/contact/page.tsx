@@ -2,21 +2,29 @@
 import { useState } from "react";
 import Link from "next/link";
 
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveApiUrl } from "@/lib/api";
+
+const TURNSTILE_ENABLED = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
 export default function ContactPage() {
   const [form, setForm] = useState({ name: "", email: "", subject: "", message: "" });
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setStatus("error");
+      return;
+    }
     setStatus("sending");
     // Send to backend email service (or just mailto fallback for now)
     try {
       const res = await fetch(resolveApiUrl("/api/v1/contact"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, turnstile_token: turnstileToken }),
       });
       if (res.ok) {
         setStatus("sent");
@@ -130,6 +138,8 @@ export default function ContactPage() {
                 <a href="mailto:admin@nanovia.ca" className="underline">admin@nanovia.ca</a>.
               </p>
             )}
+
+            <TurnstileWidget action="contact" onTokenChange={setTurnstileToken} />
 
             <button
               type="submit"

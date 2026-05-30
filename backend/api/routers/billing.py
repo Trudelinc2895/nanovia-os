@@ -45,6 +45,7 @@ from api.schemas.billing import (
     ModuleCheckoutRequest,
     ModulePublic,
     PlanPublic,
+    PortalSessionRequest,
     PortalResponse,
     UsageResponse,
 )
@@ -60,11 +61,13 @@ from api.services.billing_service import (
 )
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
+from api.services.turnstile_service import enforce_turnstile
 from api.services.usage_service import get_monthly_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 stripe.api_key = settings.STRIPE_SECRET_KEY
+stripe.api_version = "2026-04-22.dahlia"
 
 # ── Prometheus counters (graceful fallback) ───────────────────────────────────
 try:
@@ -253,11 +256,12 @@ async def get_upsell(current_user: CurrentUser, db: DB):
 
 
 @router.post("/checkout-session", response_model=CheckoutResponse)
-async def create_checkout_session(body: CheckoutRequest, current_user: CurrentUser, db: DB):
+async def create_checkout_session(body: CheckoutRequest, request: Request, current_user: CurrentUser, db: DB):
     """
     Create a Stripe Checkout session for subscription upgrade.
     Plan and price resolved server-side only — client provides slug + interval.
     """
+    await enforce_turnstile(request, body.turnstile_token, surface="billing")
     plan_cfg = PLANS_CONFIG.get(body.plan)
     if not plan_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown plan: {body.plan}")
@@ -282,7 +286,6 @@ async def create_checkout_session(body: CheckoutRequest, current_user: CurrentUs
         session = stripe.checkout.Session.create(
             customer=customer_id,
             client_reference_id=str(current_user.id),
-            payment_method_types=["card"],
             line_items=[{"price": price_id, "quantity": 1}],
             mode="subscription",
             success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL,
@@ -305,12 +308,13 @@ async def create_checkout_session(body: CheckoutRequest, current_user: CurrentUs
 
 @router.post("/module-checkout-session", response_model=CheckoutResponse)
 async def create_module_checkout_session(
-    body: ModuleCheckoutRequest, current_user: CurrentUser, db: DB
+    body: ModuleCheckoutRequest, request: Request, current_user: CurrentUser, db: DB
 ):
     """
     Create a Stripe Checkout session for a single module purchase.
     Module slug resolved server-side from MODULES_CONFIG only.
     """
+    await enforce_turnstile(request, body.turnstile_token, surface="billing")
     module_slug = canonicalize_module_slug(body.module)
     mod_cfg = MODULES_CONFIG.get(module_slug) if module_slug else None
     if not mod_cfg:
@@ -331,7 +335,6 @@ async def create_module_checkout_session(
         session = stripe.checkout.Session.create(
             customer=customer_id,
             client_reference_id=str(current_user.id),
-            payment_method_types=["card"],
             line_items=[{"price": price_id, "quantity": 1}],
             mode="subscription",
             success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL,
@@ -357,8 +360,14 @@ async def create_module_checkout_session(
 
 
 @router.post("/portal-session", response_model=PortalResponse)
-async def create_portal_session(current_user: CurrentUser, db: DB):
+async def create_portal_session(
+    request: Request,
+    current_user: CurrentUser,
+    db: DB,
+    body: PortalSessionRequest | None = None,
+):
     """Open Stripe Billing Portal so user can manage/cancel their subscription."""
+    await enforce_turnstile(request, body.turnstile_token if body else None, surface="billing")
     if not current_user.stripe_customer_id:
         raise HTTPException(
             status_code=400,
@@ -379,12 +388,13 @@ async def create_portal_session(current_user: CurrentUser, db: DB):
 
 @router.post("/credits/purchase", response_model=CreditPurchaseResponse)
 async def purchase_credits(
-    body: CreditPurchaseRequest, current_user: CurrentUser, db: DB
+    body: CreditPurchaseRequest, request: Request, current_user: CurrentUser, db: DB
 ):
     """
     Create a one-time Stripe Checkout session to purchase credit packs.
     Each pack = STRIPE_CREDIT_PACK_SIZE credits.
     """
+    await enforce_turnstile(request, body.turnstile_token, surface="billing")
     if not settings.STRIPE_CREDIT_PRICE_ID:
         raise HTTPException(status_code=503, detail="Credit purchases not configured.")
 
@@ -395,7 +405,6 @@ async def purchase_credits(
         session = stripe.checkout.Session.create(
             customer=customer_id,
             client_reference_id=str(current_user.id),
-            payment_method_types=["card"],
             line_items=[{"price": settings.STRIPE_CREDIT_PRICE_ID, "quantity": body.quantity}],
             mode="payment",
             success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL + f"&credits={credits_to_add}",
@@ -422,11 +431,12 @@ async def list_addons():
 
 
 @router.post("/addon/checkout", response_model=AddonCheckoutResponse)
-async def addon_checkout(body: AddonCheckoutRequest, current_user: CurrentUser, db: DB):
+async def addon_checkout(body: AddonCheckoutRequest, request: Request, current_user: CurrentUser, db: DB):
     """
     Create a Stripe Checkout session for an add-on pack.
     Slug is validated server-side — client never controls price or type.
     """
+    await enforce_turnstile(request, body.turnstile_token, surface="billing")
     addon_cfg = ADDONS_CONFIG.get(body.addon)
     if not addon_cfg:
         raise HTTPException(
@@ -448,7 +458,6 @@ async def addon_checkout(body: AddonCheckoutRequest, current_user: CurrentUser, 
         session = stripe.checkout.Session.create(
             customer=customer_id,
             client_reference_id=str(current_user.id),
-            payment_method_types=["card"],
             line_items=[{"price": price_id, "quantity": 1}],
             mode="payment",
             success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL + f"&addon={body.addon}",

@@ -1,6 +1,6 @@
 #!/bin/bash
 # KT SSH Key Recovery — adds ed25519 key to root authorized_keys
-# Type this URL in KVM: curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/kt-monetization-os/main/infra/scripts/add-key.sh | bash
+# Type this URL in KVM: curl -fsSL https://raw.githubusercontent.com/Trudelinc2895/nanovia-os/main/infra/scripts/add-key.sh | bash
 set -e
 PUB="${ED25519_PUBKEY:-${1:-}}"
 
@@ -19,3 +19,4 @@ chmod 600 /root/.ssh/authorized_keys
 echo "SSH key added."
 cat /root/.ssh/authorized_keys | wc -l
 echo "keys in authorized_keys"
+

@@ -9,12 +9,12 @@ def run(cmd):
     return (o.read() + e.read()).decode().strip()
 
 print("=== JWT vars in .env ===")
-print(run("grep -i jwt /opt/kt-monetization-os/.env"))
+print(run("grep -i jwt /opt/nanovia-os/.env"))
 
 # Fix RS256 -> HS256
-run("sed -i 's/JWT_ALGORITHM=RS256/JWT_ALGORITHM=HS256/' /opt/kt-monetization-os/.env")
+run("sed -i 's/JWT_ALGORITHM=RS256/JWT_ALGORITHM=HS256/' /opt/nanovia-os/.env")
 print("\nAfter fix:")
-print(run("grep JWT_ALGORITHM /opt/kt-monetization-os/.env"))
+print(run("grep JWT_ALGORITHM /opt/nanovia-os/.env"))
 
 # Restart api
 print("\nRestarting api container...")
@@ -25,3 +25,4 @@ print(run("docker logs infra-api-1 --tail 6 2>&1"))
 # Also fix local .env
 ssh.close()
 print("\nDone")
+
