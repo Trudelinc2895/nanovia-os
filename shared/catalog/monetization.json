@@ -135,7 +135,7 @@
         "id": "starter",
         "name": "Starter",
         "price_usd_monthly": 29,
-        "description": "Core Nanovia workspace with billing foundations, support, and a conservative AI margin guard.",
+        "description": "Core Nanovia workspace with billing foundations, support, and a 3x AI profitability floor.",
         "modules": [
           "core_platform",
           "billing_monetization",
@@ -143,7 +143,8 @@
         ],
         "monthly_credits": 1000,
         "openai_budget_usd": 6,
-        "target_gross_margin_pct": 75,
+        "openai_profit_multiplier": 3,
+        "target_gross_margin_pct": 67,
         "usage_limits": {
           "api_calls": 500,
           "storage_gb": 5,
@@ -154,7 +155,7 @@
         "id": "pro",
         "name": "Pro",
         "price_usd_monthly": 79,
-        "description": "Starter plus orchestration, memory, analytics, and a larger AI operating budget.",
+        "description": "Starter plus orchestration, memory, analytics, and a 5x AI profitability floor.",
         "modules": [
           "core_platform",
           "billing_monetization",
@@ -165,7 +166,8 @@
         ],
         "monthly_credits": 5000,
         "openai_budget_usd": 18,
-        "target_gross_margin_pct": 72,
+        "openai_profit_multiplier": 5,
+        "target_gross_margin_pct": 80,
         "usage_limits": {
           "api_calls": 2500,
           "storage_gb": 25,
@@ -176,7 +178,7 @@
         "id": "business",
         "name": "Business",
         "price_usd_monthly": 149,
-        "description": "Full Nanovia sandbox with admin, security, automation, DevOps, notifications, and integration testing.",
+        "description": "Full Nanovia sandbox with admin, security, automation, DevOps, notifications, and a 6x AI profitability floor.",
         "modules": [
           "core_platform",
           "billing_monetization",
@@ -193,7 +195,8 @@
         ],
         "monthly_credits": 15000,
         "openai_budget_usd": 45,
-        "target_gross_margin_pct": 70,
+        "openai_profit_multiplier": 6,
+        "target_gross_margin_pct": 84,
         "usage_limits": {
           "api_calls": 10000,
           "storage_gb": 100,

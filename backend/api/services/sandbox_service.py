@@ -26,9 +26,13 @@ SUMMARIES_PATH = ROOT_DIR / "data" / "memory" / "summaries.json"
 PROFILE_PATH = ROOT_DIR / "data" / "memory" / "user-profile.json"
 
 OPENAI_RATE_CARD = {
+    "gpt-5": {"input_per_1k": 0.00125, "output_per_1k": 0.01},
+    "gpt-5-mini": {"input_per_1k": 0.00025, "output_per_1k": 0.002},
+    "gpt-5-nano": {"input_per_1k": 0.00005, "output_per_1k": 0.0004},
     "gpt-4.1-mini": {"input_per_1k": 0.0004, "output_per_1k": 0.0016},
     "gpt-4o-mini": {"input_per_1k": 0.00015, "output_per_1k": 0.0006},
     "gpt-4.1": {"input_per_1k": 0.0020, "output_per_1k": 0.0080},
+    "text-embedding-3-large": {"input_per_1k": 0.00013, "output_per_1k": 0.0},
 }
 
 DANGEROUS_ACTION_KEYWORDS = (
@@ -425,6 +429,35 @@ def _estimate_openai_cost(model: str, input_tokens: int, output_tokens: int) -> 
     return round(input_cost + output_cost, 6)
 
 
+def _plan_profit_multiplier(plan: dict[str, Any]) -> int:
+    return int(plan.get("openai_profit_multiplier", 3))
+
+
+def _profitability_snapshot(plan: dict[str, Any], estimated_openai_cost_usd: float, monthly_revenue_usd: float) -> dict[str, Any]:
+    multiplier = _plan_profit_multiplier(plan)
+    cost = round(float(estimated_openai_cost_usd), 6)
+    revenue = round(float(monthly_revenue_usd), 2)
+    revenue_floor = round(cost * multiplier, 6)
+    gross_margin = round(revenue - cost, 6)
+    gross_margin_pct = 0.0 if revenue <= 0 else round((gross_margin / revenue) * 100, 2)
+    profitability_gap = round(revenue - revenue_floor, 6)
+
+    return {
+        "estimated_openai_cost_usd": cost,
+        "monthly_revenue_usd": revenue,
+        "gross_margin_usd": gross_margin,
+        "gross_margin_pct": gross_margin_pct,
+        "target_gross_margin_pct": int(plan.get("target_gross_margin_pct", getattr(settings, "OPENAI_TARGET_GROSS_MARGIN_PCT", 70))),
+        "profitability_multiplier": multiplier,
+        "minimum_profitable_revenue_usd": revenue_floor,
+        "profitability_gap_usd": profitability_gap,
+        "x3_floor_ready": revenue >= round(cost * 3, 6),
+        "x5_floor_ready": revenue >= round(cost * 5, 6),
+        "x6_floor_ready": revenue >= round(cost * 6, 6),
+        "cost_guard_triggered": cost > float(plan.get("openai_budget_usd", 0)),
+    }
+
+
 def get_usage(workspace_id: str = "sandbox_workspace") -> dict[str, Any]:
     summary = _workspace_ledger_summary(workspace_id)
     period = summary["period"]
@@ -459,6 +492,8 @@ def record_usage(
 
     tokens_total = max(input_tokens, 0) + max(output_tokens, 0)
     estimated_cost = _estimate_openai_cost(model, input_tokens, output_tokens)
+    plan = get_plan(_effective_plan_id(workspace))
+    profitability_multiplier = _plan_profit_multiplier(plan)
     credits_used = credits_override if credits_override is not None else max(units, math.ceil(tokens_total / 1000) or 1)
 
     summary_before = _workspace_ledger_summary(workspace_id)
@@ -485,6 +520,8 @@ def record_usage(
         "output_tokens": output_tokens,
         "credits_used": credits_used,
         "estimated_openai_cost_usd": estimated_cost,
+        "estimated_billable_revenue_usd": round(estimated_cost * profitability_multiplier, 6),
+        "profitability_multiplier": profitability_multiplier,
         "reason": reason or "sandbox usage",
         "actor": actor,
         "created_at": _utcnow(),
@@ -506,7 +543,13 @@ def record_usage(
         target=workspace_id,
         status_value="success",
         risk_level="low",
-        details={"credits_used": credits_used, "estimated_openai_cost_usd": estimated_cost, "model": model},
+        details={
+            "credits_used": credits_used,
+            "estimated_openai_cost_usd": estimated_cost,
+            "estimated_billable_revenue_usd": round(estimated_cost * profitability_multiplier, 6),
+            "profitability_multiplier": profitability_multiplier,
+            "model": model,
+        },
     )
 
     return {
@@ -570,9 +613,7 @@ def get_entitlements(workspace_id: str = "sandbox_workspace") -> dict[str, Any]:
     credits = _workspace_ledger_summary(workspace_id)
     modules = _plan_module_map(plan_id, subscription_status)
     monthly_revenue = float(plan.get("price_usd_monthly", 0))
-    target_margin_pct = int(plan.get("target_gross_margin_pct", getattr(settings, "OPENAI_TARGET_GROSS_MARGIN_PCT", 70)))
-    gross_margin = round(monthly_revenue - credits["estimated_openai_cost_usd"], 6)
-    margin_pct = 0.0 if monthly_revenue <= 0 else round((gross_margin / monthly_revenue) * 100, 2)
+    profitability = _profitability_snapshot(plan, credits["estimated_openai_cost_usd"], monthly_revenue)
 
     return {
         "workspace_id": workspace_id,
@@ -586,14 +627,7 @@ def get_entitlements(workspace_id: str = "sandbox_workspace") -> dict[str, Any]:
             "used": credits["used"],
             "remaining": credits["remaining"],
         },
-        "usage": {
-            "estimated_openai_cost_usd": credits["estimated_openai_cost_usd"],
-            "monthly_revenue_usd": monthly_revenue,
-            "gross_margin_usd": gross_margin,
-            "gross_margin_pct": margin_pct,
-            "target_gross_margin_pct": target_margin_pct,
-            "cost_guard_triggered": credits["estimated_openai_cost_usd"] > float(plan.get("openai_budget_usd", 0)),
-        },
+        "usage": profitability,
         "source_of_truth": "workspace + plan + subscription_status + credits + usage + admin_overrides",
     }
 
@@ -1050,6 +1084,7 @@ def get_status() -> dict[str, Any]:
     total_revenue = round(sum(item["usage"]["monthly_revenue_usd"] for item in entitlements), 2)
     total_openai_cost = round(sum(item["usage"]["estimated_openai_cost_usd"] for item in entitlements), 6)
     total_margin = round(total_revenue - total_openai_cost, 6)
+    minimum_profitable_revenue = round(sum(item["usage"]["minimum_profitable_revenue_usd"] for item in entitlements), 6)
 
     return {
         "app_env": settings.APP_ENV,
@@ -1067,6 +1102,10 @@ def get_status() -> dict[str, Any]:
             "estimated_openai_cost_usd": total_openai_cost,
             "gross_margin_usd": total_margin,
             "target_margin_pct": getattr(settings, "OPENAI_TARGET_GROSS_MARGIN_PCT", 70),
+            "minimum_profitable_revenue_usd": minimum_profitable_revenue,
+            "x3_floor_ready": total_revenue >= round(total_openai_cost * 3, 6),
+            "x5_floor_ready": total_revenue >= round(total_openai_cost * 5, 6),
+            "x6_floor_ready": total_revenue >= round(total_openai_cost * 6, 6),
         },
         "stripe_catalog_ready": {
             "starter": bool(getattr(settings, "STRIPE_PRICE_STARTER_MONTHLY_ID", "")),

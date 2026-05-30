@@ -119,6 +119,10 @@ def test_plans_modules_and_status_are_available(sandbox_client: TestClient):
     status_payload = status_response.json()
     assert status_payload["stripe_catalog_ready"]["starter"] is True
     assert status_payload["profitability"]["monthly_revenue_usd"] >= 257
+    assert status_payload["profitability"]["minimum_profitable_revenue_usd"] >= 0
+    assert status_payload["profitability"]["x3_floor_ready"] is True
+    assert status_payload["profitability"]["x5_floor_ready"] is True
+    assert status_payload["profitability"]["x6_floor_ready"] is True
 
 
 def test_entitlements_usage_and_credit_ledger_flow(sandbox_client: TestClient):
@@ -128,6 +132,8 @@ def test_entitlements_usage_and_credit_ledger_flow(sandbox_client: TestClient):
     assert payload["plan"] == "pro"
     assert payload["modules"]["ai_orchestrator"] is True
     assert payload["modules"]["security_center"] is False
+    assert payload["usage"]["profitability_multiplier"] == 5
+    assert payload["usage"]["minimum_profitable_revenue_usd"] >= 0
 
     usage_record = sandbox_client.post(
         "/usage/record",
@@ -143,8 +149,11 @@ def test_entitlements_usage_and_credit_ledger_flow(sandbox_client: TestClient):
         },
     )
     assert usage_record.status_code == 200
+    usage_event = usage_record.json()["event"]
     credits_after_usage = usage_record.json()["credits"]
     assert credits_after_usage["used"] >= 252
+    assert usage_event["profitability_multiplier"] == 5
+    assert usage_event["estimated_billable_revenue_usd"] >= usage_event["estimated_openai_cost_usd"] * 5
 
     adjustment = sandbox_client.post(
         "/admin/workspaces/sandbox_pro/credits/adjust",
