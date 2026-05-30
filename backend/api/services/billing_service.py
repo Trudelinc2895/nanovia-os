@@ -621,6 +621,25 @@ async def _get_user_by_stripe_customer_id(
     return result.scalar_one_or_none()
 
 
+def _queue_telegram_stripe_alert(
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    status: str,
+    user_email: str | None = None,
+) -> None:
+    from api.services.telegram_service import send_stripe_event_alert
+
+    asyncio.create_task(
+        send_stripe_event_alert(
+            event_type,
+            data,
+            status=status,
+            user_email=user_email,
+        )
+    )
+
+
 async def process_stripe_event(
     event_type: str,
     data: dict[str, Any],
@@ -629,6 +648,13 @@ async def process_stripe_event(
     """Apply a Stripe event to local billing state and return the resulting status."""
     if event_type == "checkout.session.completed":
         await handle_checkout_completed(data, db)
+        user = await _get_user_by_stripe_customer_id(data.get("customer"), db)
+        _queue_telegram_stripe_alert(
+            event_type,
+            data,
+            status="processed",
+            user_email=user.email if user else None,
+        )
         return "processed"
 
     if event_type in (
@@ -678,6 +704,12 @@ async def process_stripe_event(
             except Exception as exc:
                 logger.warning("[webhook] Could not queue cancellation email: %s", exc)
 
+        _queue_telegram_stripe_alert(
+            event_type,
+            data,
+            status="processed",
+            user_email=user.email if user else None,
+        )
         return "processed"
 
     if event_type == "invoice.payment_succeeded":
@@ -693,6 +725,12 @@ async def process_stripe_event(
             data.get("customer"),
             data.get("amount_paid"),
             data.get("id"),
+        )
+        _queue_telegram_stripe_alert(
+            event_type,
+            data,
+            status="processed",
+            user_email=user.email if user else None,
         )
         return "processed"
 
@@ -727,6 +765,12 @@ async def process_stripe_event(
                 await handle_payment_failed(user, sub, db)
         except Exception as exc:
             logger.warning("[webhook] Could not handle payment-failed: %s", exc)
+        _queue_telegram_stripe_alert(
+            event_type,
+            data,
+            status="processed",
+            user_email=user.email if user else None,
+        )
         return "processed"
 
     if event_type == "customer.subscription.trial_will_end":
@@ -759,6 +803,12 @@ async def process_stripe_event(
                     await handle_trial_will_end(user, sub, days_left, db)
         except Exception as exc:
             logger.warning("[webhook] Could not handle trial_will_end: %s", exc)
+        _queue_telegram_stripe_alert(
+            event_type,
+            data,
+            status="processed",
+            user_email=user.email if user else None,
+        )
         return "processed"
 
     logger.debug("[webhook] Unhandled event type: %s", event_type)

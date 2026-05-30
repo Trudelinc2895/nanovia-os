@@ -167,6 +167,7 @@ async def test_process_stripe_event_audits_invoice_payment_succeeded():
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.email = "owner@nanovia.ca"
 
     with (
         patch(
@@ -177,6 +178,9 @@ async def test_process_stripe_event_audits_invoice_payment_succeeded():
             "api.services.billing_service._write_audit",
             new=AsyncMock(),
         ) as audit_mock,
+        patch(
+            "api.services.billing_service._queue_telegram_stripe_alert",
+        ) as telegram_mock,
     ):
         status = await process_stripe_event(
             "invoice.payment_succeeded",
@@ -192,6 +196,16 @@ async def test_process_stripe_event_audits_invoice_payment_succeeded():
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[1] == user.id
     assert audit_mock.await_args.args[2] == "invoice_payment_succeeded"
+    telegram_mock.assert_called_once_with(
+        "invoice.payment_succeeded",
+        {
+            "id": "in_123",
+            "customer": "cus_123",
+            "amount_paid": 14900,
+        },
+        status="processed",
+        user_email="owner@nanovia.ca",
+    )
 
 
 @pytest.mark.asyncio
@@ -200,6 +214,7 @@ async def test_process_stripe_event_handles_payment_failed():
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.email = "owner@nanovia.ca"
     sub = MagicMock()
     sub.stripe_subscription_id = "sub_123"
 
@@ -215,6 +230,9 @@ async def test_process_stripe_event_handles_payment_failed():
             "api.services.billing_service._write_audit",
             new=AsyncMock(),
         ) as audit_mock,
+        patch(
+            "api.services.billing_service._queue_telegram_stripe_alert",
+        ) as telegram_mock,
     ):
         status = await process_stripe_event(
             "invoice.payment_failed",
@@ -230,6 +248,57 @@ async def test_process_stripe_event_handles_payment_failed():
     failed_mock.assert_awaited_once_with(user, sub, db)
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[2] == "invoice_payment_failed"
+    telegram_mock.assert_called_once_with(
+        "invoice.payment_failed",
+        {
+            "id": "in_failed_123",
+            "customer": "cus_123",
+            "attempt_count": 2,
+        },
+        status="processed",
+        user_email="owner@nanovia.ca",
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_stripe_event_handles_checkout_completed_telegram_alert():
+    from api.services.billing_service import process_stripe_event
+
+    user = MagicMock()
+    user.email = "founder@nanovia.ca"
+
+    db = AsyncMock()
+
+    payload = {
+        "id": "cs_123",
+        "customer": "cus_123",
+        "client_reference_id": str(uuid.uuid4()),
+        "subscription": "sub_123",
+    }
+
+    with (
+        patch(
+            "api.services.billing_service.handle_checkout_completed",
+            new=AsyncMock(),
+        ) as checkout_mock,
+        patch(
+            "api.services.billing_service._get_user_by_stripe_customer_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "api.services.billing_service._queue_telegram_stripe_alert",
+        ) as telegram_mock,
+    ):
+        status = await process_stripe_event("checkout.session.completed", payload, db)
+
+    assert status == "processed"
+    checkout_mock.assert_awaited_once_with(payload, db)
+    telegram_mock.assert_called_once_with(
+        "checkout.session.completed",
+        payload,
+        status="processed",
+        user_email="founder@nanovia.ca",
+    )
 
 
 @pytest.mark.asyncio
