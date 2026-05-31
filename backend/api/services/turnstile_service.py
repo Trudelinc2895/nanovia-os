@@ -7,6 +7,7 @@ import httpx
 from fastapi import HTTPException, Request, status
 
 from api.config import settings
+from api.core.deps import _request_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,7 @@ def _should_enforce(surface: TurnstileSurface) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    for header in ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"):
-        raw_value = request.headers.get(header, "").strip()
-        if not raw_value:
-            continue
-        if header == "X-Forwarded-For":
-            return raw_value.split(",", 1)[0].strip()
-        return raw_value
-    return request.client.host if request.client else ""
+    return _request_client_ip(request) or ""
 
 
 async def enforce_turnstile(

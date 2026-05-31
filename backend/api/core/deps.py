@@ -21,6 +21,51 @@ from api.models.user import User
 bearer = HTTPBearer(auto_error=False)
 
 
+def _parse_ip_text(ip_text: str | None) -> ipaddress._BaseAddress | None:
+    if not ip_text:
+        return None
+    try:
+        return ipaddress.ip_address(ip_text.strip())
+    except ValueError:
+        return None
+
+
+def _is_trusted_proxy_source(ip_text: str | None) -> bool:
+    normalized = (ip_text or "").strip().lower()
+    if normalized in {"testclient", "localhost"}:
+        return True
+
+    ip_addr = _parse_ip_text(ip_text)
+    if ip_addr is None:
+        return False
+
+    for cidr in settings.TRUSTED_PROXY_CIDRS:
+        if ip_addr in ipaddress.ip_network(cidr, strict=False):
+            return True
+    return False
+
+
+def _forwarded_client_ip(request: Request) -> str | None:
+    if not _is_trusted_proxy_source(request.client.host if request.client else None):
+        return None
+
+    cf_connecting_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if _parse_ip_text(cf_connecting_ip):
+        return cf_connecting_ip
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        first_ip = forwarded_for.split(",", 1)[0].strip()
+        if _parse_ip_text(first_ip):
+            return first_ip
+
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if _parse_ip_text(real_ip):
+        return real_ip
+
+    return None
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -166,15 +211,9 @@ def require_usage_budget(usage_type: str = "ai_message"):
 
 
 def _request_client_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        first_ip = forwarded_for.split(",", 1)[0].strip()
-        if first_ip:
-            return first_ip
-
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    if real_ip:
-        return real_ip
+    forwarded_ip = _forwarded_client_ip(request)
+    if forwarded_ip:
+        return forwarded_ip
 
     if request.client and request.client.host:
         return request.client.host

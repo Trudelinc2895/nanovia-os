@@ -44,6 +44,9 @@ This repository is already on **Next.js 15.5.15** in `frontend/client/package.js
 - Enable automated encrypted backups
 - Keep Prometheus, Alertmanager, and Grafana configured with real notification targets
 - Test restore procedures, not only backup creation
+- Run `python scripts/preflight_prod_check.py --env-file .env.production --check-public-endpoints` before final public go-live
+- Run `python scripts/post_deploy_smoke_check.py --env-file .env.production` after each production deploy
+- Keep `TRUSTED_PROXY_CIDRS` limited to the local reverse proxy/container network unless Cloudflare-to-origin headers are intentionally trusted
 
 ## Access control
 

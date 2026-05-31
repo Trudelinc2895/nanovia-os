@@ -18,7 +18,7 @@ DEV_COMPOSE = docker compose -p $(DEV_PROJECT_NAME) $(DEV_COMPOSE_FILES) --env-f
 .PHONY: help up down build logs restart migrate admin shell-api \
         backup update status clean pull test logs-worker restart-worker \
         dev-up dev-down dev-build dev-logs dev-logs-api dev-logs-worker dev-migrate dev-test \
-        scrape-worker scrape-dev scrape-test scrape-health
+        scrape-worker scrape-dev scrape-test scrape-health prod-smoke
 
 # ── Default ────────────────────────────────────────────────────────────────────
 help:
@@ -87,6 +87,9 @@ logs-worker:
 
 scrape-health:
 	@$(COMPOSE) ps api scraper-worker redis
+
+prod-smoke:
+	python scripts/post_deploy_smoke_check.py --env-file .env.production
 
 logs-caddy:
 	$(COMPOSE) logs -f --tail=100 caddy

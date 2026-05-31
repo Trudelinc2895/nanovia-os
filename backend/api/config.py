@@ -77,6 +77,10 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
     )
+    TRUSTED_PROXY_CIDRS_RAW: str = Field(
+        default="127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+        validation_alias=AliasChoices("TRUSTED_PROXY_CIDRS_RAW", "TRUSTED_PROXY_CIDRS"),
+    )
 
     DATABASE_URL: str
     POSTGRES_DB: str = ""
@@ -410,6 +414,14 @@ class Settings(BaseSettings):
         ]
 
     @property
+    def TRUSTED_PROXY_CIDRS(self) -> list[str]:
+        return [
+            cidr.strip()
+            for cidr in self.TRUSTED_PROXY_CIDRS_RAW.split(",")
+            if cidr and cidr.strip()
+        ]
+
+    @property
     def PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS(self) -> list[str]:
         return [
             slug.strip()
@@ -593,9 +605,9 @@ class Settings(BaseSettings):
         ipaddress.ip_address(v.strip())
         return v.strip()
 
-    @field_validator("ADMIN_ALLOWED_IPS_RAW")
+    @field_validator("ADMIN_ALLOWED_IPS_RAW", "TRUSTED_PROXY_CIDRS_RAW")
     @classmethod
-    def validate_admin_allowed_ips(cls, v: str) -> str:
+    def validate_ip_cidr_list(cls, v: str) -> str:
         if not v or _looks_placeholder(v):
             return ""
         items = [cidr.strip() for cidr in v.split(",") if cidr and cidr.strip()]
