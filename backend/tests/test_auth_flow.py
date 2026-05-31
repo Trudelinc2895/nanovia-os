@@ -20,13 +20,18 @@ os.environ["PRIVATE_ADMIN_URL"] = "http://localhost:3020"
 os.environ["API_BASE_URL"] = "http://127.0.0.1:8010"
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
-Path("test_auth.db").unlink(missing_ok=True)
-
 from fastapi.testclient import TestClient
 
 from api import main as main_module
 from api.config import settings
 from api.main import app
+
+
+def _sqlite_db_path() -> str:
+    return settings.DATABASE_URL.removeprefix("sqlite+aiosqlite:///./")
+
+
+Path(_sqlite_db_path()).unlink(missing_ok=True)
 
 
 def test_register_sets_refresh_cookie_and_returns_me():
@@ -61,7 +66,7 @@ def test_register_stores_hashed_email_verification_token():
         )
         assert register.status_code == 201, register.text
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             stored_token = conn.execute(
                 "SELECT email_verification_token FROM users WHERE email = ?",
                 (email,),
@@ -102,7 +107,7 @@ def test_mobile_register_device_encrypts_push_token(monkeypatch):
             )
             assert response.status_code == 201, response.text
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 stored_token = conn.execute(
                     "SELECT push_token FROM device_sessions WHERE device_id = ?",
                     ("device-secure-123",),
@@ -231,7 +236,7 @@ def test_admin_route_requires_allowed_ip_in_production(monkeypatch):
             assert register.status_code == 201, register.text
             access_token = register.json()["access_token"]
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
                 conn.commit()
 
@@ -270,7 +275,7 @@ def test_admin_workspace_routes_expose_and_block_workspace(monkeypatch):
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
             conn.commit()
 
@@ -328,7 +333,7 @@ def test_admin_workspace_routes_expose_and_block_workspace(monkeypatch):
         assert updated_detail.json()["credit_balance"] == starting_credits + 25
         assert updated_detail.json()["active_plan_key"] == "pro"
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             ledger_count = conn.execute(
                 """
                 SELECT COUNT(*)
@@ -401,7 +406,7 @@ def test_admin_runtime_config_reload_only_updates_whitelisted_fields(monkeypatch
             assert register.status_code == 201, register.text
             access_token = register.json()["access_token"]
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
                 conn.commit()
 
@@ -464,7 +469,7 @@ def test_workspace_blocked_even_when_user_stays_active(monkeypatch):
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute(
                 """
                 UPDATE workspaces
@@ -510,7 +515,7 @@ def test_admin_metrics_expose_finops_summary(monkeypatch):
         )
         assert churn_register.status_code == 201, churn_register.text
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             admin_user_id, admin_workspace_id = conn.execute(
                 """
                 SELECT u.id, w.id
@@ -667,7 +672,7 @@ def test_private_orchestrator_admin_routes_are_hidden_when_flag_is_off(monkeypat
             assert register.status_code == 201, register.text
             access_token = register.json()["access_token"]
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
                 conn.commit()
 
@@ -735,7 +740,7 @@ def test_private_orchestrator_admin_routes_return_safe_contract(monkeypatch):
             )
             assert forbidden.status_code == 403, forbidden.text
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
                 conn.commit()
 
@@ -798,7 +803,7 @@ def test_private_orchestrator_preview_returns_scored_route(monkeypatch):
             assert register.status_code == 201, register.text
             access_token = register.json()["access_token"]
 
-            with sqlite3.connect("test_auth.db") as conn:
+            with sqlite3.connect(_sqlite_db_path()) as conn:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
                 conn.commit()
 
@@ -843,7 +848,7 @@ def test_admin_webhook_reprocess_recovers_failed_event(monkeypatch):
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
             conn.execute(
                 """
@@ -871,7 +876,7 @@ def test_admin_webhook_reprocess_recovers_failed_event(monkeypatch):
         assert response.json()["forced"] is False
         process_event.assert_awaited_once()
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             row = conn.execute(
                 "SELECT status, error FROM webhook_events WHERE stripe_event_id = ?",
                 (event_id,),
@@ -892,7 +897,7 @@ def test_admin_webhook_reprocess_requires_force_for_processed_event():
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
             conn.execute(
                 """
@@ -944,7 +949,7 @@ def test_admin_webhook_reprocess_force_replays_processed_event(monkeypatch):
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
             conn.execute(
                 """
@@ -999,7 +1004,7 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
         assert register.status_code == 201, register.text
         access_token = register.json()["access_token"]
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
             conn.execute(
                 """
@@ -1026,7 +1031,7 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
         assert "processor exploded" in response.json()["detail"]
         process_event.assert_awaited_once()
 
-        with sqlite3.connect("test_auth.db") as conn:
+        with sqlite3.connect(_sqlite_db_path()) as conn:
             row = conn.execute(
                 "SELECT status, error FROM webhook_events WHERE stripe_event_id = ?",
                 (event_id,),

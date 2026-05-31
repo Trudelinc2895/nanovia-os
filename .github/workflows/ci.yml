@@ -7,6 +7,31 @@ on:
     branches: [staging, main]
 
 jobs:
+  preflight-config:
+    name: Preflight config gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate env templates
+        run: |
+          python scripts/validate_runtime_env.py --env-file .env.example --target-env development --allow-placeholders
+          python scripts/validate_runtime_env.py --env-file infra/env/.env.staging.example --target-env staging --allow-placeholders
+          python scripts/validate_runtime_env.py --env-file infra/env/.env.example --target-env production --allow-placeholders
+
+      - name: Check monitoring config
+        run: python scripts/check_monitoring_config.py
+
+      - name: Enforce secret policy
+        run: python scripts/check_secret_policy.py
+
+      - name: Run production go-live gate
+        run: python scripts/preflight_prod_check.py --env-file infra/env/.env.example --allow-placeholders
+
   backend-tests:
     runs-on: ubuntu-latest
 
@@ -50,6 +75,39 @@ jobs:
           cd backend
           python -m pytest tests/ -v --tb=short
 
+  security-ci:
+    name: AI security contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend deps
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Run targeted AI security tests
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./test.db
+          JWT_SECRET_KEY: testsecretkeyminimum32characters
+          SECRET_KEY: testsecretkeyminimum32characters
+          JWT_ALGORITHM: HS256
+        run: |
+          cd backend
+          python -m pytest \
+            tests/test_tenant_ai_isolation.py \
+            tests/test_master_ai_access.py \
+            tests/test_ai_usage_meter.py \
+            tests/test_ai_credit_billing.py \
+            tests/test_shared_learning_anonymization.py \
+            tests/test_ai_model_policy.py \
+            -q
+
   frontend-build:
     runs-on: ubuntu-latest
 
@@ -77,7 +135,7 @@ jobs:
   docker-build-scan:
     name: Docker Build + Trivy Scan
     runs-on: ubuntu-latest
-    needs: [backend-tests, frontend-build]
+    needs: [preflight-config, backend-tests, security-ci, frontend-build]
     steps:
       - uses: actions/checkout@v4
 
@@ -116,39 +174,50 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: staging
     env:
-      VPS_HOST: ${{ secrets.VPS_HOST }}
-      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      VPS_HOST: ${{ vars.VPS_HOST }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      VPS_USER: ${{ vars.VPS_USER }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check deploy secrets
         id: secrets-check
         run: |
-          if [ -n "${{ secrets.VPS_HOST }}" ] && [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ] && [ -n "${{ secrets.DEPLOY_PATH }}" ]; then
+          if [ -n "${{ vars.VPS_HOST }}" ] && [ -n "${{ secrets.VPS_SSH_PRIVATE_KEY }}" ] && [ -n "${{ vars.DEPLOY_PATH }}" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Staging deploy skipped — configure VPS_HOST, SSH_PRIVATE_KEY and DEPLOY_PATH"
+            echo "::warning::Staging deploy skipped — configure VPS_HOST, VPS_SSH_PRIVATE_KEY and DEPLOY_PATH"
           fi
 
       - name: Setup SSH agent
         if: steps.secrets-check.outputs.configured == 'true'
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
 
       - name: Add VPS to known_hosts
         if: steps.secrets-check.outputs.configured == 'true'
-        run: ssh-keyscan -T 30 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+        env:
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          PORT="${VPS_PORT:-22}"
+          ssh-keyscan -T 30 -p "${PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy staging
         if: steps.secrets-check.outputs.configured == 'true'
+        env:
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_USER: ${{ vars.VPS_USER }}
         run: |
+          PORT="${VPS_PORT:-22}"
+          SSH_USER="${VPS_USER:-deploy}"
           ssh -o BatchMode=yes \
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=60 \
-              "deploy@${{ secrets.VPS_HOST }}" \
-              "TARGET_ENV=staging TARGET_REF=main DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
+              -p "${PORT}" \
+              "${SSH_USER}@${VPS_HOST}" \
+              "TARGET_ENV=staging TARGET_REF=main DEPLOY_PATH='${DEPLOY_PATH}' \
                REPO_URL='https://github.com/${{ github.repository }}.git' \
                timeout 900 bash -seuo pipefail" <<'ENDSSH'
             cd "${DEPLOY_PATH}"

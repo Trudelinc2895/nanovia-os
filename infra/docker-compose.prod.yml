@@ -100,6 +100,7 @@ services:
     environment:
       API_HOST: "0.0.0.0"
       API_PORT: "8010"
+      AI_STATE_DIR: /var/lib/nanovia-ai
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # Explicit URL with password — overrides env_file value
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -114,6 +115,8 @@ services:
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     tmpfs: ["/tmp"]
+    volumes:
+      - ai_state:/var/lib/nanovia-ai
     logging:
       driver: json-file
       options: {max-size: "20m", max-file: "5"}
@@ -312,6 +315,7 @@ volumes:
   redis_data:
   caddy_data:
   caddy_config:
+  ai_state:
   grafana_data:
   prometheus_data:
   alertmanager_data:
@@ -319,4 +323,3 @@ volumes:
 networks:
   nanovia-net:
     driver: bridge
-

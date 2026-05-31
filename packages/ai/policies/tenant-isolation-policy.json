@@ -1,0 +1,9 @@
+{
+  "rules": [
+    "Each request must declare tenant_id or master_context.",
+    "Tenant AI can only read its own namespace.",
+    "Tenant AI cannot call super-admin tools.",
+    "Master AI only reads anonymized aggregates by default.",
+    "Shared learning stores anonymized insights only."
+  ]
+}

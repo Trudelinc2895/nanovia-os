@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NanoviaAITask",
+  "type": "object",
+  "required": ["scope", "message"],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "enum": ["master", "tenant"]
+    },
+    "tenant_id": {
+      "type": ["string", "null"]
+    },
+    "workspace_id": {
+      "type": ["string", "null"]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "force_agent": {
+      "type": ["string", "null"]
+    }
+  }
+}

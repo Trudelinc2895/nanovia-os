@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 # infra/scripts/rotate-secrets.sh
 # Generates new JWT_SECRET and SECRET_KEY values.
-# Does NOT overwrite any file automatically — copy the values manually.
+# Writes them to a restricted file instead of stdout.
 set -euo pipefail
 
-echo ""
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║         Nanovia OS — Secret Rotation                     ║"
-echo "╠══════════════════════════════════════════════════════════╣"
-echo "║  New values generated below.                             ║"
-echo "║  Update your .env.prod manually — this script            ║"
-echo "║  does NOT write to any file.                             ║"
-echo "╚══════════════════════════════════════════════════════════╝"
-echo ""
+OUTPUT_PATH="${1:-/root/nanovia-rotated-secrets.env}"
 
 NEW_JWT_SECRET=$(openssl rand -hex 32)
 NEW_SECRET_KEY=$(openssl rand -hex 32)
 
-echo "JWT_SECRET=${NEW_JWT_SECRET}"
-echo "SECRET_KEY=${NEW_SECRET_KEY}"
-echo ""
-echo "Steps:"
-echo "  1. Copy the values above into infra/env/.env.prod"
-echo "  2. Restart the API container:  docker compose restart api"
-echo "  3. All existing JWT tokens will be invalidated — users must re-login."
-echo ""
-echo "WARNING: Never commit .env.prod to git."
+umask 077
+cat > "${OUTPUT_PATH}" <<EOF
+JWT_SECRET=${NEW_JWT_SECRET}
+SECRET_KEY=${NEW_SECRET_KEY}
+EOF
+
+chmod 600 "${OUTPUT_PATH}"
+
+echo "Secret rotation bundle written to ${OUTPUT_PATH}"
+echo "Next steps:"
+echo "  1. Copy the values from ${OUTPUT_PATH} into infra/env/.env.prod"
+echo "  2. Restart the API container: docker compose restart api"
+echo "  3. Securely delete ${OUTPUT_PATH} after updating production."

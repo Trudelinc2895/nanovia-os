@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - secrets-template.yaml
   - api/deployment.yaml
+  - api/pvc.yaml
   - api/service.yaml
   - api/hpa.yaml
   - api/pdb.yaml

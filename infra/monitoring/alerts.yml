@@ -56,11 +56,11 @@ groups:
           summary: "CRITICAL disk space on {{ $labels.instance }}"
           description: "Disk / is {{ $value | humanize }}% full — immediate action required"
 
-  - name: kt_api
+  - name: nanovia_api
     interval: 30s
     rules:
       - alert: APIHighLatency
-        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="kt-api"}[5m])) > 2
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="nanovia-api"}[5m])) > 2
         for: 5m
         labels:
           severity: warning
@@ -69,7 +69,7 @@ groups:
           description: "95th percentile latency: {{ $value | humanize }}s"
 
       - alert: APIHighErrorRate
-        expr: rate(http_requests_total{job="kt-api",status=~"5.."}[5m]) / rate(http_requests_total{job="kt-api"}[5m]) > 0.05
+        expr: rate(http_requests_total{job="nanovia-api",status=~"5.."}[5m]) / rate(http_requests_total{job="nanovia-api"}[5m]) > 0.05
         for: 3m
         labels:
           severity: critical

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nanovia-ai-state
+  namespace: nanovia
+  labels:
+    app.kubernetes.io/name: nanovia-api
+    app.kubernetes.io/component: ai-state
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

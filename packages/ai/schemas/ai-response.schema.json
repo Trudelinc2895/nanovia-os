@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NanoviaAIResponse",
+  "type": "object",
+  "required": ["model", "response"],
+  "properties": {
+    "conversation_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "response": {
+      "type": "string"
+    },
+    "usage": {
+      "type": "object"
+    }
+  }
+}

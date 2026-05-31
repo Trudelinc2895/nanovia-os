@@ -165,7 +165,6 @@ systemctl restart sshd
 
 log "Done. NEXT STEPS:"
 log "  1. In a new terminal: ssh deploy@<VPS_IP> — confirm access"
-log "  2. Edit /etc/ssh/sshd_config: change 'AllowUsers root deploy' → 'AllowUsers deploy'"
-log "  3. systemctl restart sshd"
+log "  2. Run: sudo bash $APP_DIR/infra/scripts/lock-vps-forever.sh --deploy-user $DEPLOY_USER --admin-ip <YOUR_IP/32>"
+log "  3. Run: sudo bash $APP_DIR/infra/scripts/audit-vps-lockdown.sh"
 log "  4. Confirm GitHub Actions deploy succeeds with VPS_SSH_PRIVATE_KEY"
-

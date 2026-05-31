@@ -74,6 +74,15 @@ async def _audit(db: AsyncSession, action: str, user_id=None, ip=None, status="s
     ))
 
 
+def _access_token_extra(user: User, workspace_id: str) -> dict[str, object]:
+    return {
+        "plan": user.plan,
+        "is_admin": bool(user.is_admin),
+        "workspace_id": workspace_id,
+        "tenant_id": workspace_id,
+    }
+
+
 def _set_refresh_cookie(response: FastAPIResponse, refresh_token: str) -> None:
     response.set_cookie(
         key="refresh_token",
@@ -127,8 +136,9 @@ async def register(body: RegisterRequest, request: Request, response: FastAPIRes
     asyncio.create_task(send_verification_email(user.email, user.full_name or user.email, verify_url))
     refresh_token_value = create_refresh_token(str(user.id))
     _set_refresh_cookie(response, refresh_token_value)
+    workspace = await ensure_owner_workspace(user, db)
     return TokenResponse(
-        access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
+        access_token=create_access_token(str(user.id), extra=_access_token_extra(user, str(workspace.id))),
         refresh_token=refresh_token_value,
         expires_in=_ACCESS_EXPIRE_SEC,
     )
@@ -165,10 +175,11 @@ async def login(body: LoginRequest, request: Request, response: FastAPIResponse,
     await _audit(db, "login", user_id=user.id, ip=ip)
     await db.commit()
     refresh_token_value = create_refresh_token(str(user.id))
+    workspace = await ensure_owner_workspace(user, db)
     # Set refresh token as httpOnly cookie (XSS-safe); JSON body kept for mobile backward compat
     _set_refresh_cookie(response, refresh_token_value)
     return LoginResponse(
-        access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
+        access_token=create_access_token(str(user.id), extra=_access_token_extra(user, str(workspace.id))),
         refresh_token=refresh_token_value,  # kept for mobile backward compat
         expires_in=_ACCESS_EXPIRE_SEC,
     )
@@ -196,9 +207,10 @@ async def refresh(request: Request, response: FastAPIResponse, db: DB, body: Ref
         raise HTTPException(status_code=401, detail="User not found")
 
     refresh_token_value = create_refresh_token(str(user.id))
+    workspace = await ensure_owner_workspace(user, db)
     _set_refresh_cookie(response, refresh_token_value)
     return TokenResponse(
-        access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
+        access_token=create_access_token(str(user.id), extra=_access_token_extra(user, str(workspace.id))),
         refresh_token=refresh_token_value,
         expires_in=_ACCESS_EXPIRE_SEC,
     )
@@ -414,10 +426,11 @@ async def verify_2fa_login(body: TwoFALoginRequest, request: Request, response: 
     await _audit(db, "login_2fa_verified", user_id=user.id, ip=ip)
     await db.commit()
     refresh_token_value = create_refresh_token(str(user.id))
+    workspace = await ensure_owner_workspace(user, db)
     # Set refresh token as httpOnly cookie; JSON body kept for mobile backward compat
     _set_refresh_cookie(response, refresh_token_value)
     return TokenResponse(
-        access_token=create_access_token(str(user.id), extra={"plan": user.plan}),
+        access_token=create_access_token(str(user.id), extra=_access_token_extra(user, str(workspace.id))),
         refresh_token=refresh_token_value,  # kept for mobile backward compat
         expires_in=_ACCESS_EXPIRE_SEC,
     )

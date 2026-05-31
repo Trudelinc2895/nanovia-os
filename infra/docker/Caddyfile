@@ -42,6 +42,16 @@
     respond @not_allowed 403
 }
 
+(private_admin_host) {
+    import security_headers
+    import block_attackers
+    import admin_ip_allow
+
+    handle {
+        reverse_proxy admin:3020
+    }
+}
+
 # ── Public same-domain site ─────────────────────────────────────────────────
 {$DOMAIN:nanovia.ca}, {$WWW_DOMAIN:www.nanovia.ca} {
     import security_headers
@@ -52,6 +62,7 @@
     }
 
     handle /metrics {
+        import admin_ip_allow
         reverse_proxy api:8010
     }
 
@@ -69,6 +80,10 @@
             roll_keep 5
         }
     }
+}
+
+{$PRIVATE_ADMIN_HOST:admin.nanovia.ca} {
+    import private_admin_host
 }
 
 # Raw-IP bootstrap lives in Caddyfile.ip. The domain Caddyfile must stay valid

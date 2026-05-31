@@ -1,0 +1,39 @@
+{
+  "credit_value_usd": 0.01,
+  "minimum_markup_multiplier": 3.0,
+  "ideal_markup_range": [4.0, 6.0],
+  "plans": {
+    "starter": {
+      "default_model": "gpt-5.4-mini",
+      "fallback_model": "gpt-5.4",
+      "max_monthly_credits": 1000,
+      "max_context_messages": 10,
+      "tools_enabled": false,
+      "memory_enabled": false
+    },
+    "pro": {
+      "default_model": "gpt-5.4-mini",
+      "fallback_model": "gpt-5.4",
+      "max_monthly_credits": 5000,
+      "max_context_messages": 30,
+      "tools_enabled": true,
+      "memory_enabled": true
+    },
+    "business": {
+      "default_model": "gpt-5.4",
+      "fallback_model": "gpt-5.5",
+      "max_monthly_credits": 20000,
+      "max_context_messages": 60,
+      "tools_enabled": true,
+      "memory_enabled": true
+    },
+    "owner": {
+      "default_model": "gpt-5.5",
+      "fallback_model": "gpt-5.4",
+      "max_monthly_credits": 100000,
+      "max_context_messages": 80,
+      "tools_enabled": true,
+      "memory_enabled": true
+    }
+  }
+}

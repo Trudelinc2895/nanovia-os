@@ -363,18 +363,21 @@ async def test_plan_checkout_omits_payment_method_types(monkeypatch):
     session.url = "https://checkout.stripe.test/session"
     create_mock = MagicMock(return_value=session)
     monkeypatch.setattr(billing_router.stripe.checkout.Session, "create", create_mock)
+    turnstile_mock = AsyncMock()
+    monkeypatch.setattr(billing_router, "enforce_turnstile", turnstile_mock)
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock(host="127.0.0.1")
 
     response = await billing_router.create_checkout_session(
-        CheckoutRequest(plan="pro", interval="monthly"),
+        CheckoutRequest(plan="pro", interval="monthly", turnstile_token="ts_checkout"),
         request,
         user,
         AsyncMock(),
     )
 
     assert response.url == session.url
+    turnstile_mock.assert_awaited_once_with(request, "ts_checkout", surface="billing")
     assert "payment_method_types" not in create_mock.call_args.kwargs
 
 
@@ -401,12 +404,14 @@ async def test_credit_checkout_omits_payment_method_types(monkeypatch):
     session.url = "https://checkout.stripe.test/credits"
     create_mock = MagicMock(return_value=session)
     monkeypatch.setattr(billing_router.stripe.checkout.Session, "create", create_mock)
+    turnstile_mock = AsyncMock()
+    monkeypatch.setattr(billing_router, "enforce_turnstile", turnstile_mock)
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock(host="127.0.0.1")
 
     response = await billing_router.purchase_credits(
-        CreditPurchaseRequest(quantity=2),
+        CreditPurchaseRequest(quantity=2, turnstile_token="ts_credits"),
         request,
         user,
         AsyncMock(),
@@ -414,4 +419,74 @@ async def test_credit_checkout_omits_payment_method_types(monkeypatch):
 
     assert response.url == session.url
     assert response.credits_to_add == 100
+    turnstile_mock.assert_awaited_once_with(request, "ts_credits", surface="billing")
     assert "payment_method_types" not in create_mock.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_portal_session_enforces_turnstile(monkeypatch):
+    from api.routers import billing as billing_router
+    from api.schemas.billing import PortalSessionRequest
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.stripe_customer_id = "cus_portal"
+
+    session = MagicMock()
+    session.url = "https://billing.stripe.test/session"
+    create_mock = MagicMock(return_value=session)
+    monkeypatch.setattr(billing_router.stripe.billing_portal.Session, "create", create_mock)
+    turnstile_mock = AsyncMock()
+    monkeypatch.setattr(billing_router, "enforce_turnstile", turnstile_mock)
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock(host="127.0.0.1")
+
+    response = await billing_router.create_portal_session(
+        request,
+        user,
+        AsyncMock(),
+        PortalSessionRequest(turnstile_token="ts_portal"),
+    )
+
+    assert response.url == session.url
+    turnstile_mock.assert_awaited_once_with(request, "ts_portal", surface="billing")
+
+
+@pytest.mark.asyncio
+async def test_module_checkout_enforces_turnstile(monkeypatch):
+    from api.routers import billing as billing_router
+    from api.schemas.billing import ModuleCheckoutRequest
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.email = "module@test.com"
+    user.plan = "free"
+    user.stripe_customer_id = None
+
+    monkeypatch.setitem(billing_router.MODULES_CONFIG["ghost"], "stripe_price_id", "price_module_ghost")
+    monkeypatch.setattr(
+        billing_router,
+        "get_or_create_stripe_customer",
+        AsyncMock(return_value="cus_module"),
+    )
+
+    session = MagicMock()
+    session.url = "https://checkout.stripe.test/module"
+    create_mock = MagicMock(return_value=session)
+    monkeypatch.setattr(billing_router.stripe.checkout.Session, "create", create_mock)
+    turnstile_mock = AsyncMock()
+    monkeypatch.setattr(billing_router, "enforce_turnstile", turnstile_mock)
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock(host="127.0.0.1")
+
+    response = await billing_router.create_module_checkout_session(
+        ModuleCheckoutRequest(module="ghost", turnstile_token="ts_module"),
+        request,
+        user,
+        AsyncMock(),
+    )
+
+    assert response.url == session.url
+    turnstile_mock.assert_awaited_once_with(request, "ts_module", surface="billing")

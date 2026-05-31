@@ -1,0 +1,23 @@
+{
+  "scopes": {
+    "master": {
+      "description": "Private memory for the Nanovia owner control plane.",
+      "allows_raw_tenant_data": false
+    },
+    "tenant": {
+      "description": "Private memory isolated per tenant namespace.",
+      "allows_raw_tenant_data": true
+    },
+    "shared_learning": {
+      "description": "Anonymized and aggregated learning only.",
+      "allows_raw_tenant_data": false
+    }
+  },
+  "prohibited_content": [
+    "api keys",
+    "tokens",
+    "raw private conversations",
+    "emails",
+    "financial identifiers"
+  ]
+}

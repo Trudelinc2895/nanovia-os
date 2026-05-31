@@ -30,8 +30,13 @@ jobs:
       TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
       TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.git_ref != '' && inputs.git_ref || (inputs.environment == 'production' && 'main' || 'staging')) || github.ref_name }}
       REPO_URL: https://github.com/${{ github.repository }}.git
+      VPS_HOST: ${{ vars.VPS_HOST }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       APP_DOMAIN: ${{ vars.APP_DOMAIN }}
       PUBLIC_IP: ${{ vars.PUBLIC_IP }}
+      VPS_PORT: ${{ vars.VPS_PORT }}
+      VPS_USER: ${{ vars.VPS_USER }}
+      ADMIN_ALLOWED_IPS: ${{ vars.ADMIN_ALLOWED_IPS }}
       STAGING_BIND_ADDRESS: ${{ vars.STAGING_BIND_ADDRESS }}
       STAGING_WEB_PORT: ${{ vars.STAGING_WEB_PORT }}
       STAGING_ADMIN_PORT: ${{ vars.STAGING_ADMIN_PORT }}
@@ -50,9 +55,9 @@ jobs:
             echo "::warning::Deploy ignoré — configurer VPS_HOST, VPS_SSH_PRIVATE_KEY et DEPLOY_PATH pour l'environnement GitHub ciblé"
           fi
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
 
       - name: Setup SSH agent
         if: steps.secrets-check.outputs.configured == 'true'
@@ -62,20 +67,27 @@ jobs:
 
       - name: Add VPS to known_hosts
         if: steps.secrets-check.outputs.configured == 'true'
-        run: ssh-keyscan -T 30 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+        run: |
+          PORT="${VPS_PORT:-22}"
+          ssh-keyscan -T 30 -p "${PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy to VPS
         if: steps.secrets-check.outputs.configured == 'true'
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_USER: ${{ vars.VPS_USER }}
         run: |
+          PORT="${VPS_PORT:-22}"
+          SSH_USER="${VPS_USER:-deploy}"
           ssh -o BatchMode=yes \
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=60 \
               -o ServerAliveInterval=15 \
               -o ServerAliveCountMax=4 \
-              "deploy@${VPS_HOST}" \
+              -p "${PORT}" \
+              "${SSH_USER}@${VPS_HOST}" \
               "TARGET_ENV='${TARGET_ENV}' TARGET_REF='${TARGET_REF}' DEPLOY_PATH='${DEPLOY_PATH}' REPO_URL='${REPO_URL}' APP_DOMAIN='${APP_DOMAIN}' PUBLIC_IP='${PUBLIC_IP}' STAGING_BIND_ADDRESS='${STAGING_BIND_ADDRESS}' STAGING_WEB_PORT='${STAGING_WEB_PORT}' STAGING_ADMIN_PORT='${STAGING_ADMIN_PORT}' STAGING_API_PORT='${STAGING_API_PORT}' STAGING_AI_PORT='${STAGING_AI_PORT}' timeout 900 bash -seuo pipefail" <<'ENDSSH'
             mkdir -p "${DEPLOY_PATH}"
             if [ ! -d "${DEPLOY_PATH}/.git" ]; then
@@ -167,6 +179,7 @@ jobs:
                 upsert_env "${ENV_FILE}" STRIPE_PRICE_BUSINESS_MONTHLY_ID ""
                 upsert_env "${ENV_FILE}" STRIPE_PRICE_BUSINESS_YEARLY_ID ""
                 upsert_env "${ENV_FILE}" STRIPE_CREDIT_PRICE_ID ""
+                upsert_env "${ENV_FILE}" AI_STATE_DIR "/var/lib/nanovia-ai"
                 echo "Bootstrapped ${ENV_FILE} from infra/env/.env.staging.example with generated local staging secrets"
               fi
               COMPOSE_PROJECT="nanovia-staging"
@@ -193,12 +206,19 @@ jobs:
                 upsert_env "${ENV_FILE}" PUBLIC_IP "${PUBLIC_IP_VALUE}"
               fi
               if [ -n "${DOMAIN_VALUE}" ]; then
+                ADMIN_DOMAIN_VALUE="admin.${DOMAIN_VALUE}"
                 upsert_env "${ENV_FILE}" DOMAIN "${DOMAIN_VALUE}"
                 upsert_env "${ENV_FILE}" API_BASE_URL "https://${DOMAIN_VALUE}"
                 upsert_env "${ENV_FILE}" NEXT_PUBLIC_API_URL "https://${DOMAIN_VALUE}"
                 upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "https://${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "https://${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "https://${DOMAIN_VALUE},https://www.${DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "https://${ADMIN_DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" PRIVATE_ADMIN_HOST "${ADMIN_DOMAIN_VALUE}"
+                upsert_env "${ENV_FILE}" AI_STATE_DIR "/var/lib/nanovia-ai"
+                upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "https://${DOMAIN_VALUE},https://www.${DOMAIN_VALUE},https://${ADMIN_DOMAIN_VALUE}"
+              fi
+              if [ -n "${ADMIN_ALLOWED_IPS:-}" ]; then
+                upsert_env "${ENV_FILE}" ADMIN_ALLOWED_IPS "${ADMIN_ALLOWED_IPS}"
+                upsert_env "${ENV_FILE}" ADMIN_ALLOWED_IP "${ADMIN_ALLOWED_IPS}"
               fi
             else
               STAGING_BIND_ADDRESS="${STAGING_BIND_ADDRESS:-127.0.0.1}"
@@ -223,6 +243,8 @@ jobs:
               upsert_env "${ENV_FILE}" API_BASE_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}"
               upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}"
               upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
+              upsert_env "${ENV_FILE}" PRIVATE_ADMIN_HOST "${STAGING_BIND_ADDRESS}"
+              upsert_env "${ENV_FILE}" AI_STATE_DIR "/var/lib/nanovia-ai"
               upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT},http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
               CURRENT_JWT_SECRET=$(grep '^JWT_SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2- || true)
               if [ -z "${CURRENT_JWT_SECRET}" ] || printf '%s' "${CURRENT_JWT_SECRET}" | grep -Eq 'CHANGE_ME|REPLACE_ME|GENERATE_WITH'; then
@@ -244,6 +266,9 @@ jobs:
             fi
 
             python3 scripts/validate_runtime_env.py --env-file "${ENV_FILE}" --target-env "${TARGET_ENV}"
+            if [ "${TARGET_ENV}" = "production" ]; then
+              python3 scripts/preflight_prod_check.py --env-file "${ENV_FILE}"
+            fi
 
             EDGE_MODE=domain
             if [ "${TARGET_ENV}" = "production" ]; then
@@ -376,7 +401,7 @@ jobs:
               done
 
               curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}/login" | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/staging title: \1/p' >&2
-              printf 'STAGING_TUNNEL=ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s deploy@%s\n' "${STAGING_WEB_PORT}" "${STAGING_WEB_PORT}" "${STAGING_API_PORT}" "${STAGING_API_PORT}" "${VPS_HOST:-${PUBLIC_IP_VALUE}}" >&2
+              printf 'STAGING_TUNNEL=ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s %s@%s\n' "${STAGING_WEB_PORT}" "${STAGING_WEB_PORT}" "${STAGING_API_PORT}" "${STAGING_API_PORT}" "${VPS_USER:-deploy}" "${VPS_HOST:-${PUBLIC_IP_VALUE}}" >&2
             fi
 
             printf 'PREV_API=%s\n' "${PREV_API}" >&2

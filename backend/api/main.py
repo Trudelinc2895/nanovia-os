@@ -4,8 +4,6 @@ Nanovia OS — FastAPI production entry point
 """
 from __future__ import annotations
 import asyncio
-import base64 as _base64
-import json as _json
 import logging
 import os
 import sys
@@ -24,10 +22,12 @@ import redis.asyncio as _aioredis
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi import HTTPException
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from api.config import settings
+from api.core.deps import _is_allowed_admin_ip, _request_client_ip
 from api.database import engine, Base
 from api.routers import auth, billing, modules, users, health, mobile, orchestrate, ghost_agency, content_cloner, analytics
 from api.routers import micro_saas, decision_engine, knowledge_weapon, digital_leverage, reverse_engineering, offer_generator, execution_service
@@ -37,10 +37,12 @@ from api.routers import admin_orchestrator
 from api.routers import branding
 from api.routers import custom_modules
 from api.routers import sandbox
+from api.routers import ai
 from api.routers import team
 from api.routers import scrape
 from api.scraping.worker import run_worker_forever
 from api.middleware.body_limit import BodySizeLimitMiddleware
+from api.core.security import decode_token
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -324,7 +326,7 @@ app.add_middleware(
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Nanovia-Admin-Key"],
 )
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.API_BODY_SIZE_LIMIT_BYTES)
 
@@ -393,14 +395,14 @@ async def _get_redis() -> _aioredis.Redis:
 
 
 def _extract_sub(authorization: str | None) -> str | None:
-    """Decode JWT payload (no signature check) to extract the sub claim."""
+    """Extract sub only from a valid signed access token."""
     try:
         if not authorization or not authorization.startswith("Bearer "):
             return None
         token = authorization.split(" ", 1)[1]
-        payload_b64 = token.split(".")[1]
-        payload_b64 += "=" * (4 - len(payload_b64) % 4)
-        payload = _json.loads(_base64.urlsafe_b64decode(payload_b64))
+        payload = decode_token(token)
+        if payload.get("type") != "access" or not payload.get("sub"):
+            return None
         return str(payload["sub"])
     except Exception:
         return None
@@ -618,7 +620,9 @@ if HAS_PROMETHEUS:
     Instrumentator().instrument(app)
 
     @app.get("/metrics", include_in_schema=False)
-    async def metrics() -> Response:
+    async def metrics(request: Request) -> Response:
+        if settings.APP_ENV == "production" and settings.ADMIN_ALLOWED_IPS and not _is_allowed_admin_ip(_request_client_ip(request)):
+            raise HTTPException(status_code=403, detail="Admin network access required")
         from api.scraping.metrics import sync_runtime_metrics
 
         await sync_runtime_metrics()
@@ -633,6 +637,7 @@ app.include_router(billing.router, prefix="/api/v1/billing", tags=["billing"])
 app.include_router(modules.router, prefix="/api/v1/modules", tags=["modules"])
 app.include_router(mobile.router, prefix="/api/v1", tags=["mobile"])
 app.include_router(orchestrate.router, prefix="/api/v1", tags=["AI orchestrator"])
+app.include_router(ai.router, prefix="/api/v1", tags=["ai-control-plane"])
 app.include_router(content_cloner.router, prefix="/api/v1", tags=["content cloner"])
 app.include_router(ghost_agency.router, prefix="/api/v1", tags=["ghost agency"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])

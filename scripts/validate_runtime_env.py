@@ -26,7 +26,9 @@ _KNOWN_ENV_KEYS = {
     "ADMIN_ALLOWED_IPS",
     "ADMIN_ALLOWED_IPS_RAW",
     "ADMIN_PORT",
+    "AI_ADMIN_API_KEY",
     "AI_ORCHESTRATOR_PORT",
+    "AI_STATE_DIR",
     "ALLOWED_ORIGINS_RAW",
     "API_URL",
     "API_BASE_URL",
@@ -79,6 +81,7 @@ _KNOWN_ENV_KEYS = {
     "POSTGRES_USER",
     "MEMORY_ENABLED",
     "PRIVATE_ADMIN_URL",
+    "PRIVATE_ADMIN_HOST",
     "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS",
     "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW",
     "PRIVATE_ORCHESTRATOR_ENABLED",
@@ -432,6 +435,9 @@ def validate_runtime_env(
     stripe_live_secret_prefix = "sk" + "_live_"
     stripe_live_public_prefix = "pk" + "_live_"
     stripe_webhook_prefix = "wh" + "sec_"
+    ai_state_dir = values.get("AI_STATE_DIR", "").strip()
+    private_admin_url = values.get("PRIVATE_ADMIN_URL", "").strip()
+    public_web_url = values.get("PUBLIC_WEB_URL", "").strip()
 
     if target_env == "development":
         if stripe_secret.startswith(stripe_live_secret_prefix):
@@ -508,6 +514,21 @@ def validate_runtime_env(
     admin_allowlist = _first_present(values, "ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP")
     if not admin_allowlist:
         errors.append("Production requires ADMIN_ALLOWED_IPS/ADMIN_ALLOWED_IP to be configured")
+
+    _require_value(
+        errors,
+        values,
+        "AI_ADMIN_API_KEY",
+        allow_placeholders=allow_placeholders,
+        min_length=24,
+        message="Production requires AI_ADMIN_API_KEY for admin AI routes",
+    )
+    if not ai_state_dir:
+        errors.append("Production requires AI_STATE_DIR to point to persistent storage")
+    elif not allow_placeholders and not ai_state_dir.startswith("/"):
+        errors.append("Production AI_STATE_DIR must be an absolute path")
+    if private_admin_url and public_web_url and private_admin_url == public_web_url:
+        errors.append("Production PRIVATE_ADMIN_URL must differ from PUBLIC_WEB_URL")
 
     origins = values.get("ALLOWED_ORIGINS_RAW", "")
     if "localhost" in origins or "127.0.0.1" in origins:

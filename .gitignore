@@ -1,6 +1,7 @@
 # Secrets — NEVER commit
 .env
 .env.*
+.env.production
 !.env.example
 !.env.sandbox.example
 stripe/stripe_ids.json
@@ -13,6 +14,10 @@ infra/env/.env.prod
 infra/env/.env.dev
 *.pem
 *.key
+id_rsa
+id_ed25519
+secrets.json
+stripe-live-*.json
 secrets/
 
 # Database — dev only, never commit (may contain real user data)
@@ -54,12 +59,17 @@ stripe_nanovia_output.env
 stripe/sandbox/stripe-output.sandbox.json
 data/audit/sandbox-audit.jsonl
 backups/
+client-data/
+dump.sql
+*.dump
 infra/cloudflare/terraform.tfvars
 infra/cloudflare/*.tfstate
 infra/cloudflare/*.tfstate.*
 infra/cloudflare/.terraform/
 infra/cloudflare/.terraform.lock.hcl
 # Nanovia private commercial strategy - do not publish in public repo
+marketing-strategy-private.md
+private-marketing-plan.md
 config/nanovia.modules.ts
 config/nanovia.plans.ts
 config/nanovia.env.example
