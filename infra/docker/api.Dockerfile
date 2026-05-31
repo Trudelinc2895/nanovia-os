@@ -16,6 +16,8 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends libpq5 \
     && rm -rf /var/lib/apt/lists/* \
@@ -25,6 +27,8 @@ RUN apt-get update -qq \
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
+
+RUN python -m playwright install --with-deps chromium
 
 COPY backend/ .
 COPY shared/ /shared/

@@ -18,6 +18,9 @@ class ScrapeResult(BaseModel):
     body: str
     fetched_via: Literal["http", "playwright"] = "http"
     cache_hit: bool = False
+    redirect_count: int = 0
+    response_bytes: int = 0
+    used_proxy: bool = False
 
 
 class ScrapeJobEnqueueResponse(BaseModel):

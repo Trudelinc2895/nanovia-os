@@ -26,3 +26,16 @@ SCRAPE_CIRCUIT_OPEN_TOTAL = Counter(
     "Number of times a domain circuit breaker opened.",
     ["domain"],
 )
+
+SCRAPE_RESPONSE_BYTES = Histogram(
+    "scrape_response_bytes",
+    "Response payload size for scrape results.",
+    ["mode", "source", "domain"],
+    buckets=(256, 1024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 2_097_152),
+)
+
+SCRAPE_REDIRECTS_TOTAL = Counter(
+    "scrape_redirects_total",
+    "Number of redirects followed by scrape requests.",
+    ["mode", "source", "domain"],
+)

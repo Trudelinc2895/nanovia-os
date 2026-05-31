@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -190,6 +191,7 @@ class Settings(BaseSettings):
     SCRAPING_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=5, le=3600)
     SCRAPING_PROXY_ROTATION_ENABLED: bool = False
     SCRAPING_PROXY_LIST_RAW: str = ""
+    SCRAPING_PROXY_BYPASS_DOMAINS_RAW: str = ""
     SCRAPING_RUN_WORKER_IN_API: bool = False
     SCRAPING_JITTER_MIN_MS: int = Field(default=25, ge=0, le=2000)
     SCRAPING_JITTER_MAX_MS: int = Field(default=120, ge=0, le=5000)
@@ -198,8 +200,13 @@ class Settings(BaseSettings):
     SCRAPING_DEDUPE_TTL_SECONDS: int = Field(default=300, ge=1)
     SCRAPING_JOB_TTL_SECONDS: int = Field(default=3600, ge=60)
     SCRAPING_CLIENT_DAILY_QUOTA: int = Field(default=0, ge=0)
+    SCRAPING_CLIENT_MAX_QUEUED_JOBS: int = Field(default=0, ge=0)
     SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
     SCRAPING_USER_AGENT: str = "nanovia-scraper/1.0"
+    SCRAPING_FEATURE_PROXY_ENABLED: bool = True
+    SCRAPING_FEATURE_BROWSER_ENABLED: bool = True
+    SCRAPING_FEATURE_ASYNC_QUEUE_ENABLED: bool = True
+    SCRAPING_FEATURE_CACHE_FALLBACK_ENABLED: bool = True
 
     # Stealth scraping (all off by default — zero behaviour change for existing deployments)
     SCRAPING_STEALTH_MODE: bool = False
@@ -292,6 +299,14 @@ class Settings(BaseSettings):
         ]
 
     @property
+    def SCRAPING_PROXY_BYPASS_DOMAINS(self) -> list[str]:
+        return sorted({
+            domain.strip().lower().lstrip(".")
+            for domain in self.SCRAPING_PROXY_BYPASS_DOMAINS_RAW.split(",")
+            if domain and domain.strip()
+        })
+
+    @property
     def SCRAPING_ALLOWED_CONTENT_TYPES(self) -> list[str]:
         return [
             content_type.strip().lower()
@@ -307,10 +322,12 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
 
-        if "SCRAPING_TIMEOUT_SECONDS" not in data and "SCRAPE_TIMEOUT_MS" in data:
-            timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+        scrape_timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+        if scrape_timeout_ms is None:
+            scrape_timeout_ms = os.getenv("SCRAPE_TIMEOUT_MS")
+        if "SCRAPING_TIMEOUT_SECONDS" not in data and scrape_timeout_ms is not None:
             try:
-                data["SCRAPING_TIMEOUT_SECONDS"] = float(timeout_ms) / 1000.0
+                data["SCRAPING_TIMEOUT_SECONDS"] = float(scrape_timeout_ms) / 1000.0
             except (TypeError, ValueError) as exc:
                 raise ValueError("SCRAPE_TIMEOUT_MS must be a positive integer") from exc
 

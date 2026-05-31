@@ -7,6 +7,8 @@ import time
 from collections import defaultdict
 from urllib.parse import urlsplit
 
+from api.scraping.feature_flags import async_queue_enabled
+from api.scraping.fetcher_browser import _browser_pool
 from api.scraping.service import process_job
 from api.scraping.store import dequeue_job
 from api.config import settings
@@ -94,9 +96,13 @@ async def run_worker_forever(
     _memory_baseline = await _get_process_memory_mb()
 
     while True:
+        domain: str | None = None
         if stop_event is not None and stop_event.is_set():
             logger.info("scrape_worker_stop_event_received — shutting down")
             break
+        if not async_queue_enabled():
+            await asyncio.sleep(1)
+            continue
         try:
             job_id = await dequeue_job(timeout_seconds=poll_timeout_seconds)
             if not job_id:
@@ -162,7 +168,6 @@ async def run_worker_forever(
                     mem_delta,
                 )
                 try:
-                    from api.scraping.fetcher import _browser_pool
                     await _browser_pool._close_browser()
                 except Exception as exc:
                     logger.warning("worker_memory_spike browser_close_error: %s", exc)
@@ -186,14 +191,27 @@ def main() -> None:
         logger.info("SIGTERM received — signalling worker stop")
         loop.call_soon_threadsafe(stop_event.set)
 
+    def _handle_sigint(*_):
+        logger.info("SIGINT received — signalling worker stop")
+        loop.call_soon_threadsafe(stop_event.set)
+
     try:
         signal.signal(signal.SIGTERM, _handle_sigterm)
     except (OSError, ValueError):
         pass  # SIGTERM may not be available on Windows
 
     try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except (OSError, ValueError):
+        pass
+
+    try:
         loop.run_until_complete(run_worker_forever(stop_event=stop_event))
     finally:
+        try:
+            loop.run_until_complete(_browser_pool.shutdown())
+        except Exception:
+            logger.exception("scrape_worker_shutdown_cleanup_failed")
         loop.close()
 
 

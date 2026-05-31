@@ -105,6 +105,30 @@ async def incr_with_ttl(key: str, ttl: int) -> int:
         return count
 
 
+async def decr_with_floor(key: str) -> int:
+    try:
+        redis = await get_redis()
+        count = int(await redis.decr(key))
+        if count <= 0:
+            await redis.delete(key)
+            return 0
+        return count
+    except Exception:
+        _prune_local_cache()
+        item = _local_cache.get(key)
+        if not item:
+            return 0
+        try:
+            count = max(int(item.value) - 1, 0)
+        except Exception:
+            count = 0
+        if count == 0:
+            _local_cache.pop(key, None)
+        else:
+            _local_cache[key] = _LocalValue(expires_at=item.expires_at, value=str(count))
+        return count
+
+
 async def circuit_get(domain: str) -> dict[str, int]:
     key = f"scrape:circuit:{domain}"
     now = int(_now())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import socket
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
@@ -34,7 +34,10 @@ def normalize_url(raw_url: str) -> str:
         netloc = f"{host}:{port}"
 
     path = parsed.path or "/"
-    return urlunsplit((parsed.scheme, netloc, path, parsed.query, ""))
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
+    return urlunsplit((parsed.scheme, netloc, path, query, ""))
 
 
 def normalized_hash(normalized_url: str) -> str:
@@ -96,4 +99,9 @@ def validate_safe_url(raw_url: str) -> str:
 
 def validate_redirect(base_url: str, location: str) -> str:
     next_url = urljoin(base_url, location)
-    return validate_safe_url(next_url)
+    validated = validate_safe_url(next_url)
+    source_host = urlsplit(base_url).hostname or ""
+    target_host = urlsplit(validated).hostname or ""
+    if source_host.lower().rstrip(".") != target_host.lower().rstrip("."):
+        raise HTTPException(status_code=403, detail="Redirect target blocked")
+    return validated

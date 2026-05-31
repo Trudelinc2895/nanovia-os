@@ -260,6 +260,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except asyncio.CancelledError:
             pass
 
+    if settings.SCRAPING_ENABLED:
+        try:
+            from api.scraping.fetcher_browser import _browser_pool
+
+            await _browser_pool.shutdown()
+        except Exception as _browser_exc:
+            _startup_logger.warning("[shutdown] Could not close Playwright browser pool: %s", _browser_exc)
+
     # Cancel scheduler tasks
     for task in _scheduler_tasks:
         task.cancel()

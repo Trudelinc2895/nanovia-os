@@ -16,8 +16,8 @@ DEV_COMPOSE_FILES ?= -f infra/docker-compose.dev.yml
 DEV_COMPOSE = docker compose -p $(DEV_PROJECT_NAME) $(DEV_COMPOSE_FILES) --env-file $(DEV_ENV_FILE)
 
 .PHONY: help up down build logs restart migrate admin shell-api \
-        backup update status clean pull test \
-        dev-up dev-down dev-build dev-logs dev-logs-api dev-migrate dev-test
+        backup update status clean pull test logs-worker restart-worker \
+        dev-up dev-down dev-build dev-logs dev-logs-api dev-logs-worker dev-migrate dev-test
 
 # ── Default ────────────────────────────────────────────────────────────────────
 help:
@@ -30,6 +30,7 @@ help:
 	@echo "  make restart     Rebuild + restart"
 	@echo "  make logs        Live logs (all services)"
 	@echo "  make logs-api    Live logs (API only)"
+	@echo "  make logs-worker Live logs (scraper worker only)"
 	@echo "  make migrate     Run Alembic migrations"
 	@echo "  make admin       Create first admin user"
 	@echo "  make shell-api   Open bash in api container"
@@ -43,6 +44,7 @@ help:
 	@echo "  make dev-up      Start the Docker dev stack (.env.dev)"
 	@echo "  make dev-down    Stop the Docker dev stack"
 	@echo "  make dev-logs    Live logs from the Docker dev stack"
+	@echo "  make dev-logs-worker Live logs from the dev scraper worker"
 	@echo "  make dev-migrate Run Alembic in the Docker dev stack"
 	@echo "  make dev-test    Run backend tests in the Docker dev stack"
 	@echo ""
@@ -66,12 +68,18 @@ build:
 restart: build
 	$(COMPOSE) up -d
 
+restart-worker:
+	$(COMPOSE) up -d --build --no-deps scraper-worker
+
 # ── Logs ──────────────────────────────────────────────────────────────────────
 logs:
 	$(COMPOSE) logs -f --tail=100
 
 logs-api:
 	$(COMPOSE) logs -f --tail=100 api
+
+logs-worker:
+	$(COMPOSE) logs -f --tail=100 scraper-worker
 
 logs-caddy:
 	$(COMPOSE) logs -f --tail=100 caddy
@@ -136,6 +144,9 @@ dev-logs:
 
 dev-logs-api:
 	$(DEV_COMPOSE) logs -f --tail=100 api
+
+dev-logs-worker:
+	$(DEV_COMPOSE) logs -f --tail=100 scraper-worker
 
 dev-migrate:
 	@echo "Running Alembic migrations in dev stack..."

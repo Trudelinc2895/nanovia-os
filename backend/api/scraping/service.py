@@ -2,40 +2,34 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
-import uuid
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
 from api.config import settings
+from api.scraping.backoff import exponential_backoff_seconds
+from api.scraping.cache import acquire_inflight_lock, read_cached_result, write_cached_result
+from api.scraping.feature_flags import async_queue_enabled
 from api.scraping.fetcher import fetch_url
 from api.scraping.metrics import (
     SCRAPE_CIRCUIT_OPEN_TOTAL,
     SCRAPE_LATENCY_SECONDS,
-    SCRAPE_QUEUE_DEPTH,
+    SCRAPE_REDIRECTS_TOTAL,
     SCRAPE_REQUESTS_TOTAL,
+    SCRAPE_RESPONSE_BYTES,
 )
 from api.scraping.models import ScrapeJobEnqueueResponse, ScrapeJobState, ScrapeRequest, ScrapeResult
-from api.scraping.security import normalized_hash, validate_safe_url
-from api.scraping.store import (
-    cache_get,
-    cache_setex,
-    clear_dedupe_job,
-    circuit_get,
-    circuit_set,
-    dumps_json,
-    enqueue_job,
-    get_dedupe_job,
-    get_job_state,
-    incr_with_ttl,
-    loads_json,
-    queue_depth,
-    set_dedupe_job,
-    set_job_state,
-    setnx_with_ttl,
+from api.scraping.queue import (
+    clear_job,
+    client_quota_key,
+    domain_limit_key,
+    enqueue_request,
+    find_active_job,
+    release_client_queue_slot,
 )
+from api.scraping.security import normalized_hash, validate_safe_url
+from api.scraping.store import circuit_get, circuit_set, get_job_state, incr_with_ttl, loads_json, set_job_state
 
 logger = logging.getLogger(__name__)
 
@@ -44,41 +38,24 @@ def _domain(normalized_url: str) -> str:
     return (urlsplit(normalized_url).hostname or "").lower()
 
 
-def _cache_key(url_hash: str) -> str:
-    return f"scrape:cache:{url_hash}"
-
-
-def _inflight_key(url_hash: str) -> str:
-    return f"scrape:inflight:{url_hash}"
-
-
-def _domain_limit_key(domain: str) -> str:
-    return f"scrape:rl:domain:{domain}"
-
-
-def _client_quota_key(client_id: str, epoch_day: int) -> str:
-    return f"scrape:quota:{client_id}:{epoch_day}"
-
-
 def _log_scrape_event(event: str, **fields: object) -> None:
     from api.core.logging import get_request_id
-    from api.config import settings as _s
-    logger.info({"event": event, "traceId": get_request_id(), "region": _s.APP_REGION, **fields})
+    from api.config import settings as runtime_settings
+
+    logger.info({"event": event, "traceId": get_request_id(), "region": runtime_settings.APP_REGION, **fields})
 
 
 async def _enforce_rate_limit(domain: str) -> None:
-    count = await incr_with_ttl(_domain_limit_key(domain), 60)
+    count = await incr_with_ttl(domain_limit_key(domain), 60)
     if count > settings.SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN:
         raise HTTPException(status_code=429, detail="Domain rate limit exceeded")
 
 
 async def _enforce_client_quota(client_id: str | None) -> None:
-    if settings.SCRAPING_CLIENT_DAILY_QUOTA <= 0:
-        return
-    if not client_id:
+    if settings.SCRAPING_CLIENT_DAILY_QUOTA <= 0 or not client_id:
         return
     epoch_day = int(time.time()) // 86400
-    key = _client_quota_key(client_id, epoch_day)
+    key = client_quota_key(client_id, epoch_day)
     count = await incr_with_ttl(key, 86400)
     if count > settings.SCRAPING_CLIENT_DAILY_QUOTA:
         raise HTTPException(status_code=429, detail="Client daily quota exceeded")
@@ -104,22 +81,6 @@ async def _record_success(domain: str) -> None:
     await circuit_set(domain, 0, 0, settings.SCRAPING_CIRCUIT_OPEN_SECONDS * 2)
 
 
-async def _read_cache(url_hash: str) -> ScrapeResult | None:
-    cached = await cache_get(_cache_key(url_hash))
-    if not cached:
-        return None
-    data = loads_json(cached)
-    result = ScrapeResult(**data)
-    result.cache_hit = True
-    return result
-
-
-async def _write_cache(url_hash: str, result: ScrapeResult) -> None:
-    payload = result.model_dump()
-    payload["cache_hit"] = False
-    await cache_setex(_cache_key(url_hash), settings.SCRAPING_CACHE_TTL_SECONDS, dumps_json(payload))
-
-
 async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
     normalized_url = validate_safe_url(req.url)
     domain = _domain(normalized_url)
@@ -128,6 +89,7 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
 
     if settings.SCRAPING_RISK_SCORING_ENABLED:
         from api.scraping.risk import is_risky
+
         if is_risky(normalized_url):
             raise HTTPException(status_code=403, detail="URL risk score too high")
 
@@ -136,7 +98,7 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
     await _check_circuit(domain)
 
     if not req.force_refresh:
-        cached = await _read_cache(url_hash)
+        cached = await read_cached_result(url_hash)
         if cached is not None:
             SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="cache_hit", domain=domain).inc()
             SCRAPE_LATENCY_SECONDS.labels(mode=req.mode, source="cache", domain=domain).observe(
@@ -151,9 +113,9 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
             )
             return cached
 
-    lock_ok = await setnx_with_ttl(_inflight_key(url_hash), settings.SCRAPING_DEDUPE_TTL_SECONDS)
+    lock_ok = await acquire_inflight_lock(url_hash)
     if not lock_ok:
-        cached = await _read_cache(url_hash)
+        cached = await read_cached_result(url_hash)
         if cached is not None:
             return cached
         raise HTTPException(status_code=409, detail="Duplicate scrape in progress")
@@ -161,7 +123,10 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
     last_exc: Exception | None = None
     for attempt in range(1, settings.SCRAPING_RETRY_MAX_ATTEMPTS + 1):
         try:
-            status_code, content_type, body, fetched_via = await fetch_url(normalized_url, render_js=req.render_js)
+            status_code, content_type, body, fetched_via, redirect_count, used_proxy = await fetch_url(
+                normalized_url,
+                render_js=req.render_js,
+            )
             result = ScrapeResult(
                 url=req.url,
                 normalized_url=normalized_url,
@@ -171,13 +136,23 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
                 body=body,
                 fetched_via=fetched_via,
                 cache_hit=False,
+                redirect_count=redirect_count,
+                response_bytes=len(body.encode("utf-8", errors="replace")),
+                used_proxy=used_proxy,
             )
-            await _write_cache(url_hash, result)
+            await write_cached_result(url_hash, result)
             await _record_success(domain)
             SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="success", domain=domain).inc()
             SCRAPE_LATENCY_SECONDS.labels(mode=req.mode, source=result.fetched_via, domain=domain).observe(
                 time.perf_counter() - started_at
             )
+            SCRAPE_RESPONSE_BYTES.labels(mode=req.mode, source=result.fetched_via, domain=domain).observe(
+                result.response_bytes
+            )
+            if result.redirect_count:
+                SCRAPE_REDIRECTS_TOTAL.labels(mode=req.mode, source=result.fetched_via, domain=domain).inc(
+                    result.redirect_count
+                )
             _log_scrape_event(
                 "scrape_completed",
                 url=req.url,
@@ -187,10 +162,12 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
                 source=result.fetched_via,
                 status_code=result.status_code,
                 cache_hit=False,
+                redirect_count=result.redirect_count,
+                response_bytes=result.response_bytes,
+                used_proxy=result.used_proxy,
             )
             return result
         except HTTPException as exc:
-            # Do NOT retry bot-detection / legal-block status codes
             if exc.status_code in {403, 429, 451}:
                 await _record_failure(domain)
                 SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="http_error", domain=domain).inc()
@@ -203,8 +180,7 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
             await _record_failure(domain)
             if attempt == settings.SCRAPING_RETRY_MAX_ATTEMPTS:
                 break
-            backoff = (settings.SCRAPING_RETRY_BACKOFF_BASE_MS / 1000.0) * (2 ** (attempt - 1))
-            await asyncio.sleep(backoff + random.uniform(0, backoff / 2))
+            await asyncio.sleep(exponential_backoff_seconds(attempt))
 
     SCRAPE_REQUESTS_TOTAL.labels(mode=req.mode, outcome="failed", domain=domain).inc()
     logger.exception("scrape_failed", extra={"url": req.url, "domain": domain})
@@ -212,12 +188,16 @@ async def scrape_once(req: ScrapeRequest) -> ScrapeResult:
 
 
 async def enqueue_scrape(req: ScrapeRequest) -> ScrapeJobEnqueueResponse:
+    if not async_queue_enabled():
+        raise HTTPException(status_code=503, detail="Asynchronous scraping is disabled")
+
     normalized_url = validate_safe_url(req.url)
     domain = _domain(normalized_url)
     url_hash = normalized_hash(normalized_url)
 
     if settings.SCRAPING_RISK_SCORING_ENABLED:
         from api.scraping.risk import is_risky
+
         if is_risky(normalized_url):
             raise HTTPException(status_code=403, detail="URL risk score too high")
 
@@ -226,60 +206,26 @@ async def enqueue_scrape(req: ScrapeRequest) -> ScrapeJobEnqueueResponse:
     await _check_circuit(domain)
 
     if not req.force_refresh:
-        existing_job_id = await get_dedupe_job(url_hash)
-        if existing_job_id:
-            existing = await get_job_state(existing_job_id)
-            if existing and existing.get("status") in {"queued", "processing"}:
-                _log_scrape_event(
-                    "scrape_job_deduped",
-                    url=req.url,
-                    normalized_url=normalized_url,
-                    domain=domain,
-                    job_id=existing_job_id,
-                )
-                return ScrapeJobEnqueueResponse(job_id=existing_job_id, status=existing["status"], queued=True)
+        existing = await find_active_job(url_hash)
+        if existing:
+            _log_scrape_event(
+                "scrape_job_deduped",
+                url=req.url,
+                normalized_url=normalized_url,
+                domain=domain,
+                job_id=existing["job_id"],
+            )
+            return ScrapeJobEnqueueResponse(job_id=existing["job_id"], status=existing["status"], queued=True)
 
-    depth = await queue_depth()
-    SCRAPE_QUEUE_DEPTH.set(depth)
-    if depth >= settings.SCRAPING_QUEUE_MAX_DEPTH:
-        raise HTTPException(status_code=503, detail="Scrape queue is full")
-
-    job_id = str(uuid.uuid4())
-    now = int(time.time())
-    state = ScrapeJobState(
-        job_id=job_id,
-        status="queued",
-        created_at=now,
-        updated_at=now,
-        attempts=0,
-        normalized_url=normalized_url,
-        result=None,
-        error=None,
-    )
-    payload = {
-        "job_id": state.job_id,
-        "status": state.status,
-        "created_at": str(state.created_at),
-        "updated_at": str(state.updated_at),
-        "attempts": str(state.attempts),
-        "normalized_url": state.normalized_url,
-        "request": req.model_dump_json(),
-        "result": "",
-        "error": "",
-    }
-    await set_job_state(job_id, payload, settings.SCRAPING_JOB_TTL_SECONDS)
-    await set_dedupe_job(url_hash, job_id, settings.SCRAPING_JOB_TTL_SECONDS)
-    await enqueue_job(job_id)
-    SCRAPE_QUEUE_DEPTH.set(depth + 1)
+    enqueue_response = await enqueue_request(req, normalized_url=normalized_url, url_hash=url_hash)
     _log_scrape_event(
         "scrape_job_enqueued",
         url=req.url,
         normalized_url=normalized_url,
         domain=domain,
-        job_id=job_id,
-        queue_depth=depth + 1,
+        job_id=enqueue_response.job_id,
     )
-    return ScrapeJobEnqueueResponse(job_id=job_id, status="queued", queued=True)
+    return enqueue_response
 
 
 async def get_scrape_job(job_id: str) -> ScrapeJobState:
@@ -352,7 +298,8 @@ async def process_job(job_id: str) -> None:
             },
             settings.SCRAPING_JOB_TTL_SECONDS,
         )
-        await clear_dedupe_job(url_hash, job_id)
+        await release_client_queue_slot(req.client_id)
+        await clear_job(url_hash, job_id)
     except Exception as exc:  # noqa: BLE001
         await set_job_state(
             job_id,
@@ -365,4 +312,6 @@ async def process_job(job_id: str) -> None:
             },
             settings.SCRAPING_JOB_TTL_SECONDS,
         )
-        await clear_dedupe_job(url_hash, job_id)
+        await release_client_queue_slot(req.client_id)
+        await clear_job(url_hash, job_id)
+
