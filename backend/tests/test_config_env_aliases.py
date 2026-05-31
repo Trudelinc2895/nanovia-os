@@ -110,6 +110,7 @@ def test_production_requires_https_public_urls(monkeypatch):
 def test_scraping_env_aliases_are_supported(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_scrape_aliases.db")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-prod")
+    monkeypatch.setenv("SCRAPING_ENABLED", "true")
     monkeypatch.setenv("ENABLE_SCRAPE_PROXY", "true")
     monkeypatch.setenv("SCRAPE_TTL_SECONDS", "3600")
     monkeypatch.setenv("RATE_LIMIT_MAX_PER_DOMAIN", "20")
@@ -119,6 +120,7 @@ def test_scraping_env_aliases_are_supported(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.SCRAPING_ENABLED is True
+    assert settings.SCRAPING_PROXY_LAYER_ENABLED is True
     assert settings.SCRAPING_CACHE_TTL_SECONDS == 3600
     assert settings.SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN == 20
     assert settings.SCRAPING_RETRY_MAX_ATTEMPTS == 2

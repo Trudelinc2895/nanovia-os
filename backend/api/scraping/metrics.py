@@ -54,6 +54,12 @@ SCRAPE_RETRIES_TOTAL = Counter(
     ["mode", "domain", "reason"],
 )
 
+SCRAPE_ERRORS_TOTAL = Counter(
+    "scrape_errors_total",
+    "Number of scrape request failures grouped by mode, domain, and reason.",
+    ["mode", "domain", "reason"],
+)
+
 SCRAPE_WORKER_ACTIVE = Gauge(
     "scrape_worker_active",
     "Number of active scrape workers with a fresh heartbeat.",

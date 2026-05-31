@@ -8,7 +8,7 @@ from api.config import settings
 from api.core.deps import OptionalUser, get_db
 from api.models.user import User
 from api.scraping.models import ScrapeMode, ScrapeRequest
-from api.scraping.service import enqueue_scrape, get_scrape_job, scrape_once
+from api.scraping.service import enqueue_scrape, get_scrape_job, legacy_scrape_once, scrape_once
 
 router = APIRouter()
 
@@ -81,8 +81,19 @@ async def scrape(
         client_id=_resolve_client_id(request, client_id, user),
     )
 
+    if not settings.SCRAPING_PROXY_LAYER_ENABLED:
+        if req.mode == "async":
+            raise HTTPException(status_code=503, detail="Asynchronous scraping requires ENABLE_SCRAPE_PROXY=true")
+        return await legacy_scrape_once(req)
+
     if req.mode == "async":
-        return await enqueue_scrape(req)
+        try:
+            return await enqueue_scrape(req)
+        except HTTPException as exc:
+            if not settings.SCRAPING_FALLBACK_DIRECT_ENABLED or exc.status_code != 503:
+                raise
+            sync_req = req.model_copy(update={"mode": "sync"})
+            return await scrape_once(sync_req)
 
     return await scrape_once(req)
 

@@ -171,6 +171,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY_REF: str = ""
     OPENAI_API_KEY: str = ""
     AI_MODEL: str = "gpt-4.1-mini"
+    AI_STATE_DIR: str = ""
+    AI_ADMIN_API_KEY: str = ""
     OPENAI_COST_GUARD_ENABLED: bool = True
     OPENAI_MAX_MONTHLY_COST_USD: float = Field(default=45.0, ge=0)
     OPENAI_TARGET_GROSS_MARGIN_PCT: int = Field(default=70, ge=0, le=100)
@@ -193,19 +195,50 @@ class Settings(BaseSettings):
     # Scraping (secure proxy layer)
     SCRAPING_ENABLED: bool = Field(
         default=False,
-        validation_alias=AliasChoices("SCRAPING_ENABLED", "ENABLE_SCRAPE_PROXY"),
+        validation_alias=AliasChoices("SCRAPING_ENABLED"),
     )
-    SCRAPING_ALLOWLIST_RAW: str = ""
+    SCRAPING_PROXY_LAYER_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_PROXY_LAYER_ENABLED", "ENABLE_SCRAPE_PROXY"),
+    )
+    SCRAPING_ALLOWLIST_RAW: str = Field(
+        default="",
+        validation_alias=AliasChoices("SCRAPING_ALLOWLIST_RAW", "SCRAPE_ALLOWED_DOMAINS"),
+    )
     SCRAPING_STRICT_ALLOWLIST: bool = True
-    SCRAPING_REQUIRE_AUTH: bool = False
-    SCRAPING_MODE_DEFAULT: Literal["sync", "async"] = "sync"
+    SCRAPING_REQUIRE_AUTH: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_REQUIRE_AUTH", "SCRAPE_REQUIRE_AUTH"),
+    )
+    SCRAPING_MODE_DEFAULT: Literal["sync", "async"] = Field(
+        default="sync",
+        validation_alias=AliasChoices("SCRAPING_MODE_DEFAULT", "SCRAPE_MODE"),
+    )
+    SCRAPING_BLOCK_PRIVATE_IPS: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SCRAPING_BLOCK_PRIVATE_IPS", "SCRAPE_BLOCK_PRIVATE_IPS"),
+    )
     SCRAPING_CACHE_TTL_SECONDS: int = Field(
         default=900,
         ge=1,
-        validation_alias=AliasChoices("SCRAPING_CACHE_TTL_SECONDS", "SCRAPE_TTL_SECONDS"),
+        validation_alias=AliasChoices("SCRAPING_CACHE_TTL_SECONDS", "SCRAPE_TTL_SECONDS", "SCRAPE_CACHE_TTL_SECONDS"),
     )
-    SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
-    SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
+    SCRAPING_CACHE_STALE_TTL_SECONDS: int = Field(
+        default=3600,
+        ge=1,
+        validation_alias=AliasChoices("SCRAPING_CACHE_STALE_TTL_SECONDS", "SCRAPE_CACHE_STALE_TTL_SECONDS"),
+    )
+    SCRAPING_MAX_RESPONSE_BYTES: int = Field(
+        default=2_000_000,
+        ge=1024,
+        validation_alias=AliasChoices("SCRAPING_MAX_RESPONSE_BYTES", "SCRAPE_MAX_RESPONSE_BYTES"),
+    )
+    SCRAPING_MAX_REDIRECTS: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        validation_alias=AliasChoices("SCRAPING_MAX_REDIRECTS", "SCRAPE_MAX_REDIRECTS"),
+    )
     SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
     SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
         default=60,
@@ -213,44 +246,120 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN",
             "RATE_LIMIT_MAX_PER_DOMAIN",
+            "SCRAPE_RATE_LIMIT_DOMAIN_PER_MINUTE",
         ),
+    )
+    SCRAPING_RATE_LIMIT_CLIENT_PER_MIN: int = Field(
+        default=60,
+        ge=0,
+        validation_alias=AliasChoices("SCRAPING_RATE_LIMIT_CLIENT_PER_MIN", "SCRAPE_RATE_LIMIT_CLIENT_PER_MINUTE"),
     )
     SCRAPING_RETRY_MAX_ATTEMPTS: int = Field(
         default=3,
         ge=1,
         le=8,
-        validation_alias=AliasChoices("SCRAPING_RETRY_MAX_ATTEMPTS", "SCRAPE_MAX_RETRIES"),
+        validation_alias=AliasChoices("SCRAPING_RETRY_MAX_ATTEMPTS", "SCRAPE_MAX_RETRIES", "SCRAPE_RETRY_ATTEMPTS"),
     )
-    SCRAPING_RETRY_BACKOFF_BASE_MS: int = Field(default=250, ge=50, le=10_000)
-    SCRAPING_CIRCUIT_FAIL_THRESHOLD: int = Field(default=5, ge=1, le=100)
+    SCRAPING_RETRY_BACKOFF_BASE_MS: int = Field(
+        default=250,
+        ge=50,
+        le=10_000,
+        validation_alias=AliasChoices("SCRAPING_RETRY_BACKOFF_BASE_MS", "SCRAPE_RETRY_BACKOFF_MS"),
+    )
+    SCRAPING_CIRCUIT_FAIL_THRESHOLD: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("SCRAPING_CIRCUIT_FAIL_THRESHOLD", "SCRAPE_CIRCUIT_FAILURE_THRESHOLD"),
+    )
     SCRAPING_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=5, le=3600)
-    SCRAPING_PROXY_ROTATION_ENABLED: bool = False
-    SCRAPING_PROXY_LIST_RAW: str = ""
+    SCRAPING_PROXY_ROTATION_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_PROXY_ROTATION_ENABLED", "SCRAPE_PROXY_ENABLED"),
+    )
+    SCRAPING_PROXY_LIST_RAW: str = Field(
+        default="",
+        validation_alias=AliasChoices("SCRAPING_PROXY_LIST_RAW", "SCRAPE_PROXY_URLS"),
+    )
     SCRAPING_PROXY_BYPASS_DOMAINS_RAW: str = ""
     SCRAPING_RUN_WORKER_IN_API: bool = False
     SCRAPING_JITTER_MIN_MS: int = Field(default=25, ge=0, le=2000)
     SCRAPING_JITTER_MAX_MS: int = Field(default=120, ge=0, le=5000)
     SCRAPING_BROWSER_POOL_SIZE: int = Field(default=2, ge=1, le=20)
-    SCRAPING_QUEUE_MAX_DEPTH: int = Field(default=1000, ge=1)
+    SCRAPING_QUEUE_MAX_DEPTH: int = Field(
+        default=1000,
+        ge=1,
+        validation_alias=AliasChoices("SCRAPING_QUEUE_MAX_DEPTH", "SCRAPE_QUEUE_MAX_WAITING"),
+    )
+    SCRAPING_QUEUE_CONCURRENCY: int = Field(
+        default=3,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("SCRAPING_QUEUE_CONCURRENCY", "SCRAPE_QUEUE_CONCURRENCY"),
+    )
+    SCRAPING_QUEUE_JOB_TIMEOUT_MS: int = Field(
+        default=30_000,
+        ge=1_000,
+        le=300_000,
+        validation_alias=AliasChoices("SCRAPING_QUEUE_JOB_TIMEOUT_MS", "SCRAPE_QUEUE_JOB_TIMEOUT_MS"),
+    )
     SCRAPING_DEDUPE_TTL_SECONDS: int = Field(default=300, ge=1)
     SCRAPING_JOB_TTL_SECONDS: int = Field(default=3600, ge=60)
     SCRAPING_CLIENT_DAILY_QUOTA: int = Field(default=0, ge=0)
     SCRAPING_CLIENT_MAX_QUEUED_JOBS: int = Field(default=0, ge=0)
-    SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = "text/html,text/plain,application/json,application/xml,text/xml"
-    SCRAPING_USER_AGENT: str = "nanovia-scraper/1.0"
-    SCRAPING_FEATURE_PROXY_ENABLED: bool = True
+    SCRAPING_ALLOWED_CONTENT_TYPES_RAW: str = Field(
+        default="text/html,text/plain,application/json,application/xml,text/xml",
+        validation_alias=AliasChoices("SCRAPING_ALLOWED_CONTENT_TYPES_RAW", "SCRAPE_ALLOWED_CONTENT_TYPES"),
+    )
+    SCRAPING_USER_AGENT: str = Field(
+        default="nanovia-scraper/1.0",
+        validation_alias=AliasChoices("SCRAPING_USER_AGENT", "SCRAPE_USER_AGENT"),
+    )
+    SCRAPING_ACCEPT_LANGUAGE: str = Field(
+        default="fr-CA,fr;q=0.9,en;q=0.8",
+        validation_alias=AliasChoices("SCRAPING_ACCEPT_LANGUAGE", "SCRAPE_ACCEPT_LANGUAGE"),
+    )
+    SCRAPING_FEATURE_PROXY_ENABLED: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SCRAPING_FEATURE_PROXY_ENABLED", "SCRAPE_PROXY_ENABLED"),
+    )
     SCRAPING_FEATURE_BROWSER_ENABLED: bool = True
     SCRAPING_FEATURE_ASYNC_QUEUE_ENABLED: bool = True
     SCRAPING_FEATURE_CACHE_FALLBACK_ENABLED: bool = True
+    SCRAPING_FALLBACK_DIRECT_ENABLED: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SCRAPING_FALLBACK_DIRECT_ENABLED", "SCRAPE_FALLBACK_DIRECT_ENABLED"),
+    )
+    SCRAPING_REDIS_REQUIRED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SCRAPING_REDIS_REQUIRED", "SCRAPE_REDIS_REQUIRED"),
+    )
+    SCRAPING_METRICS_ENABLED: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SCRAPING_METRICS_ENABLED", "SCRAPE_METRICS_ENABLED"),
+    )
 
     # Stealth scraping (all off by default — zero behaviour change for existing deployments)
     SCRAPING_STEALTH_MODE: bool = False
     SCRAPING_STEALTH_SCROLL_SIMULATE: bool = True
     SCRAPING_STEALTH_HEADER_ROTATION: bool = True
     SCRAPING_STEALTH_PROFILE: str = "chrome-windows"
-    SCRAPING_STEALTH_TIMEZONE: str = "UTC"
-    SCRAPING_STEALTH_VIEWPORT_WIDTH: int = Field(default=1366, ge=800, le=3840)
-    SCRAPING_STEALTH_VIEWPORT_HEIGHT: int = Field(default=768, ge=600, le=2160)
+    SCRAPING_STEALTH_TIMEZONE: str = Field(
+        default="UTC",
+        validation_alias=AliasChoices("SCRAPING_STEALTH_TIMEZONE", "SCRAPE_TIMEZONE"),
+    )
+    SCRAPING_STEALTH_VIEWPORT_WIDTH: int = Field(
+        default=1366,
+        ge=800,
+        le=3840,
+        validation_alias=AliasChoices("SCRAPING_STEALTH_VIEWPORT_WIDTH", "SCRAPE_VIEWPORT_WIDTH"),
+    )
+    SCRAPING_STEALTH_VIEWPORT_HEIGHT: int = Field(
+        default=768,
+        ge=600,
+        le=2160,
+        validation_alias=AliasChoices("SCRAPING_STEALTH_VIEWPORT_HEIGHT", "SCRAPE_VIEWPORT_HEIGHT"),
+    )
     SCRAPING_PROXY_HEALTH_CHECK_INTERVAL_SECONDS: int = 300
     SCRAPING_PROXY_HEALTH_CHECK_URL: str = "https://httpbin.org/ip"
     SCRAPING_WORKER_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=10, ge=1, le=300)
@@ -391,6 +500,15 @@ class Settings(BaseSettings):
             except (TypeError, ValueError) as exc:
                 raise ValueError("SCRAPE_TIMEOUT_MS must be a positive integer") from exc
 
+        scrape_circuit_reset_ms = data.get("SCRAPE_CIRCUIT_RESET_TIMEOUT_MS")
+        if scrape_circuit_reset_ms is None:
+            scrape_circuit_reset_ms = os.getenv("SCRAPE_CIRCUIT_RESET_TIMEOUT_MS")
+        if "SCRAPING_CIRCUIT_OPEN_SECONDS" not in data and scrape_circuit_reset_ms is not None:
+            try:
+                data["SCRAPING_CIRCUIT_OPEN_SECONDS"] = max(1, int(scrape_circuit_reset_ms) // 1000)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SCRAPE_CIRCUIT_RESET_TIMEOUT_MS must be a positive integer") from exc
+
         provider = str(data.get("SECRET_PROVIDER", "auto") or "auto").strip().lower()
         vault_addr = str(data.get("VAULT_ADDR", "http://127.0.0.1:8200") or "http://127.0.0.1:8200")
         vault_token = str(data.get("VAULT_TOKEN", "") or "")
@@ -506,6 +624,10 @@ class Settings(BaseSettings):
             raise ValueError("SCRAPING_PROXY_ROTATION_ENABLED=true requires SCRAPING_PROXY_LIST_RAW")
         if self.SCRAPING_TIMEOUT_SECONDS <= 0:
             raise ValueError("SCRAPING_TIMEOUT_SECONDS must be > 0")
+        if self.SCRAPING_CACHE_STALE_TTL_SECONDS < self.SCRAPING_CACHE_TTL_SECONDS:
+            raise ValueError("SCRAPING_CACHE_STALE_TTL_SECONDS must be >= SCRAPING_CACHE_TTL_SECONDS")
+        if self.SCRAPING_QUEUE_JOB_TIMEOUT_MS < int(self.SCRAPING_TIMEOUT_SECONDS * 1000):
+            raise ValueError("SCRAPING_QUEUE_JOB_TIMEOUT_MS must be >= SCRAPING_TIMEOUT_SECONDS")
         return self
 
     @model_validator(mode="after")

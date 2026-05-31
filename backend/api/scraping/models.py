@@ -18,6 +18,7 @@ class ScrapeResult(BaseModel):
     body: str
     fetched_via: Literal["http", "playwright"] = "http"
     cache_hit: bool = False
+    stale: bool = False
     redirect_count: int = 0
     response_bytes: int = 0
     used_proxy: bool = False
@@ -26,7 +27,9 @@ class ScrapeResult(BaseModel):
 class ScrapeJobEnqueueResponse(BaseModel):
     job_id: str
     status: JobStatus
+    mode: ScrapeMode = "async"
     queued: bool = True
+    correlation_id: str | None = None
 
 
 class ScrapeJobState(BaseModel):
@@ -36,6 +39,7 @@ class ScrapeJobState(BaseModel):
     updated_at: int
     attempts: int = 0
     normalized_url: str
+    correlation_id: str | None = None
     result: ScrapeResult | None = None
     error: str | None = None
 

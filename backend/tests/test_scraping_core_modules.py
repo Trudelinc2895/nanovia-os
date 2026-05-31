@@ -36,6 +36,24 @@ def test_request_dedupe_key_separates_render_modes():
     )
 
 
+def test_request_dedupe_key_strips_tracking_params():
+    from api.scraping.queue import build_request_dedupe_key
+
+    left = build_request_dedupe_key("https://example.com/page?utm_source=ad&a=1", render_js=False)
+    right = build_request_dedupe_key("https://example.com/page?a=1", render_js=False)
+
+    assert left == right
+
+
+def test_build_job_id_is_stable_for_same_request():
+    from api.scraping.queue import build_job_id
+
+    left = build_job_id("https://example.com/page?a=1&utm_source=ad", render_js=True)
+    right = build_job_id("https://example.com/page?a=1", render_js=True)
+
+    assert left == right
+
+
 def test_browser_request_target_blocks_cross_domain_redirect(monkeypatch):
     from api.scraping import fetcher_browser
 
@@ -85,6 +103,48 @@ async def test_cache_roundtrip(monkeypatch):
     assert cached is not None
     assert cached.cache_hit is True
     assert cached.domain == "example.com"
+    assert cached.stale is False
+
+
+@pytest.mark.asyncio
+async def test_cache_can_return_stale_entry(monkeypatch):
+    from api.config import settings
+    from api.scraping import cache
+    from api.scraping.models import ScrapeResult
+
+    state: dict[str, str] = {}
+    clock = {"value": 1000}
+
+    async def fake_cache_get(key: str) -> str | None:
+        return state.get(key)
+
+    async def fake_cache_setex(key: str, ttl: int, value: str) -> None:
+        del ttl
+        state[key] = value
+
+    monkeypatch.setattr(cache, "cache_get", fake_cache_get)
+    monkeypatch.setattr(cache, "cache_setex", fake_cache_setex)
+    monkeypatch.setattr(cache.time, "time", lambda: clock["value"])
+    monkeypatch.setattr(settings, "SCRAPING_CACHE_TTL_SECONDS", 10)
+    monkeypatch.setattr(settings, "SCRAPING_CACHE_STALE_TTL_SECONDS", 20)
+
+    result = ScrapeResult(
+        url="https://example.com",
+        normalized_url="https://example.com",
+        domain="example.com",
+        status_code=200,
+        content_type="text/html",
+        body="<html />",
+    )
+
+    await cache.write_cached_result("stale", result)
+    clock["value"] = 1015
+
+    assert await cache.read_cached_result("stale") is None
+    stale = await cache.read_cached_result("stale", allow_stale=True)
+    assert stale is not None
+    assert stale.cache_hit is True
+    assert stale.stale is True
 
 
 @pytest.mark.asyncio
@@ -387,7 +447,11 @@ async def test_scrape_once_does_not_retry_on_bot_block(monkeypatch):
 
     monkeypatch.setattr(service, "validate_safe_url", lambda url: url)
     monkeypatch.setattr(service, "_domain", lambda _url: "example.com")
-    monkeypatch.setattr(service, "read_cached_result", lambda _key: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(
+        service,
+        "read_cached_result",
+        lambda _key, allow_stale=False: asyncio.sleep(0, result=None),
+    )
     monkeypatch.setattr(service, "acquire_inflight_lock", lambda _key: asyncio.sleep(0, result=True))
     monkeypatch.setattr(service, "_enforce_rate_limit", fake_enforce)
     monkeypatch.setattr(service, "_enforce_client_quota", fake_enforce)
@@ -423,7 +487,11 @@ async def test_scrape_once_releases_inflight_lock_after_failure(monkeypatch):
     monkeypatch.setattr(service, "validate_safe_url", lambda url: url)
     monkeypatch.setattr(service, "_domain", lambda _url: "example.com")
     monkeypatch.setattr(service, "normalized_hash", lambda value: f"hash:{value}")
-    monkeypatch.setattr(service, "read_cached_result", lambda _key: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(
+        service,
+        "read_cached_result",
+        lambda _key, allow_stale=False: asyncio.sleep(0, result=None),
+    )
     monkeypatch.setattr(service, "acquire_inflight_lock", lambda _key: asyncio.sleep(0, result=True))
     monkeypatch.setattr(service, "release_inflight_lock", fake_release)
     monkeypatch.setattr(service, "_enforce_rate_limit", fake_enforce)
@@ -438,7 +506,7 @@ async def test_scrape_once_releases_inflight_lock_after_failure(monkeypatch):
         await service.scrape_once(req)
 
     assert exc.value.status_code == 502
-    assert released == ["hash:https://example.com"]
+    assert released == ["hash:https://example.com/|render_js=0"]
 
 
 @pytest.mark.asyncio
@@ -481,7 +549,6 @@ async def test_enqueue_request_uses_opaque_public_job_id(monkeypatch):
     async def fake_enqueue_job(job_id: str) -> None:
         captured["queued_job_id"] = job_id
 
-    monkeypatch.setattr(queue.uuid, "uuid4", lambda: "opaque-job-id")
     monkeypatch.setattr(queue, "reserve_client_queue_slot", fake_reserve_client_queue_slot)
     monkeypatch.setattr(queue, "ensure_queue_capacity", fake_ensure_queue_capacity)
     monkeypatch.setattr(queue, "set_job_state", fake_set_job_state)
@@ -497,11 +564,13 @@ async def test_enqueue_request_uses_opaque_public_job_id(monkeypatch):
         request_dedupe_key=expected_request_dedupe_key,
     )
 
-    assert response.job_id == "opaque-job-id"
-    assert captured["job_id"] == "opaque-job-id"
-    assert captured["payload_job_id"] == "opaque-job-id"
-    assert captured["dedupe_job_id"] == "opaque-job-id"
-    assert captured["queued_job_id"] == "opaque-job-id"
+    expected_job_id = queue.build_job_id("https://example.com", render_js=True)
+
+    assert response.job_id == expected_job_id
+    assert captured["job_id"] == expected_job_id
+    assert captured["payload_job_id"] == expected_job_id
+    assert captured["dedupe_job_id"] == expected_job_id
+    assert captured["queued_job_id"] == expected_job_id
 
 
 @pytest.mark.asyncio

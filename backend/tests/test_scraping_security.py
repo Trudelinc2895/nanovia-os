@@ -13,6 +13,12 @@ def test_normalize_url_strips_fragment_and_default_port():
     assert out == "https://example.com/path?q=1"
 
 
+def test_canonicalize_url_for_cache_removes_tracking_params_and_sorts_query():
+    normalized = "https://example.com/path?utm_source=ad&b=2&gclid=123&a=1"
+    out = security.canonicalize_url_for_cache(normalized)
+    assert out == "https://example.com/path?a=1&b=2"
+
+
 def test_normalize_url_preserves_path_slash_query_order_and_encoding():
     out = security.normalize_url("https://Example.com:443/path/?b=2&a=1%2B2&a=3+4#frag")
     assert out == "https://example.com/path/?b=2&a=1%2B2&a=3+4"
@@ -52,6 +58,16 @@ def test_validate_dns_and_ip_blocks_private(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         security.validate_dns_and_ip("localhost")
     assert exc.value.status_code == 403
+
+
+def test_validate_dns_and_ip_allows_private_when_flag_disabled(monkeypatch):
+    def _fake_getaddrinfo(host, port, family=0, type=0):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr("api.scraping.security.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr("api.scraping.security.settings.SCRAPING_BLOCK_PRIVATE_IPS", False)
+
+    security.validate_dns_and_ip("localhost")
 
 
 def test_validate_safe_url_blocks_cloud_metadata_ip(monkeypatch):

@@ -17,7 +17,8 @@ DEV_COMPOSE = docker compose -p $(DEV_PROJECT_NAME) $(DEV_COMPOSE_FILES) --env-f
 
 .PHONY: help up down build logs restart migrate admin shell-api \
         backup update status clean pull test logs-worker restart-worker \
-        dev-up dev-down dev-build dev-logs dev-logs-api dev-logs-worker dev-migrate dev-test
+        dev-up dev-down dev-build dev-logs dev-logs-api dev-logs-worker dev-migrate dev-test \
+        scrape-worker scrape-dev scrape-test scrape-health
 
 # ── Default ────────────────────────────────────────────────────────────────────
 help:
@@ -71,6 +72,9 @@ restart: build
 restart-worker:
 	$(COMPOSE) up -d --build --no-deps scraper-worker
 
+scrape-worker:
+	$(COMPOSE) up -d --build scraper-worker
+
 # ── Logs ──────────────────────────────────────────────────────────────────────
 logs:
 	$(COMPOSE) logs -f --tail=100
@@ -80,6 +84,9 @@ logs-api:
 
 logs-worker:
 	$(COMPOSE) logs -f --tail=100 scraper-worker
+
+scrape-health:
+	@$(COMPOSE) ps api scraper-worker redis
 
 logs-caddy:
 	$(COMPOSE) logs -f --tail=100 caddy
@@ -148,6 +155,9 @@ dev-logs-api:
 dev-logs-worker:
 	$(DEV_COMPOSE) logs -f --tail=100 scraper-worker
 
+scrape-dev:
+	$(DEV_COMPOSE) up -d --build postgres redis api scraper-worker
+
 dev-migrate:
 	@echo "Running Alembic migrations in dev stack..."
 	$(DEV_COMPOSE) up -d postgres redis
@@ -156,6 +166,9 @@ dev-migrate:
 
 dev-test:
 	$(DEV_COMPOSE) exec -T api python -m pytest tests/ -q --tb=short
+
+scrape-test:
+	$(COMPOSE) exec -T api python -m pytest tests/test_scrape_router.py tests/test_scraping_core_modules.py tests/test_scraping_security.py tests/test_scraping_service.py tests/test_scraping_proxy_layer.py -q --tb=short
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 clean:

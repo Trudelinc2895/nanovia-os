@@ -42,7 +42,10 @@ async def fetch_url(normalized_url: str, *, render_js: bool) -> tuple[int, str, 
         )
         req_headers = build_stealth_headers(profile=stealth_profile)
     else:
-        req_headers = {"User-Agent": settings.SCRAPING_USER_AGENT}
+        req_headers = {
+            "User-Agent": settings.SCRAPING_USER_AGENT,
+            "Accept-Language": settings.SCRAPING_ACCEPT_LANGUAGE,
+        }
 
     try:
         await _sleep_jitter()
@@ -63,4 +66,3 @@ async def fetch_url(normalized_url: str, *, render_js: bool) -> tuple[int, str, 
         if proxy:
             await mark_proxy_dead(proxy)
         raise
-

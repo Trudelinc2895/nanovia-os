@@ -157,7 +157,17 @@ async def fetch_browser(
     if stealth_profile is not None:
         context_options = {
             "user_agent": str(stealth_profile.get("ua", request_headers.get("User-Agent", settings.SCRAPING_USER_AGENT))),
-            "locale": str(stealth_profile.get("locale", "en-US")),
+            "locale": str(stealth_profile.get("locale", settings.SCRAPING_ACCEPT_LANGUAGE.split(",", 1)[0] or "en-US")),
+            "timezone_id": settings.SCRAPING_STEALTH_TIMEZONE,
+            "viewport": {
+                "width": settings.SCRAPING_STEALTH_VIEWPORT_WIDTH,
+                "height": settings.SCRAPING_STEALTH_VIEWPORT_HEIGHT,
+            },
+        }
+    else:
+        context_options = {
+            "user_agent": request_headers.get("User-Agent", settings.SCRAPING_USER_AGENT),
+            "locale": settings.SCRAPING_ACCEPT_LANGUAGE.split(",", 1)[0] or "en-US",
             "timezone_id": settings.SCRAPING_STEALTH_TIMEZONE,
             "viewport": {
                 "width": settings.SCRAPING_STEALTH_VIEWPORT_WIDTH,
@@ -255,4 +265,3 @@ async def fetch_browser(
 
         status_code = 200 if response is None else response.status
         return status_code, "text/html", html, "playwright", redirect_count, False
-

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import time
-import uuid
 
 from fastapi import HTTPException
 
 from api.config import settings
 from api.scraping.metrics import SCRAPE_QUEUE_DEPTH
 from api.scraping.models import ScrapeJobEnqueueResponse, ScrapeJobState, ScrapeRequest
-from api.scraping.security import normalized_hash
+from api.scraping.security import normalized_hash, request_fingerprint
 from api.scraping.store import (
     clear_dedupe_job,
     decr_with_floor,
@@ -35,12 +34,12 @@ def client_queue_key(client_id: str) -> str:
 
 
 def build_job_id(normalized_url: str, *, render_js: bool) -> str:
-    del normalized_url, render_js
-    return str(uuid.uuid4())
+    fingerprint = request_fingerprint(normalized_url, render_js=render_js)
+    return f"scrape-{normalized_hash(fingerprint)[:24]}"
 
 
 def build_request_dedupe_key(normalized_url: str, *, render_js: bool) -> str:
-    return normalized_hash(f"{normalized_url}|render_js={int(render_js)}")
+    return normalized_hash(request_fingerprint(normalized_url, render_js=render_js))
 
 
 async def find_active_job(request_dedupe_key: str) -> dict[str, str] | None:
@@ -84,6 +83,7 @@ async def enqueue_request(
     *,
     normalized_url: str,
     request_dedupe_key: str,
+    correlation_id: str | None = None,
 ) -> ScrapeJobEnqueueResponse:
     try:
         await reserve_client_queue_slot(req.client_id)
@@ -107,6 +107,7 @@ async def enqueue_request(
             "updated_at": str(state.updated_at),
             "attempts": str(state.attempts),
             "normalized_url": state.normalized_url,
+            "correlation_id": correlation_id or "",
             "render_js": str(int(req.render_js)),
             "request": req.model_dump_json(),
             "result": "",
@@ -116,7 +117,13 @@ async def enqueue_request(
         await set_dedupe_job(request_dedupe_key, job_id, settings.SCRAPING_JOB_TTL_SECONDS)
         await enqueue_job(job_id)
         SCRAPE_QUEUE_DEPTH.set(depth + 1)
-        return ScrapeJobEnqueueResponse(job_id=job_id, status="queued", queued=True)
+        return ScrapeJobEnqueueResponse(
+            job_id=job_id,
+            status="queued",
+            mode="async",
+            queued=True,
+            correlation_id=correlation_id,
+        )
     except Exception:
         await release_client_queue_slot(req.client_id)
         raise
@@ -124,4 +131,3 @@ async def enqueue_request(
 
 async def clear_job(request_dedupe_key: str, job_id: str | None = None) -> None:
     await clear_dedupe_job(request_dedupe_key, job_id)
-

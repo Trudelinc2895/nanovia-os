@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import socket
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
@@ -19,6 +19,16 @@ _BLOCKED_METADATA_IPS = {
     ipaddress.ip_address("100.100.100.200"),  # Alibaba metadata service
     ipaddress.ip_address("168.63.129.16"),    # Azure WireServer
     ipaddress.ip_address("169.254.169.254"),  # AWS/Azure/GCP metadata service
+}
+_TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "mkt_tok",
+    "ref",
+    "ref_src",
+    "source",
 }
 _BLOCKED_PORTS = frozenset(
     {
@@ -115,6 +125,22 @@ def normalized_hash(normalized_url: str) -> str:
     return hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
 
 
+def canonicalize_url_for_cache(normalized_url: str) -> str:
+    parsed = urlsplit(normalized_url)
+    filtered_params = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_QUERY_KEYS
+    ]
+    filtered_params.sort(key=lambda item: (item[0], item[1]))
+    canonical_query = urlencode(filtered_params, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", canonical_query, ""))
+
+
+def request_fingerprint(normalized_url: str, *, render_js: bool) -> str:
+    return f"{canonicalize_url_for_cache(normalized_url)}|render_js={int(render_js)}"
+
+
 def redact_url_for_logs(raw_url: str) -> str:
     value = (raw_url or "").strip()
     if not value:
@@ -183,6 +209,8 @@ def validate_allowlist(hostname: str) -> None:
 def validate_dns_and_ip(hostname: str) -> None:
     seen = resolve_dns_records(hostname)
     seen |= resolve_dns_records(hostname)
+    if not settings.SCRAPING_BLOCK_PRIVATE_IPS:
+        return
     for ip_str in seen:
         if _is_blocked_ip(ip_str):
             raise HTTPException(status_code=403, detail="Resolved IP blocked by SSRF policy")
