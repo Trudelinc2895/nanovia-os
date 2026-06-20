@@ -170,7 +170,12 @@ class Settings(BaseSettings):
     )
     SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
     SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
-    SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
+    SCRAPING_TIMEOUT_SECONDS: float = Field(
+        default=20.0,
+        gt=0.1,
+        le=120.0,
+        validation_alias=AliasChoices("SCRAPING_TIMEOUT_SECONDS", "SCRAPE_TIMEOUT_MS"),
+    )
     SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
         default=60,
         ge=1,
@@ -300,6 +305,19 @@ class Settings(BaseSettings):
         ]
 
     # ── Validators ──────────────────────────────────────────────────────────────
+
+    @field_validator("SCRAPING_TIMEOUT_SECONDS", mode="before")
+    @classmethod
+    def normalize_scraping_timeout_seconds(cls, value: object) -> object:
+        if value in (None, ""):
+            return value
+        try:
+            timeout_value = float(value)
+        except (TypeError, ValueError):
+            return value
+        if timeout_value > 120:
+            return timeout_value / 1000.0
+        return timeout_value
 
     @model_validator(mode="before")
     @classmethod

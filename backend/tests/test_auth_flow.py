@@ -180,6 +180,18 @@ class _FakeRedis:
         return True
 
 
+def _isolate_rate_limit_state(monkeypatch) -> None:
+    fake_redis = _FakeRedis()
+
+    async def _fake_get_redis():
+        return fake_redis
+
+    monkeypatch.setattr(main_module, "_redis_pool", None)
+    monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    monkeypatch.setattr(main_module, "_scanner_hits", {})
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
+
+
 def test_refresh_rate_limit_kicks_in(monkeypatch):
     fake_redis = _FakeRedis()
 
@@ -188,6 +200,7 @@ def test_refresh_rate_limit_kicks_in(monkeypatch):
 
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
 
     email = f"{uuid.uuid4()}@example.com"
 
@@ -821,6 +834,7 @@ def test_private_orchestrator_preview_returns_scored_route(monkeypatch):
 def test_admin_webhook_reprocess_recovers_failed_event(monkeypatch):
     from api.routers import admin as admin_module
 
+    _isolate_rate_limit_state(monkeypatch)
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
     process_event = AsyncMock(return_value="processed")
@@ -880,7 +894,8 @@ def test_admin_webhook_reprocess_recovers_failed_event(monkeypatch):
         assert row == ("processed", None)
 
 
-def test_admin_webhook_reprocess_requires_force_for_processed_event():
+def test_admin_webhook_reprocess_requires_force_for_processed_event(monkeypatch):
+    _isolate_rate_limit_state(monkeypatch)
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
 
@@ -922,6 +937,7 @@ def test_admin_webhook_reprocess_requires_force_for_processed_event():
 def test_admin_webhook_reprocess_force_replays_processed_event(monkeypatch):
     from api.routers import admin as admin_module
 
+    _isolate_rate_limit_state(monkeypatch)
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
     process_event = AsyncMock(return_value="processed")
@@ -977,6 +993,7 @@ def test_admin_webhook_reprocess_force_replays_processed_event(monkeypatch):
 def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
     from api.routers import admin as admin_module
 
+    _isolate_rate_limit_state(monkeypatch)
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
     process_event = AsyncMock(side_effect=RuntimeError("processor exploded"))
