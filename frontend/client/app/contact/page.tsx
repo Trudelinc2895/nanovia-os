@@ -28,6 +28,8 @@ const initialForm: OnboardingForm = {
   consent: false,
 };
 
+const STRIPE_PAYMENT_LINK = "https://buy.stripe.com/eVqaEZ2vF03j0De6bC1ZS02";
+
 function buildPilotMessage(form: OnboardingForm): string {
   return [
     "Demande Nanovia Pro Pilot — 297 CAD / 30 jours",
@@ -89,15 +91,17 @@ export default function ContactPage() {
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="text-xl font-bold text-violet-400">Nanovia</Link>
           <div className="flex items-center gap-3 text-sm">
-            <Link href="/login" className="text-gray-400 hover:text-white transition px-3 py-2 rounded-lg">
-              Connexion
+            <Link href="/" className="text-gray-400 hover:text-white transition px-3 py-2 rounded-lg">
+              Retour a l&apos;accueil
             </Link>
-            <Link
-              href="/contact"
+            <a
+              href={STRIPE_PAYMENT_LINK}
+              target="_blank"
+              rel="noopener noreferrer"
               className="bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-lg transition font-medium"
             >
-              Démarrer mon pilot Nanovia
-            </Link>
+              Démarrer Pro Pilot
+            </a>
           </div>
         </div>
       </nav>
@@ -105,30 +109,46 @@ export default function ContactPage() {
       <div className="flex-1 pt-32 pb-24 px-6 max-w-3xl mx-auto w-full">
         <div className="text-center mb-12">
           <div className="inline-flex rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-1.5 text-sm text-violet-300 mb-5">
-            Nanovia Pro Pilot — 297 CAD / 30 jours
+            Ecrire a Nanovia
           </div>
-          <h1 className="text-4xl font-extrabold mb-3">Démarrer mon pilot Nanovia</h1>
+          <h1 className="text-4xl font-extrabold mb-3">Écrire à Nanovia</h1>
           <p className="text-gray-300 max-w-2xl mx-auto">
-            Remplis ce formulaire pour démarrer Nanovia Pro Pilot — 297 CAD / 30 jours.
+            Utilisez Stripe pour démarrer Pro Pilot tout de suite, ou remplissez ce formulaire si vous voulez valider votre cas avant paiement.
           </p>
+          <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <a
+              href={STRIPE_PAYMENT_LINK}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-xl bg-violet-600 px-6 py-3 text-base font-bold text-white transition hover:bg-violet-500"
+            >
+              Démarrer Pro Pilot
+            </a>
+            <a
+              href="mailto:nanovia@duck.com"
+              className="rounded-xl border border-gray-700 px-6 py-3 text-base font-semibold text-white transition hover:border-violet-500"
+            >
+              Écrire à Nanovia
+            </a>
+          </div>
           <div className="mt-5 space-y-1 text-sm text-gray-400">
-            <p>Après le pilot : 79 CAD / mois</p>
-            <p>Une tâche répétitive automatisée avec IA en 30 jours.</p>
+            <p>Pro Pilot 30 jours — 297 $ CAD</p>
+            <p>Suivi optionnel ensuite — 79 $ CAD / mois</p>
           </div>
         </div>
 
         {status === "ready" ? (
           <div className="bg-violet-900/20 border border-violet-500/30 text-violet-100 rounded-xl p-8 text-center">
             <div className="text-4xl mb-4">✉️</div>
-            <h2 className="text-xl font-bold mb-2">Vérifie ton email prérempli</h2>
+            <h2 className="text-xl font-bold mb-2">Verifiez votre courriel pre-rempli</h2>
             <p className="text-gray-300 mb-3">
-              Ton application courriel va s&apos;ouvrir avec ta demande préremplie. Vérifie puis clique Envoyer.
+              Votre application courriel va s&apos;ouvrir avec votre demande pre-remplie. Verifiez puis envoyez le message.
             </p>
             <p className="text-gray-400 mb-6">
-              Si rien ne s&apos;ouvre, écris directement à <span className="font-semibold text-white">nanovia@duck.com</span>.
+              Si rien ne s&apos;ouvre, ecrivez directement a <span className="font-semibold text-white">nanovia@duck.com</span>.
             </p>
             <Link href="/" className="text-violet-400 hover:text-violet-300 underline">
-              ← Retour à l&apos;accueil
+              ← Retour a l&apos;accueil
             </Link>
           </div>
         ) : (
@@ -263,7 +283,7 @@ export default function ContactPage() {
               disabled={status === "opening" || !form.consent}
               className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-3 rounded-xl transition disabled:opacity-50"
             >
-              {status === "opening" ? "⏳ Ouverture de ton courriel…" : "Envoyer ma demande de pilot"}
+              {status === "opening" ? "⏳ Ouverture du courriel..." : "Preparer mon courriel"}
             </button>
           </form>
         )}
