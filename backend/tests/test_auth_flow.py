@@ -188,6 +188,9 @@ def test_refresh_rate_limit_kicks_in(monkeypatch):
 
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
+    main_module._scanner_hits.clear()
+    main_module._shadow_banned.clear()
 
     email = f"{uuid.uuid4()}@example.com"
 

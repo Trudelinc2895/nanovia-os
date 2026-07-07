@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -307,10 +308,16 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
 
-        if "SCRAPING_TIMEOUT_SECONDS" not in data and "SCRAPE_TIMEOUT_MS" in data:
-            timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+        timeout_ms = data.get("SCRAPE_TIMEOUT_MS")
+        if timeout_ms in (None, ""):
+            timeout_ms = os.getenv("SCRAPE_TIMEOUT_MS")
+
+        if "SCRAPING_TIMEOUT_SECONDS" not in data and timeout_ms not in (None, ""):
             try:
-                data["SCRAPING_TIMEOUT_SECONDS"] = float(timeout_ms) / 1000.0
+                timeout_ms_value = float(timeout_ms)
+                if timeout_ms_value <= 0:
+                    raise ValueError
+                data["SCRAPING_TIMEOUT_SECONDS"] = timeout_ms_value / 1000.0
             except (TypeError, ValueError) as exc:
                 raise ValueError("SCRAPE_TIMEOUT_MS must be a positive integer") from exc
 
