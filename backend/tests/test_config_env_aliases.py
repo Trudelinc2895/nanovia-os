@@ -123,3 +123,12 @@ def test_scraping_env_aliases_are_supported(monkeypatch):
     assert settings.SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN == 20
     assert settings.SCRAPING_RETRY_MAX_ATTEMPTS == 2
     assert settings.SCRAPING_TIMEOUT_SECONDS == 15.0
+
+
+def test_scraping_timeout_ms_rejects_fractional_values(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_scrape_aliases.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-prod")
+    monkeypatch.setenv("SCRAPE_TIMEOUT_MS", "15000.5")
+
+    with pytest.raises(ValueError, match="SCRAPE_TIMEOUT_MS must be a positive integer"):
+        Settings(_env_file=None)
