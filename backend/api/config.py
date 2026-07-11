@@ -314,7 +314,7 @@ class Settings(BaseSettings):
 
         if "SCRAPING_TIMEOUT_SECONDS" not in data and timeout_ms not in (None, ""):
             try:
-                timeout_ms_value = float(timeout_ms)
+                timeout_ms_value = int(str(timeout_ms))
                 if timeout_ms_value <= 0:
                     raise ValueError
                 data["SCRAPING_TIMEOUT_SECONDS"] = timeout_ms_value / 1000.0
