@@ -189,8 +189,8 @@ def test_refresh_rate_limit_kicks_in(monkeypatch):
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
     monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
-    main_module._scanner_hits.clear()
-    main_module._shadow_banned.clear()
+    monkeypatch.setattr(main_module, "_scanner_hits", {})
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
 
     email = f"{uuid.uuid4()}@example.com"
 
@@ -933,8 +933,8 @@ def test_admin_webhook_reprocess_force_replays_processed_event(monkeypatch):
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
     monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
-    main_module._scanner_hits.clear()
-    main_module._shadow_banned.clear()
+    monkeypatch.setattr(main_module, "_scanner_hits", {})
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
 
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
@@ -999,8 +999,8 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
     monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
-    main_module._scanner_hits.clear()
-    main_module._shadow_banned.clear()
+    monkeypatch.setattr(main_module, "_scanner_hits", {})
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
 
     email = f"{uuid.uuid4()}@example.com"
     event_id = f"evt_{uuid.uuid4().hex}"
