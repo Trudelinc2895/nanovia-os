@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import {
-  getEntitlements,
-  getMyModules,
-  apiFetch,
-  type Entitlements,
-  type ModuleAccess,
-} from "@/lib/api";
-import { Button, Card, Badge } from "@/components/ui";
-import { getModuleIcon, getModulePresentation, MODULE_SLUGS } from "@/lib/monetization";
+import { apiFetch, getEntitlements, getMyModules, type Entitlements, type ModuleAccess } from "@/lib/api";
+import { getModuleIcon, getModulePresentation } from "@/lib/monetization";
+
+type NavItem = { label: string; hint: string; icon: string; href: string };
+
+const clientNavigation: NavItem[] = [
+  { label: "Intelligence", hint: "IA & agents", icon: "✦", href: "/dashboard/chat" },
+  { label: "Automatisation", hint: "Modules actifs", icon: "⚙", href: "/dashboard/modules" },
+  { label: "Sécurité", hint: "Protection & accès", icon: "◇", href: "/dashboard/security" },
+  { label: "Performance", hint: "Usage en direct", icon: "⌁", href: "/dashboard/analytics" },
+  { label: "Résultats", hint: "Plan & valeur", icon: "◎", href: "/dashboard/billing" },
+];
 
 export default function DashboardPage() {
   const { user, loading, logout } = useAuth();
@@ -20,6 +23,7 @@ export default function DashboardPage() {
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [modules, setModules] = useState<ModuleAccess[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [backendState, setBackendState] = useState<"checking" | "online" | "limited">("checking");
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -27,246 +31,134 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) return;
-    getEntitlements().then(setEntitlements).catch(console.error);
-    getMyModules()
-      .then((data) => setModules(data.modules))
-      .catch(console.error);
+    Promise.all([getEntitlements(), getMyModules()])
+      .then(([rights, moduleData]) => {
+        setEntitlements(rights);
+        setModules(moduleData.modules);
+        setBackendState("online");
+      })
+      .catch(() => setBackendState("limited"));
     apiFetch<{ unread_count: number }>("/api/v1/notifications")
       .then((data) => setUnreadCount(data.unread_count ?? 0))
-      .catch(() => {});
+      .catch(() => undefined);
   }, [user]);
 
+  const activeModules = useMemo(() => modules.filter((module) => module.access), [modules]);
+
   if (loading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-base">
-        <div className="text-primary animate-pulse text-xl">Chargement...</div>
-      </div>
-    );
+    return <div className="noi-loading"><span className="noi-loader" />Connexion à Nanovia Intelligence…</div>;
   }
 
-  const planVariant: Record<string, "info" | "success" | "warning" | "danger"> = {
-    free: "info",
-    starter: "info",
-    pro: "success",
-    business: "warning",
-  };
-
   const effectivePlan = entitlements?.plan ?? user.plan;
-  const subscriptionStatus = entitlements?.status ?? "free";
-  const isPaidPlan = effectivePlan !== "free";
-  const showSubscriptionWarning = !["active", "free"].includes(subscriptionStatus);
+  const role = user.is_admin ? "Fondateur · Contrôle total" : effectivePlan === "business" ? "Équipe · Business" : "Client · Pro Pilot";
+  const firstName = user.full_name?.split(" ")[0] || "Kevin";
+  const messageLimit = entitlements?.limits.ai_messages_per_month;
 
   return (
-    <div className="min-h-screen bg-bg-base">
-      <header className="border-b border-ui-border bg-ui-surface/50 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-primary font-bold text-xl">⚡ Nanovia OS</span>
-            <span className="text-text-muted">|</span>
-            <span className="text-sm text-text-secondary">{user.full_name || user.email}</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <Badge variant={planVariant[effectivePlan] ?? "info"}>
-              Plan {effectivePlan.toUpperCase()}
-            </Badge>
-            {/* Notification bell */}
-            <Link href="/dashboard" className="relative text-text-muted hover:text-text-primary transition">
-              <span className="text-lg">🔔</span>
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5">
-                  {unreadCount > 99 ? "99+" : unreadCount}
-                </span>
-              )}
-            </Link>
-            {/* Settings */}
-            <Link href="/dashboard/settings" className="text-text-muted hover:text-text-primary transition text-lg">
-              ⚙️
-            </Link>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                await logout();
-                router.push("/");
-              }}
-              className="text-text-muted hover:text-danger"
-            >
-              Déconnexion
-            </Button>
-          </div>
-        </div>
-      </header>
+    <div className="noi-shell">
+      <aside className="noi-sidebar">
+        <Link href="/dashboard" className="noi-brand" aria-label="Accueil Nanovia">
+          <span className="noi-mark">N</span>
+          <span><strong>NANOVIA</strong><small>OPERATING INTELLIGENCE</small></span>
+        </Link>
 
-      <main className="max-w-7xl mx-auto px-6 py-10">
-        <div className="mb-10 flex flex-col md:flex-row md:items-center gap-6">
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold text-text-primary mb-2">
-              Bienvenue, {user.full_name?.split(" ")[0] || "Champion"} 👋
-            </h1>
-            <p className="text-text-secondary">
-              Votre système de monétisation IA est actif.
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <Link
-              href="/dashboard/chat"
-              className="bg-primary hover:bg-primary-hover text-white font-semibold px-5 py-3 rounded-xl transition flex items-center gap-2"
-            >
-              🤖 Lancer l&apos;IA
-            </Link>
-            {!isPaidPlan && (
-              <Link
-                href="/dashboard/billing"
-                className="border border-warning/50 text-warning-text hover:bg-warning-muted font-semibold px-5 py-3 rounded-xl transition"
-              >
-                ⚡ Upgrader
-              </Link>
-            )}
-          </div>
+        <div className="noi-profile">
+          <span className="noi-avatar">{firstName.slice(0, 1).toUpperCase()}</span>
+          <div><strong>{user.full_name || user.email}</strong><small>{role}</small></div>
         </div>
 
-        {entitlements && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <StatCard label="Plan" value={effectivePlan.toUpperCase()} />
-            <StatCard
-              label="Messages / mois"
-              value={
-                entitlements.limits.ai_messages_per_month === -1
-                  ? "∞"
-                  : String(entitlements.limits.ai_messages_per_month)
-              }
-            />
-            <StatCard label="Crédits overage" value={String(entitlements.credits)} />
-            <StatCard label="Stockage" value={entitlements.limits.storage_gb + " GB"} />
-          </div>
-        )}
-
-        {showSubscriptionWarning && (
-          <div className="mb-10 rounded-xl border border-warning/40 bg-warning-muted px-4 py-3 text-sm text-warning-text">
-            Statut billing à surveiller:{" "}
-            <span className="font-semibold uppercase">{subscriptionStatus}</span>. Les accès affichés
-            reflètent les entitlements serveur en temps réel.
-          </div>
-        )}
-
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <h2 className="text-xl font-bold text-text-primary">🧩 Vos modules</h2>
-          <Link href="/dashboard/modules" className="text-sm text-primary hover:text-primary-strong">
-            Gérer les modules →
-          </Link>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {modules.map((mod) => (
-            <ModuleCard key={mod.slug} mod={mod} />
+        <nav className="noi-nav" aria-label="Navigation principale">
+          {clientNavigation.map((item, index) => (
+            <Link key={item.label} href={item.href} className={index === 0 ? "active" : ""}>
+              <span className="noi-nav-icon">{item.icon}</span>
+              <span><strong>{item.label}</strong><small>{item.hint}</small></span>
+            </Link>
           ))}
-        </div>
-
-        {/* Quick navigation cards */}
-        <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-          <Link
-            href="/dashboard/settings"
-            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
-          >
-            <span className="text-2xl">⚙️</span>
-            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Paramètres</span>
-            <span className="text-xs text-text-muted">Profil & sécurité</span>
-          </Link>
-          <Link
-            href="/dashboard/billing"
-            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
-          >
-            <span className="text-2xl">💳</span>
-            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Facturation</span>
-            <span className="text-xs text-text-muted">Plans & paiements</span>
-          </Link>
-          <Link
-            href="/dashboard/analytics"
-            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
-          >
-            <span className="text-2xl">📊</span>
-            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Analytics</span>
-            <span className="text-xs text-text-muted">Usage & stats</span>
-          </Link>
-          <Link
-            href="/dashboard/security"
-            className="bg-ui-surface border border-ui-border hover:border-primary/40 rounded-xl p-4 flex flex-col gap-2 transition group"
-          >
-            <span className="text-2xl">🔒</span>
-            <span className="font-semibold text-text-primary text-sm group-hover:text-primary transition">Sécurité</span>
-            <span className="text-xs text-text-muted">2FA & audit</span>
-          </Link>
-        </div>
-
-        {!isPaidPlan && (
-          <div className="mt-12 bg-primary-muted border border-primary/20 rounded-2xl p-8 text-center">
-            <div className="text-4xl mb-3">⚡</div>
-            <h3 className="text-2xl font-bold text-text-primary mb-2">
-              Débloquer tous les modules
-            </h3>
-              <p className="text-text-secondary mb-6 max-w-md mx-auto">
-               Accès complet à l&apos;IA Orchestrator, Ghost Agency, et {Math.max(MODULE_SLUGS.length - 2, 0)} autres modules de monétisation.
-              </p>
-            <Link
-              href="/dashboard/billing"
-              className="inline-block bg-primary hover:bg-primary-hover text-white font-bold px-8 py-4 rounded-xl text-lg transition"
-            >
-              Voir les plans →
+          {user.is_admin && (
+            <Link href="/admin" className="noi-admin-link">
+              <span className="noi-nav-icon">⌘</span><span><strong>Contrôle central</strong><small>Administration</small></span>
             </Link>
+          )}
+        </nav>
+
+        <div className="noi-sidebar-bottom">
+          <Link href="/dashboard/settings">⚙ Paramètres</Link>
+          <button onClick={async () => { await logout(); router.push("/"); }}>↗ Déconnexion</button>
+        </div>
+      </aside>
+
+      <main className="noi-main">
+        <header className="noi-topbar">
+          <div>
+            <p className="noi-eyebrow">CENTRE D&apos;OPÉRATIONS</p>
+            <h1>Bonjour {firstName}, <span>le système est prêt.</span></h1>
           </div>
-        )}
+          <div className="noi-top-actions">
+            <span className={`noi-system-state ${backendState}`}><i />{backendState === "online" ? "Systèmes opérationnels" : backendState === "limited" ? "Connexion limitée" : "Vérification…"}</span>
+            <Link href="/dashboard" className="noi-notification" aria-label={`${unreadCount} notifications`}>♢{unreadCount > 0 && <b>{unreadCount}</b>}</Link>
+          </div>
+        </header>
+
+        <section className="noi-command">
+          <div className="noi-command-copy">
+            <span className="noi-orb">N</span>
+            <div>
+              <p>NANOVIA INTELLIGENCE</p>
+              <h2>Que veux-tu accomplir aujourd&apos;hui?</h2>
+              <span>Décris ton objectif. Nanovia sélectionnera l&apos;agent et le module autorisés.</span>
+            </div>
+          </div>
+          <Link href="/dashboard/chat" className="noi-command-input">
+            <span>Ex. Analyse mes opérations et propose la prochaine action rentable…</span>
+            <b>→</b>
+          </Link>
+          <div className="noi-suggestions">
+            <Link href="/dashboard/chat?agent=operator">✦ Prioriser mes actions</Link>
+            <Link href="/dashboard/analytics">⌁ Analyser ma performance</Link>
+            <Link href="/dashboard/modules">⚙ Automatiser une tâche</Link>
+          </div>
+        </section>
+
+        <section className="noi-kpis" aria-label="État du compte">
+          <Kpi label="Intelligence" value={activeModules.length ? `${activeModules.length} actifs` : "En attente"} note="Modules autorisés" tone="blue" />
+          <Kpi label="Sécurité" value={user.totp_enabled ? "Renforcée" : "À compléter"} note={user.totp_enabled ? "2FA activée" : "Activer la 2FA"} tone={user.totp_enabled ? "green" : "amber"} />
+          <Kpi label="Capacité IA" value={messageLimit === -1 ? "Illimitée" : String(messageLimit ?? "—")} note="Messages par mois" tone="cyan" />
+          <Kpi label="Crédits" value={String(entitlements?.credits ?? user.credits)} note={`Plan ${effectivePlan.toUpperCase()}`} tone="violet" />
+        </section>
+
+        <div className="noi-grid">
+          <section className="noi-panel noi-modules">
+            <div className="noi-panel-head"><div><p>CAPACITÉS DISPONIBLES</p><h2>Modules intelligents</h2></div><Link href="/dashboard/modules">Tout voir →</Link></div>
+            <div className="noi-module-grid">
+              {modules.slice(0, 6).map((module) => {
+                const meta = getModulePresentation(module);
+                const agent = ["operator", "ghost", "decision"].includes(meta.slug) ? meta.slug : "operator";
+                return (
+                  <Link key={module.slug} href={module.access ? `/dashboard/chat?agent=${agent}` : "/dashboard/billing"} className={`noi-module ${module.access ? "enabled" : "locked"}`}>
+                    <span>{getModuleIcon(module.slug)}</span>
+                    <div><strong>{meta.name}</strong><small>{module.access ? "Prêt à exécuter" : "Non inclus au plan"}</small></div>
+                    <i>{module.access ? "→" : "⌁"}</i>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="noi-panel noi-pilot">
+            <div className="noi-panel-head"><div><p>MISSION PRIORITAIRE</p><h2>Nanovia Pro Pilot</h2></div><span className="noi-live"><i /> ACTIF</span></div>
+            <div className="noi-progress-ring"><span>30</span><small>JOURS</small></div>
+            <h3>Une tâche répétitive.<br />Automatisée avec l&apos;IA.</h3>
+            <p>Ton espace suit l&apos;objectif, les accès, l&apos;usage et les résultats depuis les données réelles du compte.</p>
+            <Link href="/dashboard/analytics">Voir les résultats <span>→</span></Link>
+          </section>
+        </div>
+
+        <footer className="noi-footer"><span>Nanovia · Operating Intelligence</span><span>Backend FastAPI · Données serveur</span></footer>
       </main>
     </div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card variant="outlined" padding="sm">
-      <div className="text-2xl font-bold text-text-primary">{value}</div>
-      <div className="text-sm text-text-muted mt-1">{label}</div>
-    </Card>
-  );
-}
-
-function ModuleCard({ mod }: { mod: ModuleAccess }) {
-  const moduleMeta = getModulePresentation(mod);
-  const agentSlug = ["operator", "ghost", "decision"].includes(moduleMeta.slug) ? moduleMeta.slug : null;
-
-  return (
-    <Card
-      variant="outlined"
-      padding="sm"
-      className={"flex flex-col gap-3 transition " + (mod.access ? "hover:border-primary cursor-pointer" : "opacity-40")}
-      >
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">{getModuleIcon(mod.slug)}</span>
-        {!mod.access && (
-          <Badge variant="warning" size="sm" className="ml-auto">
-            🔒 Locked
-          </Badge>
-        )}
-      </div>
-      <div>
-        <div className="font-semibold text-text-primary text-sm">{moduleMeta.name}</div>
-        <div className="text-xs text-text-muted mt-1 line-clamp-2">{moduleMeta.description}</div>
-        {mod.access && (
-          <div className="mt-2 text-xs text-success">
-            {mod.source === "plan" ? "Inclus dans votre plan" : "Acheté à l’unité"}
-          </div>
-        )}
-      </div>
-      {mod.access ? (
-        <Link
-          href={agentSlug ? `/dashboard/chat?agent=${agentSlug}` : "/dashboard/chat"}
-          className="text-xs text-primary hover:text-primary-strong mt-auto"
-        >
-          Utiliser →
-        </Link>
-      ) : (
-        <Link href="/dashboard/modules" className="text-xs text-warning hover:text-warning-text mt-auto">
-          Voir options →
-        </Link>
-      )}
-    </Card>
-  );
+function Kpi({ label, value, note, tone }: { label: string; value: string; note: string; tone: string }) {
+  return <article className={`noi-kpi ${tone}`}><p>{label}</p><strong>{value}</strong><span><i />{note}</span></article>;
 }
