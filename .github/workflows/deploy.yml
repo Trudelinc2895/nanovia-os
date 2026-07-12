@@ -43,7 +43,8 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Deploy ignoré — configurer VPS_HOST, VPS_SSH_PRIVATE_KEY et DEPLOY_PATH pour l'environnement GitHub ciblé"
+            echo "::error::Déploiement bloqué — configurer VPS_HOST, VPS_SSH_PRIVATE_KEY et DEPLOY_PATH dans l'environnement GitHub ${TARGET_ENV}"
+            exit 1
           fi
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
