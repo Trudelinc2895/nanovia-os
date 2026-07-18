@@ -10,6 +10,7 @@ import {
   type Plan,
 } from "@/lib/api";
 import { getModuleIcon, MODULE_SLUGS } from "@/lib/monetization";
+import { trackAmplitudeEvent } from "@/components/amplitude-provider";
 
 function formatPlanCta(planSlug: string): string {
   if (planSlug === "free") return "Commencer gratis";
@@ -36,18 +37,24 @@ export default function Home() {
   }, []);
 
   async function handleCheckout(planKey: string) {
+    const interval: "monthly" | "yearly" = yearly ? "yearly" : "monthly";
+    trackAmplitudeEvent("Checkout Started", { plan: planKey, interval });
     setErrorMsg("");
     setLoadingPlan(planKey);
     try {
       // Token lives in memory (api.ts _accessToken), not sessionStorage
       if (!getAccessToken()) {
+        trackAmplitudeEvent("Registration Redirected", { plan: planKey, source: "pricing" });
         window.location.href = `/register?plan=${planKey}`;
         return;
       }
-      const interval: "monthly" | "yearly" = yearly ? "yearly" : "monthly";
       const data = await createCheckoutSession(planKey, interval);
-      if (data.url) window.location.href = data.url;
+      if (data.url) {
+        trackAmplitudeEvent("Checkout Session Created", { plan: planKey, interval });
+        window.location.href = data.url;
+      }
     } catch (err: unknown) {
+      trackAmplitudeEvent("Checkout Failed", { plan: planKey, interval });
       const msg = err instanceof Error ? err.message : "Erreur lors du paiement.";
       setErrorMsg(
         msg.includes("no configured price")
@@ -156,7 +163,11 @@ export default function Home() {
           <div className="flex items-center justify-center gap-4 mb-10">
             <span className={`text-sm font-medium ${!yearly ? "text-white" : "text-gray-500"}`}>Mensuel</span>
             <button
-              onClick={() => setYearly(!yearly)}
+              onClick={() => {
+                const nextInterval = yearly ? "monthly" : "yearly";
+                setYearly(!yearly);
+                trackAmplitudeEvent("Billing Interval Changed", { interval: nextInterval });
+              }}
               className={`relative w-12 h-6 rounded-full transition-colors ${yearly ? "bg-violet-600" : "bg-gray-700"}`}
               aria-label="Toggle annual billing"
             >
