@@ -6,6 +6,7 @@ COPY frontend/client/package*.json ./
 RUN npm ci --prefer-offline
 
 COPY frontend/client/ .
+COPY shared/catalog/ /shared/catalog/
 
 ARG NEXT_PUBLIC_API_URL=
 ARG BACKEND_INTERNAL_URL=http://api:8010
