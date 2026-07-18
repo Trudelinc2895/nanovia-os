@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
     SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
     SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
+    # Registered so BaseSettings keeps the legacy env value long enough for
+    # resolve_managed_secrets() to convert milliseconds to seconds.
+    SCRAPE_TIMEOUT_MS: int | None = Field(default=None, gt=0, exclude=True)
     SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
         default=60,
         ge=1,
