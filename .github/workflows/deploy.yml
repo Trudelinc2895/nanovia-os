@@ -108,7 +108,9 @@ jobs:
             else
               git checkout -b "${TARGET_REF}" "origin/${TARGET_REF}"
             fi
+            PREV_REF=$(git rev-parse HEAD)
             git pull --ff-only origin "${TARGET_REF}"
+            DEPLOY_REF=$(git rev-parse HEAD)
 
             if [ "${TARGET_ENV}" = "production" ]; then
               ENV_FILE=".env"
@@ -204,6 +206,47 @@ jobs:
 
             PREV_API=$(docker inspect --format='{{.Id}}' "${COMPOSE_PROJECT}-api-1" 2>/dev/null || echo "none")
 
+            ROLLBACK_ARMED=false
+            rollback_deploy() {
+              deploy_status=$?
+              trap - ERR
+              set +e
+
+              if [ "${ROLLBACK_ARMED}" != "true" ] || [ "${PREV_REF}" = "${DEPLOY_REF}" ]; then
+                exit "${deploy_status}"
+              fi
+
+              echo "❌ Deploy failed; restoring application commit ${PREV_REF}"
+              git checkout --detach "${PREV_REF}" || exit "${deploy_status}"
+              compose build api ai-orchestrator web admin || exit "${deploy_status}"
+
+              if [ "${TARGET_ENV}" = "production" ]; then
+                compose up -d --force-recreate --no-deps caddy api ai-orchestrator web admin
+              else
+                compose up -d --force-recreate --no-deps --scale caddy=0 api ai-orchestrator web admin
+              fi
+
+              rollback_api=$(compose ps -q api)
+              rollback_health=unknown
+              for i in $(seq 1 24); do
+                rollback_health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "${rollback_api}" 2>/dev/null || echo unknown)
+                [ "${rollback_health}" = "healthy" ] && break
+                sleep 5
+              done
+
+              git checkout "${TARGET_REF}"
+              if [ "${rollback_health}" = "healthy" ]; then
+                echo "✅ Rollback restored healthy application commit ${PREV_REF}"
+              else
+                echo "🛑 Rollback attempted but API health is ${rollback_health}; manual intervention required"
+                compose ps
+                compose logs --tail=200 api caddy
+              fi
+              exit "${deploy_status}"
+            }
+            trap rollback_deploy ERR
+            ROLLBACK_ARMED=true
+
             compose up -d postgres redis
             compose build api ai-orchestrator web admin
             compose run --rm -T api python scripts/ensure_alembic_state.py </dev/null
@@ -294,5 +337,7 @@ jobs:
             compose ps >&2
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' >&2
 
+            ROLLBACK_ARMED=false
+            trap - ERR
             echo "✅ ${TARGET_ENV} deploy $(git rev-parse --short HEAD) successful"
           ENDSSH
