@@ -132,7 +132,7 @@ jobs:
 
       - name: Setup SSH agent
         if: steps.secrets-check.outputs.configured == 'true'
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
