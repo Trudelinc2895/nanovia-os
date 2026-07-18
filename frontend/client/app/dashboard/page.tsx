@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, getEntitlements, getMyModules, type Entitlements, type ModuleAccess } from "@/lib/api";
 import { getModuleIcon, getModulePresentation } from "@/lib/monetization";
@@ -20,6 +20,7 @@ const clientNavigation: NavItem[] = [
 export default function DashboardPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [modules, setModules] = useState<ModuleAccess[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -51,7 +52,7 @@ export default function DashboardPage() {
 
   const effectivePlan = entitlements?.plan ?? user.plan;
   const role = user.is_admin ? "Fondateur · Contrôle total" : effectivePlan === "business" ? "Équipe · Business" : "Client · Pro Pilot";
-  const firstName = user.full_name?.split(" ")[0] || "Kevin";
+  const firstName = user.full_name?.trim().split(/\s+/)[0] || user.email.split("@")[0] || "Client";
   const messageLimit = entitlements?.limits.ai_messages_per_month;
 
   return (
@@ -68,8 +69,8 @@ export default function DashboardPage() {
         </div>
 
         <nav className="noi-nav" aria-label="Navigation principale">
-          {clientNavigation.map((item, index) => (
-            <Link key={item.label} href={item.href} className={index === 0 ? "active" : ""}>
+          {clientNavigation.map((item) => (
+            <Link key={item.label} href={item.href} className={pathname.startsWith(item.href) ? "active" : ""}>
               <span className="noi-nav-icon">{item.icon}</span>
               <span><strong>{item.label}</strong><small>{item.hint}</small></span>
             </Link>
@@ -83,7 +84,7 @@ export default function DashboardPage() {
 
         <div className="noi-sidebar-bottom">
           <Link href="/dashboard/settings">⚙ Paramètres</Link>
-          <button onClick={async () => { await logout(); router.push("/"); }}>↗ Déconnexion</button>
+          <button type="button" onClick={async () => { await logout(); router.push("/"); }}>↗ Déconnexion</button>
         </div>
       </aside>
 
@@ -96,6 +97,8 @@ export default function DashboardPage() {
           <div className="noi-top-actions">
             <span className={`noi-system-state ${backendState}`}><i />{backendState === "online" ? "Systèmes opérationnels" : backendState === "limited" ? "Connexion limitée" : "Vérification…"}</span>
             <Link href="/dashboard" className="noi-notification" aria-label={`${unreadCount} notifications`}>♢{unreadCount > 0 && <b>{unreadCount}</b>}</Link>
+            <Link href="/dashboard/settings" className="noi-utility" aria-label="Paramètres">⚙</Link>
+            <button type="button" className="noi-utility" aria-label="Déconnexion" onClick={async () => { await logout(); router.push("/"); }}>↗</button>
           </div>
         </header>
 
