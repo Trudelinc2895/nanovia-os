@@ -196,3 +196,11 @@ def test_resolve_target_env_for_examples():
     assert resolve_target_env("infra/env/.env.example", {"APP_ENV": "development"}) == "production"
     assert resolve_target_env("infra/env/.env.staging.example", {"APP_ENV": "development"}) == "staging"
     assert resolve_target_env(".env.example", {"APP_ENV": "development"}) == "development"
+
+
+def test_committed_env_examples_only_use_supported_keys():
+    root = Path(__file__).resolve().parents[2]
+    for relative_path in (".env.example", "infra/env/.env.example"):
+        values = _MODULE.load_env_file(root / relative_path)
+        errors = _MODULE._validate_known_keys(values)
+        assert errors == [], f"{relative_path}: {errors}"
