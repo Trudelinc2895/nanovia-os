@@ -8,6 +8,7 @@ import { AuthEntryWarning } from "@/components/auth-entry-warning";
 import { useAuth } from "@/lib/auth-context";
 import { verify2FALogin } from "@/lib/api";
 import { Button, Card, Input } from "@/components/ui";
+import { trackAmplitudeEvent } from "@/components/amplitude-provider";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -25,6 +26,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    trackAmplitudeEvent("Login Submitted");
     setError("");
     if (!email || !password) {
       setError("Veuillez remplir tous les champs.");
@@ -36,12 +38,15 @@ export default function LoginPage() {
       // login() in auth-context calls apiLogin and then getMe()
       // But we need to handle 2FA — override with raw API call here
       if ((result as any)?.requires_2fa) {
+        trackAmplitudeEvent("Login 2FA Required");
         setPartialToken((result as any).partial_token ?? "");
         setRequires2FA(true);
         return;
       }
+      trackAmplitudeEvent("Login Succeeded", { two_factor: false });
       router.push("/dashboard");
     } catch (err: unknown) {
+      trackAmplitudeEvent("Login Failed");
       setError(err instanceof Error ? err.message : "Email ou mot de passe incorrect.");
     } finally {
       setLoading(false);
@@ -58,8 +63,10 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await verify2FALogin(partialToken, totpCode);
+      trackAmplitudeEvent("Login Succeeded", { two_factor: true });
       router.push("/dashboard");
     } catch (err: unknown) {
+      trackAmplitudeEvent("Login 2FA Failed");
       setError(err instanceof Error ? err.message : "Code incorrect.");
     } finally {
       setLoading(false);
