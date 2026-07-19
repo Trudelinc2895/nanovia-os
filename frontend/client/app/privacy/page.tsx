@@ -12,7 +12,7 @@ export default function PrivacyPage() {
           <ul className="text-gray-300 list-disc pl-6 space-y-2">
             <li><strong>Informations de compte</strong> : nom, adresse email, mot de passe hashé.</li>
             <li><strong>Données de facturation</strong> : gérées par Stripe — nous ne stockons pas vos données de carte.</li>
-            <li><strong>Données d'utilisation</strong> : nombre de messages, modules utilisés, horodatages.</li>
+            <li><strong>Données d&apos;utilisation</strong> : nombre de messages, modules utilisés, horodatages.</li>
             <li><strong>Données techniques</strong> : adresse IP (logs sécurité), navigateur.</li>
           </ul>
         </section>
@@ -28,7 +28,7 @@ export default function PrivacyPage() {
         </section>
 
         <section className="mb-8">
-          <h2 className="text-2xl font-semibond mb-3">3. Partage des données</h2>
+          <h2 className="text-2xl font-semibold mb-3">3. Partage des données</h2>
           <p className="text-gray-300 mb-3">Nous ne vendons jamais vos données. Partage limité à :</p>
           <ul className="text-gray-300 list-disc pl-6 space-y-2">
             <li><strong>Stripe</strong> : traitement des paiements.</li>
@@ -70,8 +70,8 @@ export default function PrivacyPage() {
         </section>
 
         <div className="mt-12 pt-8 border-t border-gray-800 flex gap-6">
-          <Link href="/terms" className="text-indigo-400 underline">Conditions d'utilisation</Link>
-          <Link href="/" className="text-gray-400 underline">Retour à l'accueil</Link>
+          <Link href="/terms" className="text-indigo-400 underline">Conditions d&apos;utilisation</Link>
+          <Link href="/" className="text-gray-400 underline">Retour à l&apos;accueil</Link>
         </div>
       </div>
     </div>

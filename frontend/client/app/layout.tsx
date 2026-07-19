@@ -3,11 +3,11 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
-  title: "Nanovia OS — Automatisation IA pour entrepreneurs",
-  description: "Systemes d'automatisation IA qui generent des revenus avec une plateforme SaaS unifiee.",
+  title: "Nanovia Pro Pilot — Automatisez une tâche répétitive",
+  description: "Un assistant IA Nanovia configuré pour automatiser une tâche répétitive de votre entreprise en 30 jours.",
   openGraph: {
-    title: "Nanovia OS — Automatisation IA",
-    description: "Automatisation IA, billing serveur et modules monetisables dans une seule plateforme.",
+    title: "Nanovia Pro Pilot",
+    description: "Automatisez une tâche répétitive avec un assistant IA configuré pour votre entreprise.",
     url: "https://nanovia.ca",
   },
 };
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="fr">
-      <body>
+      <body className="bg-bg-base text-text-primary antialiased">
         <AuthProvider>
           {children}
         </AuthProvider>

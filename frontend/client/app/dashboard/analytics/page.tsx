@@ -11,7 +11,6 @@ import {
   type ModuleBreakdown,
   type MilestonesData,
 } from "@/lib/api";
-import { Card } from "@/components/ui";
 
 function ModuleBar({ item, max }: { item: ModuleBreakdown; max: number }) {
   const pct = max > 0 ? (item.message_count / max) * 100 : 0;
