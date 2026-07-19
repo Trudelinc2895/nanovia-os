@@ -46,3 +46,11 @@ Thumbs.db
 # IDE
 .vscode/settings.json
 .idea/
+
+# Cloudflare operational outputs and credentials
+tools/cloudflare/nanovia-cloudflare-plan.md
+tools/cloudflare/cloudflare-accessible-zones-sanitized.md
+tools/cloudflare/*report*.md
+.env.cloudflare
+.cloudflare-token*
+*cloudflare*token*

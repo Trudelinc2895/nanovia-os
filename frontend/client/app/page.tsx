@@ -1,259 +1,197 @@
-"use client";
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  createCheckoutSession,
-  getAccessToken,
-  getBillingModules,
-  getPlans,
-  type BillingModulePublic,
-  type Plan,
-} from "@/lib/api";
-import { getModuleIcon, MODULE_SLUGS } from "@/lib/monetization";
+import { PRO_PILOT, PRO_PILOT_EMAIL_LINK } from "@/lib/pro-pilot";
 
-function formatPlanCta(planSlug: string): string {
-  if (planSlug === "free") return "Commencer gratis";
-  if (planSlug === "business") return "Demarrer Business";
-  return "Demarrer Pro";
-}
+const deliverables = [
+  "Analyse d'une tache repetitive de votre entreprise",
+  "Configuration d'un assistant IA adapte a votre realite",
+  "Processus clair, documente et reutilisable",
+  "Recommandations d'automatisation concretes",
+  "Livraison d'un plan exploitable en 30 jours",
+];
 
-export default function Home() {
-  const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [yearly, setYearly] = useState(false);
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [modules, setModules] = useState<BillingModulePublic[]>([]);
+const audiences = [
+  "Solopreneurs",
+  "Petites entreprises",
+  "Travailleurs autonomes",
+  "Equipes qui perdent du temps sur des taches repetitives",
+  "Entreprises qui veulent tester l'IA sans lancer un gros projet complexe",
+];
 
-  useEffect(() => {
-    Promise.all([getPlans(), getBillingModules()])
-      .then(([plansData, modulesData]) => {
-        setPlans(plansData);
-        setModules(modulesData);
-      })
-      .catch(() => {
-        setErrorMsg("Catalogue temporairement indisponible. Reessaie dans quelques instants.");
-      });
-  }, []);
+const seriousnessItems = [
+  "Aucun acces inutile a vos outils ou donnees",
+  "Donnees limitees au besoin reel",
+  "Travail documente et reutilisable",
+  "Objectif : livrer un resultat concret, pas vendre du reve",
+];
 
-  async function handleCheckout(planKey: string) {
-    setErrorMsg("");
-    setLoadingPlan(planKey);
-    try {
-      // Token lives in memory (api.ts _accessToken), not sessionStorage
-      if (!getAccessToken()) {
-        window.location.href = `/register?plan=${planKey}`;
-        return;
-      }
-      const interval: "monthly" | "yearly" = yearly ? "yearly" : "monthly";
-      const data = await createCheckoutSession(planKey, interval);
-      if (data.url) window.location.href = data.url;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Erreur lors du paiement.";
-      setErrorMsg(
-        msg.includes("no configured price")
-          ? "Paiement temporairement indisponible — contacte le support."
-          : msg || "Erreur lors du paiement. Réessaie."
-      );
-    } finally {
-      setLoadingPlan(null);
-    }
-  }
-
+export default function HomePage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white">
-
-      {/* NAV */}
-      <nav className="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <span className="text-xl font-bold text-violet-400">Nanovia OS</span>
-          <div className="flex items-center gap-3 text-sm">
-            <a href="#modules" className="text-gray-400 hover:text-white transition hidden sm:block">Modules</a>
-            <a href="#pricing" className="text-gray-400 hover:text-white transition hidden sm:block">Tarifs</a>
-            <Link href="/login" className="text-gray-400 hover:text-white transition px-3 py-2 rounded-lg">
-              Connexion
-            </Link>
-            <Link
-              href="/register"
-              className="bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-lg transition font-medium"
-            >
-              Commencer gratis
-            </Link>
+      <nav className="sticky top-0 z-50 border-b border-gray-800 bg-gray-950/95 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+          <Link href="/" className="text-xl font-bold text-violet-400">
+            Nanovia
+          </Link>
+          <div className="hidden items-center gap-6 text-sm text-gray-300 md:flex">
+            <a href="#accueil" className="transition hover:text-white">
+              Accueil
+            </a>
+            <a href="#offre" className="transition hover:text-white">
+              Offre
+            </a>
+            <a href="#prix" className="transition hover:text-white">
+              Prix
+            </a>
+            <a href="#contact" className="transition hover:text-white">
+              Contact
+            </a>
           </div>
+          <a
+            href={PRO_PILOT.paymentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500"
+          >
+            Démarrer Pro Pilot
+          </a>
         </div>
       </nav>
 
-      {/* HERO */}
-      <section className="pt-40 pb-24 px-6 text-center max-w-4xl mx-auto">
-        <div className="inline-block bg-violet-600/20 border border-violet-500/30 text-violet-300 text-sm px-4 py-1.5 rounded-full mb-6">
-          🚀 Mode SaaS Expert — Production-Grade
+      <section id="accueil" className="mx-auto max-w-5xl px-6 pb-20 pt-24 text-center">
+        <div className="mb-6 inline-flex rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-1.5 text-sm text-violet-300">
+          Nanovia Pro Pilot
         </div>
-        <h1 className="text-5xl md:text-7xl font-extrabold leading-tight mb-6">
-          Ton business IA.<br />
-          <span className="text-violet-400">Automatisé. Rentable.</span>
+        <h1 className="mx-auto max-w-4xl text-4xl font-extrabold leading-tight md:text-6xl">
+          Nanovia Pro Pilot
         </h1>
-        <p className="text-xl text-gray-400 mb-10 max-w-2xl mx-auto">
-          Une plateforme SaaS unifiee pour vendre, activer et gerer des modules IA avec
-          une monetiation decidee cote serveur.
+        <p className="mx-auto mt-6 max-w-3xl text-lg text-gray-200">
+          Automatisez une tache repetitive de votre entreprise avec un assistant IA configure pour vous.
         </p>
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Link
-            href="/register"
-            className="bg-violet-600 hover:bg-violet-500 text-white font-bold px-8 py-4 rounded-xl transition text-lg"
-          >
-            Commencer gratis →
-          </Link>
+        <p className="mx-auto mt-4 max-w-3xl text-base text-gray-400 md:text-lg">
+          En 30 jours, Nanovia vous aide a transformer une tache repetitive en processus assiste par IA,
+          clair, documente et reutilisable.
+        </p>
+        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
-            href="#pricing"
-            className="bg-gray-800 hover:bg-gray-700 text-white font-bold px-8 py-4 rounded-xl transition text-lg border border-gray-700"
+            href={PRO_PILOT.paymentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-xl bg-violet-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-violet-500"
           >
-            Voir les tarifs
+            Démarrer Pro Pilot
+          </a>
+          <a
+            href={PRO_PILOT_EMAIL_LINK}
+            className="rounded-xl border border-gray-700 bg-gray-900 px-8 py-4 text-lg font-semibold text-white transition hover:border-violet-500"
+          >
+            Écrire à Nanovia
           </a>
         </div>
-        <p className="text-gray-600 text-sm mt-5">✓ Sans carte · ✓ Annulable a tout moment · ✓ Catalogue backend unique</p>
+        <p className="mt-5 text-sm text-gray-500">Paiement securise par Stripe.</p>
       </section>
 
-      {/* SOCIAL PROOF */}
-      <section className="py-10 border-y border-gray-800 bg-gray-900/30">
-        <div className="max-w-4xl mx-auto px-6 flex flex-wrap justify-center gap-10 text-center">
-            {[[String(MODULE_SLUGS.length), "Modules IA"], ["$0", "Pour commencer"], ["24h", "Prototype live"], ["100%", "Ownership"]].map(([n, l]) => (
-            <div key={l}>
-              <div className="text-3xl font-extrabold text-violet-400">{n}</div>
-              <div className="text-gray-400 text-sm mt-1">{l}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* MODULES */}
-      <section id="modules" className="py-24 px-6 max-w-6xl mx-auto">
-        <div className="text-center mb-14">
-          <h2 className="text-4xl font-bold mb-4">{MODULE_SLUGS.length} modules. 1 système.</h2>
-          <p className="text-gray-400 text-lg">Tous les prix affiches ici viennent du catalogue billing du backend.</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {modules.map((module) => (
-            <div key={module.slug} className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-violet-500/50 transition group">
-              <div className="text-3xl mb-3">{getModuleIcon(module.slug)}</div>
-              <div className="flex items-start justify-between mb-2">
-                <h3 className="font-bold text-lg group-hover:text-violet-400 transition leading-tight">{module.name}</h3>
-                <span className="text-violet-400 font-bold text-sm ml-3 whitespace-nowrap">${module.price_usd}/mo</span>
-              </div>
-              <p className="text-gray-400 text-sm leading-relaxed">{module.description}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* PRICING */}
-      <section id="pricing" className="py-24 px-6 bg-gray-900/30">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <h2 className="text-4xl font-bold mb-4">Tarifs simples et transparents</h2>
-            <p className="text-gray-400">Commence gratis. Scale quand tu es prêt.</p>
+      <section id="offre" className="border-y border-gray-800 bg-gray-900/40 px-6 py-20">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Ce que le client obtient</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Un accompagnement simple, utile et livrable</h2>
           </div>
-
-          {/* Annual / Monthly toggle */}
-          <div className="flex items-center justify-center gap-4 mb-10">
-            <span className={`text-sm font-medium ${!yearly ? "text-white" : "text-gray-500"}`}>Mensuel</span>
-            <button
-              onClick={() => setYearly(!yearly)}
-              className={`relative w-12 h-6 rounded-full transition-colors ${yearly ? "bg-violet-600" : "bg-gray-700"}`}
-              aria-label="Toggle annual billing"
-            >
-              <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${yearly ? "translate-x-6" : ""}`} />
-            </button>
-            <span className={`text-sm font-medium ${yearly ? "text-white" : "text-gray-500"}`}>
-              Annuel <span className="text-green-400 font-bold">(-17%)</span>
-            </span>
-          </div>
-
-          {errorMsg && (
-            <div className="max-w-md mx-auto mb-8 bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 text-sm text-center">
-              {errorMsg}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {plans.map((plan) => (
-              <div
-                key={plan.slug}
-                className={`rounded-2xl p-8 border flex flex-col ${
-                  plan.highlight
-                    ? "bg-violet-600 border-violet-500 scale-105 shadow-xl shadow-violet-900/40"
-                    : "bg-gray-900 border-gray-800"
-                }`}
-              >
-                {plan.highlight && (
-                  <div className="text-xs font-bold bg-white/20 rounded-full px-3 py-1 inline-block mb-4 tracking-wider">
-                    ⭐ POPULAIRE
-                  </div>
-                )}
-                <h3 className="text-xl font-bold mb-1">{plan.name}</h3>
-                <p className={`text-sm mb-4 ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.marketing_description}</p>
-                <div className="text-4xl font-extrabold mb-1">
-                  {yearly && plan.price_yearly_usd > 0
-                    ? <>${plan.price_yearly_usd}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>/an</span></>
-                    : <>{plan.price_monthly_usd === 0 ? "$0" : `$${plan.price_monthly_usd}`}<span className={`text-lg font-normal ${plan.highlight ? "text-violet-200" : "text-gray-400"}`}>{plan.price_monthly_usd === 0 ? "" : "/mois"}</span></>
-                  }
-                </div>
-                {yearly && plan.yearly_discount_pct > 0 && (
-                  <p className={`text-xs mb-5 ${plan.highlight ? "text-green-300" : "text-green-400"} font-semibold`}>
-                    ✓ -{plan.yearly_discount_pct}% — economie annuelle
-                  </p>
-                )}
-                {!yearly && plan.price_yearly_usd > 0 && (
-                  <p className={`text-xs mb-5 ${plan.highlight ? "text-violet-200" : "text-gray-500"}`}>
-                    ${plan.price_yearly_usd}/an · <span className="text-green-400">-{plan.yearly_discount_pct}%</span>
-                  </p>
-                )}
-                <ul className="space-y-2 mb-8 flex-1">
-                  {plan.features.map((f) => (
-                    <li key={f} className={`text-sm flex gap-2 ${plan.highlight ? "text-violet-100" : "text-gray-300"}`}>
-                      <span className="text-green-400 flex-shrink-0">✓</span>{f}
-                    </li>
-                  ))}
-                </ul>
-                {plan.slug === "free" ? (
-                  <Link
-                    href="/register"
-                    className={`w-full py-3 rounded-xl font-bold text-sm text-center transition block ${
-                      plan.highlight
-                        ? "bg-white text-violet-700 hover:bg-gray-100"
-                        : "bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                    }`}
-                  >
-                    {formatPlanCta(plan.slug)}
-                  </Link>
-                ) : (
-                  <button
-                    onClick={() => handleCheckout(plan.slug)}
-                    disabled={!!loadingPlan}
-                    className={`w-full py-3 rounded-xl font-bold text-sm transition disabled:opacity-50 ${
-                      plan.highlight
-                        ? "bg-white text-violet-700 hover:bg-gray-100"
-                        : "bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                    }`}
-                  >
-                    {loadingPlan === plan.slug ? "⏳ Chargement..." : formatPlanCta(plan.slug)}
-                  </button>
-                )}
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {deliverables.map((item) => (
+              <div key={item} className="rounded-2xl border border-gray-800 bg-gray-950 p-5 text-sm text-gray-200">
+                {item}
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* FOOTER */}
-      <footer className="py-12 border-t border-gray-800 text-center text-gray-500 text-sm">
-        <p className="text-violet-400 font-bold text-lg mb-2">Nanovia OS</p>
-        <p>Propulse par Nanovia · nanovia.ca</p>
-        <p className="mt-2">© 2026 Kevin Trudel — Tous droits réservés</p>
-        <div className="flex justify-center gap-6 mt-4">
-          <a href="/privacy" className="hover:text-white transition">Confidentialité</a>
-          <a href="/terms" className="hover:text-white transition">CGU</a>
-          <Link href="/contact" className="hover:text-white transition">Contact</Link>
+      <section className="px-6 py-20">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Pour qui</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Pour les equipes qui veulent tester l&apos;IA sans complexite</h2>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {audiences.map((item) => (
+              <div key={item} className="rounded-2xl border border-gray-800 bg-gray-900 p-5 text-sm text-gray-200">
+                {item}
+              </div>
+            ))}
+          </div>
         </div>
-      </footer>
+      </section>
+
+      <section id="prix" className="border-y border-gray-800 bg-gray-900/40 px-6 py-20">
+        <div className="mx-auto max-w-4xl text-center">
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Prix</p>
+          <h2 className="mt-3 text-3xl font-bold md:text-4xl">Une offre claire pour lancer Pro Pilot</h2>
+          <div className="mt-10 rounded-3xl border border-violet-500/30 bg-gray-950 p-10">
+            <p className="text-sm uppercase tracking-[0.25em] text-gray-400">Pro Pilot 30 jours</p>
+            <div className="mt-3 text-4xl font-extrabold text-white">{PRO_PILOT.priceCad} $ CAD</div>
+            <p className="mt-3 text-lg text-gray-300">Paiement securise par Stripe</p>
+            <div className="mx-auto mt-8 h-px max-w-md bg-gray-800" />
+            <p className="mt-8 text-sm uppercase tracking-[0.25em] text-gray-400">Suivi optionnel ensuite</p>
+            <div className="mt-3 text-3xl font-bold text-violet-300">{PRO_PILOT.optionalFollowUpCadMonthly} $ CAD / mois</div>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <a
+                href={PRO_PILOT.paymentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex rounded-xl bg-violet-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-violet-500"
+              >
+                Démarrer Pro Pilot
+              </a>
+              <a
+                href={PRO_PILOT_EMAIL_LINK}
+                className="inline-flex rounded-xl border border-gray-700 px-8 py-4 text-lg font-semibold text-white transition hover:border-violet-500"
+              >
+                Écrire à Nanovia
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="px-6 py-20">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Securite / serieux</p>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Un cadre simple, prudent et documente</h2>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {seriousnessItems.map((item) => (
+              <div key={item} className="rounded-2xl border border-gray-800 bg-gray-900 p-5 text-sm text-gray-200">
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="contact" className="border-t border-gray-800 px-6 py-20 text-center">
+        <div className="mx-auto max-w-3xl">
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Contact</p>
+          <h2 className="mt-3 text-3xl font-bold md:text-4xl">Parler a Nanovia avant ou apres le paiement</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-gray-400">
+            Si vous voulez valider votre cas d&apos;usage ou poser une question avant de commencer, ecrivez a Nanovia.
+          </p>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <a
+              href={PRO_PILOT_EMAIL_LINK}
+              className="rounded-xl border border-violet-500 bg-violet-500/10 px-8 py-4 text-lg font-semibold text-violet-100 transition hover:bg-violet-500/20"
+            >
+              {PRO_PILOT.publicEmail}
+            </a>
+            <Link
+              href="/contact"
+              className="rounded-xl border border-gray-700 px-8 py-4 text-lg font-semibold text-white transition hover:border-violet-500"
+            >
+              Formulaire de contact
+            </Link>
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

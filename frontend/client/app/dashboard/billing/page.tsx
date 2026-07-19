@@ -68,7 +68,7 @@ export default function BillingPage() {
     setError(null);
     try {
       const { url } = await createCheckoutSession(planSlug, cadence);
-      if (url) window.location.href = url;
+      if (url) window.location.assign(url);
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur checkout");
     } finally {
@@ -80,7 +80,7 @@ export default function BillingPage() {
     setActionLoading(slug);
     try {
       const { url } = await createAddonCheckout(slug);
-      if (url) window.location.href = url;
+      if (url) window.location.assign(url);
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur addon");
     } finally {
@@ -92,7 +92,7 @@ export default function BillingPage() {
     setActionLoading("portal");
     try {
       const { url } = await createPortalSession();
-      if (url) window.location.href = url;
+      if (url) window.location.assign(url);
     } catch (e: unknown) {
       setError((e as Error).message ?? "Erreur portail");
     } finally {
@@ -278,4 +278,3 @@ export default function BillingPage() {
     </div>
   );
 }
-

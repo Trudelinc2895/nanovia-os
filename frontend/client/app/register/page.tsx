@@ -172,7 +172,7 @@ export default function RegisterPage() {
               loading={loading}
               disabled={!agreed || passwordScore < 3 || password !== confirm}
             >
-              Commencer gratuitement
+              Créer mon accès Nanovia
             </Button>
 
             <p className="text-center text-sm text-text-muted">
