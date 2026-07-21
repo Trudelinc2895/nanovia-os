@@ -7,6 +7,33 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
+# ── adaptive rate limiting ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("cpu", "memory", "expected"),
+    [
+        (20, 30, 1.0),
+        (61, 30, 0.75),
+        (76, 30, 0.5),
+        (91, 30, 0.25),
+    ],
+)
+def test_adaptive_rate_limit_multiplier(monkeypatch, cpu, memory, expected):
+    """Adaptive throttling remains covered without depending on host load."""
+    import psutil
+    from api import main as main_module
+
+    monkeypatch.setattr(psutil, "cpu_percent", lambda: cpu)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: type("Memory", (), {"percent": memory})(),
+    )
+
+    assert main_module._get_load_multiplier() == expected
+
+
 # ── middleware/body_limit.py ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

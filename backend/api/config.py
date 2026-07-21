@@ -141,6 +141,7 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    CONTACT_RECIPIENT_EMAIL: str = "nanovia@duck.com"
     TELEGRAM_BOT_TOKEN_REF: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
