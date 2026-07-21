@@ -76,6 +76,25 @@ export async function apiFetch<T>(
   return res.json();
 }
 
+export interface ContactRequest {
+  name: string;
+  email: string;
+  subject: "demo";
+  message: string;
+}
+
+export interface ContactResponse {
+  received: true;
+  message: string;
+}
+
+export async function submitContact(body: ContactRequest): Promise<ContactResponse> {
+  return apiFetch<ContactResponse>("/api/v1/contact", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 async function refreshAccessToken(): Promise<boolean> {
   try {
     // Browser sends httpOnly cookie automatically via credentials: "include"

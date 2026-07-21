@@ -35,8 +35,8 @@ export default function LoginPage() {
       const result = await login(email, password);
       // login() in auth-context calls apiLogin and then getMe()
       // But we need to handle 2FA — override with raw API call here
-      if ((result as any)?.requires_2fa) {
-        setPartialToken((result as any).partial_token ?? "");
+      if (result?.requires_2fa) {
+        setPartialToken(result.partial_token ?? "");
         setRequires2FA(true);
         return;
       }

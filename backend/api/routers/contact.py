@@ -4,16 +4,17 @@ backend/api/routers/contact.py
 Contact form endpoint.
 - Validates input
 - Sends notification email via Resend
-- Falls back gracefully if email not configured
-- Always returns 200 to prevent enumeration
+- Returns an explicit service error when delivery is unavailable
 """
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request, status
+from markupsafe import escape
 from pydantic import BaseModel, EmailStr, field_validator
 
+from api.config import settings
 from api.services.email_service import _send as send_email
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class ContactRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        v = v.strip()
+        v = " ".join(v.split())
         if not v or len(v) < 2:
             raise ValueError("Le nom doit faire au moins 2 caractères.")
         if len(v) > 100:
@@ -68,42 +69,46 @@ class ContactRequest(BaseModel):
 async def contact_form(body: ContactRequest, request: Request):
     """
     Process contact form submission.
-    Always returns 200 to avoid enumeration.
-    Logs submission regardless of email delivery.
+    Only confirms receipt after the notification provider accepts the email.
     """
     ip = request.client.host if request.client else "unknown"
     subject_label = SUBJECTS.get(body.subject, body.subject)
 
-    logger.info(
-        f"[contact] New message from {body.email} | subject={body.subject} | ip={ip}"
-    )
+    logger.info("[contact] New message | subject=%s | ip=%s", body.subject, ip)
 
-    # Build admin notification email
+    safe_name = str(escape(body.name))
+    safe_email = str(escape(str(body.email)))
+    safe_subject = str(escape(subject_label))
+    safe_message = str(escape(body.message))
+
+    # Escape all visitor-controlled fields before inserting them into HTML.
     html = f"""
     <div style="font-family:sans-serif;max-width:600px">
-      <h2>Nouveau message de contact — Nanovia OS</h2>
+      <h2>Nouvelle demande — Nanovia Pro Pilot</h2>
       <table style="width:100%;border-collapse:collapse">
-        <tr><td style="padding:8px;font-weight:bold">Nom</td><td style="padding:8px">{body.name}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Email</td><td style="padding:8px">{body.email}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Sujet</td><td style="padding:8px">{subject_label}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">IP</td><td style="padding:8px">{ip}</td></tr>
+        <tr><td style="padding:8px;font-weight:bold">Nom</td><td style="padding:8px">{safe_name}</td></tr>
+        <tr><td style="padding:8px;font-weight:bold">Email</td><td style="padding:8px">{safe_email}</td></tr>
+        <tr><td style="padding:8px;font-weight:bold">Sujet</td><td style="padding:8px">{safe_subject}</td></tr>
       </table>
       <h3>Message:</h3>
-      <div style="background:#f5f5f5;padding:16px;border-radius:6px;white-space:pre-wrap">{body.message}</div>
+      <div style="background:#f5f5f5;padding:16px;border-radius:6px;white-space:pre-wrap">{safe_message}</div>
     </div>
     """
 
     try:
-        from api.config import settings
-        admin_email = settings.RESEND_FROM_EMAIL
-        await send_email(
-            to=admin_email,
-            subject=f"[Nanovia Contact] {subject_label} — {body.name}",
+        delivered = await send_email(
+            to=settings.CONTACT_RECIPIENT_EMAIL,
+            subject=f"[Nanovia Pro Pilot] {subject_label} — {body.name}",
             html=html,
         )
     except Exception as exc:
-        # Email delivery failure — still logged above, not a fatal error
-        logger.warning(f"[contact] Email delivery failed: {exc}")
+        logger.warning("[contact] Email delivery failed: %s", exc)
+        delivered = False
 
-    # Always return success — never reveal delivery status
-    return {"received": True, "message": "Ton message a été reçu. Nous te répondrons bientôt."}
+    if not delivered:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La transmission est temporairement indisponible. Utilisez le lien courriel de secours.",
+        )
+
+    return {"received": True, "message": "Votre demande a été reçue."}

@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-const STRIPE_PAYMENT_LINK = "https://buy.stripe.com/eVqaEZ2vF03j0De6bC1ZS02";
+const START_LINK = "/contact#demande";
 const PUBLIC_EMAIL = "nanovia@duck.com";
 const PUBLIC_EMAIL_LINK = `mailto:${PUBLIC_EMAIL}`;
 
@@ -50,9 +50,7 @@ export default function HomePage() {
             </a>
           </div>
           <a
-            href={STRIPE_PAYMENT_LINK}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={START_LINK}
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500"
           >
             Démarrer Pro Pilot
@@ -76,9 +74,7 @@ export default function HomePage() {
         </p>
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
-            href={STRIPE_PAYMENT_LINK}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={START_LINK}
             className="rounded-xl bg-violet-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-violet-500"
           >
             Démarrer Pro Pilot
@@ -113,7 +109,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-5xl">
           <div className="text-center">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Pour qui</p>
-            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Pour les equipes qui veulent tester l'IA sans complexite</h2>
+            <h2 className="mt-3 text-3xl font-bold md:text-4xl">Pour les equipes qui veulent tester l&apos;IA sans complexite</h2>
           </div>
           <div className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             {audiences.map((item) => (
@@ -138,9 +134,7 @@ export default function HomePage() {
             <div className="mt-3 text-3xl font-bold text-violet-300">79 $ CAD / mois</div>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <a
-                href={STRIPE_PAYMENT_LINK}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={START_LINK}
                 className="inline-flex rounded-xl bg-violet-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-violet-500"
               >
                 Démarrer Pro Pilot
@@ -177,7 +171,7 @@ export default function HomePage() {
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-violet-300">Contact</p>
           <h2 className="mt-3 text-3xl font-bold md:text-4xl">Parler a Nanovia avant ou apres le paiement</h2>
           <p className="mx-auto mt-4 max-w-2xl text-gray-400">
-            Si vous voulez valider votre cas d'usage ou poser une question avant de commencer, ecrivez a Nanovia.
+            Si vous voulez valider votre cas d&apos;usage ou poser une question avant de commencer, ecrivez a Nanovia.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <a
@@ -195,6 +189,15 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      <footer className="border-t border-gray-800 px-6 py-8 text-center text-sm text-gray-500">
+        <p>© 2026 Kevin Trudel — Nanovia</p>
+        <div className="mt-2 flex justify-center gap-4">
+          <Link href="/terms" className="transition hover:text-white">Conditions</Link>
+          <Link href="/privacy" className="transition hover:text-white">Confidentialité</Link>
+          <Link href="/contact" className="transition hover:text-white">Contact</Link>
+        </div>
+      </footer>
     </main>
   );
 }

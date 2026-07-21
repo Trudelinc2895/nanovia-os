@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    CONTACT_RECIPIENT_EMAIL: str = "nanovia@duck.com"
     TELEGRAM_BOT_TOKEN_REF: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
@@ -170,7 +171,17 @@ class Settings(BaseSettings):
     )
     SCRAPING_MAX_RESPONSE_BYTES: int = Field(default=2_000_000, ge=1024)
     SCRAPING_MAX_REDIRECTS: int = Field(default=3, ge=0, le=10)
-    SCRAPING_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0.1, le=120.0)
+    SCRAPING_TIMEOUT_SECONDS: float = Field(
+        default=20.0,
+        gt=0.1,
+        le=120.0,
+    )
+    SCRAPE_TIMEOUT_MS: int | None = Field(
+        default=None,
+        ge=100,
+        exclude=True,
+        repr=False,
+    )
     SCRAPING_RATE_LIMIT_PER_DOMAIN_PER_MIN: int = Field(
         default=60,
         ge=1,
