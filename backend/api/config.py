@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     STRIPE_PRICE_ADDON_API_PACK: str = ""
     STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""
     STRIPE_PRICE_CREDITS_PACK: str = ""
+    STRIPE_ACCOUNT_ID: str = ""
+    STRIPE_PILOT_PRODUCT_ID: str = ""
+    STRIPE_PILOT_PRICE_ID: str = ""
+    STRIPE_PILOT_PAYMENT_LINK_ID: str = ""
+    STRIPE_PILOT_PAYMENT_LINK_URL: str = ""
 
     # Per-module à-la-carte prices (optional — set in Stripe dashboard)
     STRIPE_PRICE_MODULE_OPERATOR: str = ""
@@ -141,7 +146,7 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
-    CONTACT_RECIPIENT_EMAIL: str = "nanovia@duck.com"
+    CONTACT_RECIPIENT_EMAIL: str = ""
     TELEGRAM_BOT_TOKEN_REF: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
@@ -453,6 +458,16 @@ class Settings(BaseSettings):
                 errors.append("STRIPE_SECRET_KEY must be a live Stripe key in production")
             if not self.STRIPE_WEBHOOK_SECRET.startswith(stripe_webhook_prefix):
                 errors.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret")
+            for field_name in (
+                "STRIPE_ACCOUNT_ID",
+                "STRIPE_PILOT_PRODUCT_ID",
+                "STRIPE_PILOT_PRICE_ID",
+                "STRIPE_PILOT_PAYMENT_LINK_ID",
+                "STRIPE_PILOT_PAYMENT_LINK_URL",
+                "CONTACT_RECIPIENT_EMAIL",
+            ):
+                if not getattr(self, field_name):
+                    errors.append(f"{field_name} is required in production")
             if not self.ADMIN_ALLOWED_IPS:
                 errors.append("ADMIN_ALLOWED_IPS/ADMIN_ALLOWED_IP is required in production")
             if not self.TOTP_ENCRYPTION_KEY:

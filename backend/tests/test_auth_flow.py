@@ -1037,14 +1037,18 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
             headers={"Authorization": f"Bearer {access_token}"},
         )
 
-        assert response.status_code == 502, response.text
-        assert "processor exploded" in response.json()["detail"]
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == "Webhook reprocess temporarily unavailable"
         process_event.assert_awaited_once()
 
         with sqlite3.connect("test_auth.db") as conn:
             row = conn.execute(
-                "SELECT status, error FROM webhook_events WHERE stripe_event_id = ?",
+                """
+                SELECT status, error, attempt_count
+                FROM webhook_events
+                WHERE stripe_event_id = ?
+                """,
                 (event_id,),
             ).fetchone()
 
-        assert row == ("failed", "processor exploded")
+        assert row == ("retryable_failure", "processor exploded", 2)

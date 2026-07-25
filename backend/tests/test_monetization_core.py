@@ -228,7 +228,7 @@ async def test_handle_stripe_webhook_short_circuits_duplicates():
 
     with patch(
         "api.core.monetization.webhook_handler_service.claim_webhook_event",
-        new=AsyncMock(return_value=False),
+        new=AsyncMock(return_value="duplicate"),
     ):
         result = await handle_stripe_webhook("evt_1", "invoice.payment_failed", {}, AsyncMock())
 

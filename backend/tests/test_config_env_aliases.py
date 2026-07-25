@@ -67,6 +67,15 @@ def test_production_accepts_valid_totp_encryption_and_admin_allowlist(monkeypatc
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-prod")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk" + "_live_prod")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "wh" + "sec_prod")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PRODUCT_ID", "prod_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PRICE_ID", "price_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PAYMENT_LINK_ID", "plink_test_j20")
+    monkeypatch.setenv(
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        "https://buy.stripe.com/test_j20",
+    )
+    monkeypatch.setenv("CONTACT_RECIPIENT_EMAIL", "pilot-test@nanovia.ca")
     monkeypatch.setenv("API_BASE_URL", "https://nanovia.ca")
     monkeypatch.setenv("PUBLIC_WEB_URL", "https://nanovia.ca")
     monkeypatch.setenv("PRIVATE_ADMIN_URL", "https://admin.nanovia.ca")
