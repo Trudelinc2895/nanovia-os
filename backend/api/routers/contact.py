@@ -1,10 +1,10 @@
 """
 backend/api/routers/contact.py
 
-Contact form endpoint.
-- Validates input
-- Sends notification email via Resend
-- Returns an explicit service error when delivery is unavailable
+Pilot request endpoint.
+- Validates and persists the request before any notification
+- Sends a best-effort notification via Resend
+- Returns an opaque request_id from canonical storage
 """
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from markupsafe import escape
 from pydantic import BaseModel, EmailStr, field_validator
 
 from api.config import settings
+from api.core.deps import DB
+from api.models.pilot import PilotRequest
 from api.services.email_service import _send as send_email
 
 logger = logging.getLogger(__name__)
@@ -66,15 +68,34 @@ class ContactRequest(BaseModel):
 
 
 @router.post("/contact")
-async def contact_form(body: ContactRequest, request: Request):
+async def contact_form(body: ContactRequest, request: Request, db: DB):
     """
-    Process contact form submission.
-    Only confirms receipt after the notification provider accepts the email.
+    Persist a Pilot request, then send a non-canonical notification.
     """
     ip = request.client.host if request.client else "unknown"
     subject_label = SUBJECTS.get(body.subject, body.subject)
 
     logger.info("[contact] New message | subject=%s | ip=%s", body.subject, ip)
+
+    pilot_request = PilotRequest(
+        name=body.name,
+        email=str(body.email).strip().lower(),
+        subject=body.subject,
+        message=body.message,
+        status="pending",
+        notification_status="pending",
+    )
+    try:
+        db.add(pilot_request)
+        await db.commit()
+        request_id = str(pilot_request.id)
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("[contact] Pilot request persistence failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La demande ne peut pas être enregistrée pour le moment.",
+        ) from exc
 
     safe_name = str(escape(body.name))
     safe_email = str(escape(str(body.email)))
@@ -105,10 +126,16 @@ async def contact_form(body: ContactRequest, request: Request):
         logger.warning("[contact] Email delivery failed: %s", exc)
         delivered = False
 
-    if not delivered:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="La transmission est temporairement indisponible. Utilisez le lien courriel de secours.",
-        )
+    pilot_request.notification_status = "sent" if delivered else "failed"
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("[contact] Notification status update failed: %s", exc)
 
-    return {"received": True, "message": "Votre demande a été reçue."}
+    return {
+        "received": True,
+        "request_id": request_id,
+        "notification_sent": delivered,
+        "message": "Votre demande a été enregistrée.",
+    }

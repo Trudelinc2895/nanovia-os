@@ -368,6 +368,7 @@ def _get_load_multiplier() -> float:
 
 
 _RATE_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
+_RATE_SKIP_EXACT_PATHS = frozenset({"/api/v1/billing/webhook"})
 _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
     "/api/v1/auth/login": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
     "/api/v1/auth/register": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
@@ -451,7 +452,9 @@ def _rate_limit_key(scope: str, bucket: str, ip: str, user_id: str | None) -> st
 @app.middleware("http")
 async def rate_limit(request: Request, call_next) -> Response:
     path = request.url.path
-    if any(path.startswith(p) for p in _RATE_SKIP_PREFIXES):
+    if path in _RATE_SKIP_EXACT_PATHS or any(
+        path.startswith(prefix) for prefix in _RATE_SKIP_PREFIXES
+    ):
         return await call_next(request)
 
     ip = (request.client.host if request.client else "unknown").replace(":", "_")

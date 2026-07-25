@@ -3,7 +3,7 @@ backend/api/schemas/billing.py — Billing request/response schemas
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -77,6 +77,10 @@ class ModulePublic(BaseModel):
 
 class CheckoutResponse(BaseModel):
     url: str
+
+
+class PilotConfirmationResponse(BaseModel):
+    status: Literal["confirmed", "processing", "manual_review"]
 
 
 class PortalResponse(BaseModel):

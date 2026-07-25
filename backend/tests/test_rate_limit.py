@@ -34,6 +34,100 @@ def test_adaptive_rate_limit_multiplier(monkeypatch, cpu, memory, expected):
     assert main_module._get_load_multiplier() == expected
 
 
+@pytest.mark.asyncio
+async def test_exact_billing_webhook_path_skips_generic_rate_limit(monkeypatch):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from api import main as main_module
+
+    redis_requested = False
+
+    async def fail_if_redis_is_requested():
+        nonlocal redis_requested
+        redis_requested = True
+        raise AssertionError("The exact Stripe webhook path must not use Redis")
+
+    monkeypatch.setattr(main_module, "_get_redis", fail_if_redis_is_requested)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("test", 80),
+            "client": ("127.0.0.10", 12345),
+            "path": "/api/v1/billing/webhook",
+            "query_string": b"source=stripe",
+            "headers": [],
+        }
+    )
+    call_next = AsyncMock(return_value=Response(status_code=200))
+
+    response = await main_module.rate_limit(request, call_next)
+
+    assert response.status_code == 200
+    assert redis_requested is False
+    call_next.assert_awaited_once_with(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/billing/webhook/replay",
+        "/api/v1/billing/pilot/confirmation",
+    ],
+)
+async def test_only_exact_billing_webhook_path_is_exempt(
+    monkeypatch,
+    path,
+):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from api import main as main_module
+
+    class FakeRedis:
+        def __init__(self):
+            self.keys: list[str] = []
+
+        async def incr(self, key):
+            self.keys.append(key)
+            return 1
+
+        async def expire(self, _key, _window):
+            return True
+
+    fake_redis = FakeRedis()
+
+    async def get_fake_redis():
+        return fake_redis
+
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
+    monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
+    monkeypatch.setattr(main_module, "_get_redis", get_fake_redis)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "server": ("test", 80),
+            "client": ("127.0.0.11", 12345),
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    call_next = AsyncMock(return_value=Response(status_code=200))
+
+    response = await main_module.rate_limit(request, call_next)
+
+    assert response.status_code == 200
+    assert len(fake_redis.keys) == 1
+    assert fake_redis.keys[0].endswith(":default")
+    call_next.assert_awaited_once_with(request)
+
+
 # ── middleware/body_limit.py ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

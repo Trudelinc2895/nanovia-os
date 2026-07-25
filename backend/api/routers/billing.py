@@ -23,6 +23,7 @@ from typing import Annotated
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
@@ -31,7 +32,10 @@ from api.core.monetization import (
     getEntitlements as monetization_get_entitlements,
     getUsageSnapshot as monetization_get_usage_snapshot,
 )
-from api.core.monetization.webhook_handler_service import handle_stripe_webhook
+from api.core.monetization.webhook_handler_service import (
+    WebhookProcessingUnavailable,
+    handle_stripe_webhook,
+)
 from api.core.monetization.pricing_config_service import get_pricing_catalog
 from api.schemas.billing import (
     AddonCheckoutRequest,
@@ -44,10 +48,12 @@ from api.schemas.billing import (
     EntitlementsResponse,
     ModuleCheckoutRequest,
     ModulePublic,
+    PilotConfirmationResponse,
     PlanPublic,
     PortalResponse,
     UsageResponse,
 )
+from api.models.pilot import PilotPayment
 from api.services.billing_service import (
     ADDONS_CONFIG,
     MODULES_CONFIG,
@@ -113,6 +119,41 @@ async def list_plans() -> list[PlanPublic]:
         )
         for slug, cfg in catalog["plans"].items()
     ]
+
+
+@router.get(
+    "/pilot/confirmation",
+    response_model=PilotConfirmationResponse,
+)
+async def get_pilot_confirmation(
+    db: DB,
+    session_id: str | None = None,
+) -> PilotConfirmationResponse:
+    """Return a public state derived only from a persisted PilotPayment."""
+    normalized_session_id = (session_id or "").strip()
+    if (
+        not normalized_session_id.startswith("cs_")
+        or not 6 <= len(normalized_session_id) <= 255
+        or not all(
+            character.isalnum() or character == "_"
+            for character in normalized_session_id
+        )
+    ):
+        return PilotConfirmationResponse(status="manual_review")
+
+    result = await db.execute(
+        select(PilotPayment.status).where(
+            PilotPayment.stripe_checkout_session_id == normalized_session_id
+        )
+    )
+    payment_status = result.scalar_one_or_none()
+    if payment_status == "paid":
+        public_status = "confirmed"
+    elif payment_status in {"pending", "processing"}:
+        public_status = "processing"
+    else:
+        public_status = "manual_review"
+    return PilotConfirmationResponse(status=public_status)
 
 
 @router.get("/modules", response_model=list[ModulePublic])
@@ -494,12 +535,26 @@ async def stripe_webhook(
 
     try:
         result = await handle_stripe_webhook(event_id, event_type, event["data"]["object"], db)
-    except Exception as exc:
+    except WebhookProcessingUnavailable as exc:
         logger.exception("[webhook] Error processing %s id=%s: %s", event_type, event_id, exc)
         if _HAS_PROM:
             _webhook_errors.labels(event_type=event_type).inc()
-        # Return 200 to prevent Stripe from retrying non-retriable errors.
-        # For transient DB errors, let it raise (Stripe will retry).
-        return {"received": True, "status": "failed", "type": event_type}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "[webhook] Unexpected processing error %s id=%s: %s",
+            event_type,
+            event_id,
+            exc,
+        )
+        if _HAS_PROM:
+            _webhook_errors.labels(event_type=event_type).inc()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        ) from exc
 
     return {"received": True, "status": result["status"], "type": event_type}

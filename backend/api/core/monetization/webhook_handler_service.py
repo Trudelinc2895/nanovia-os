@@ -6,11 +6,19 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.billing_service import (
+    WEBHOOK_CLAIMED,
+    WEBHOOK_DUPLICATE,
+    WEBHOOK_IN_PROGRESS,
     claim_webhook_event,
     get_webhook_event,
+    mark_webhook_retryable_failure,
     process_stripe_event,
     update_webhook_status,
 )
+
+
+class WebhookProcessingUnavailable(RuntimeError):
+    """Signal a signed webhook that must be retried with HTTP 503."""
 
 
 async def handle_stripe_webhook(
@@ -20,21 +28,54 @@ async def handle_stripe_webhook(
     db: AsyncSession,
 ) -> dict[str, Any]:
     """Claim, process, and persist the final status for a Stripe webhook event."""
-    claimed = await claim_webhook_event(event_id, event_type, db)
-    if not claimed:
+    try:
+        claim_status = await claim_webhook_event(event_id, event_type, db)
+    except Exception as exc:
+        await db.rollback()
+        raise WebhookProcessingUnavailable("Webhook claim is temporarily unavailable") from exc
+
+    if claim_status == WEBHOOK_DUPLICATE:
+        await db.rollback()
         return {
             "event_id": event_id,
             "event_type": event_type,
             "status": "duplicate",
         }
+    if claim_status == WEBHOOK_IN_PROGRESS:
+        await db.rollback()
+        raise WebhookProcessingUnavailable("Webhook event is already being processed")
+    if claim_status != WEBHOOK_CLAIMED:
+        await db.rollback()
+        raise WebhookProcessingUnavailable("Webhook claim returned an invalid state")
 
     try:
-        final_status = await process_stripe_event(event_type, payload, db)
+        final_status = await process_stripe_event(
+            event_type,
+            payload,
+            db,
+            event_id=event_id,
+        )
+        webhook_status = "ignored" if final_status == "ignored" else "processed"
+        await update_webhook_status(event_id, webhook_status, None, db)
+        await db.commit()
     except Exception as exc:
-        await update_webhook_status(event_id, "failed", str(exc), db)
-        raise
+        await db.rollback()
+        try:
+            await mark_webhook_retryable_failure(
+                event_id,
+                event_type,
+                str(exc)[:2000],
+                db,
+            )
+        except Exception as marker_exc:
+            await db.rollback()
+            raise WebhookProcessingUnavailable(
+                "Webhook processing and retry marker persistence failed"
+            ) from marker_exc
+        raise WebhookProcessingUnavailable(
+            "Webhook processing is temporarily unavailable"
+        ) from exc
 
-    await update_webhook_status(event_id, final_status, None, db)
     return {
         "event_id": event_id,
         "event_type": event_type,

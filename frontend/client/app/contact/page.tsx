@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { submitContact } from "@/lib/api";
+import { buildPilotPaymentLink } from "@/lib/pilot-payment-link";
 
 type OnboardingForm = {
   name: string;
@@ -29,8 +30,6 @@ const initialForm: OnboardingForm = {
   consent: false,
 };
 
-const STRIPE_PAYMENT_LINK = "https://buy.stripe.com/eVqaEZ2vF03j0De6bC1ZS02";
-
 function buildPilotMessage(form: OnboardingForm): string {
   return [
     "Demande Nanovia Pro Pilot — 297 CAD / 30 jours",
@@ -51,13 +50,15 @@ export default function ContactPage() {
   const [form, setForm] = useState<OnboardingForm>(initialForm);
   const [status, setStatus] = useState<"idle" | "submitting" | "received" | "error">("idle");
   const [error, setError] = useState("");
+  const [paymentLink, setPaymentLink] = useState<string | null>(null);
   const fallbackEmailHref = `mailto:nanovia@duck.com?subject=${encodeURIComponent(
     "Demande Nanovia Pro Pilot — 297 CAD / 30 jours"
-  )}&body=${encodeURIComponent(buildPilotMessage(form))}`;
+  )}`;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setPaymentLink(null);
 
     if (form.companyUrl.trim()) {
       return;
@@ -84,12 +85,13 @@ export default function ContactPage() {
 
     setStatus("submitting");
     try {
-      await submitContact({
+      const response = await submitContact({
         name: form.name,
         email: form.email,
         subject: "demo",
         message: buildPilotMessage(form),
       });
+      setPaymentLink(buildPilotPaymentLink(response.request_id));
       setStatus("received");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "La transmission a échoué.");
@@ -132,14 +134,13 @@ export default function ContactPage() {
             >
               1. Décrire ma tâche
             </a>
-            <a
-              href={STRIPE_PAYMENT_LINK}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-xl border border-gray-700 px-6 py-3 text-base font-semibold text-white transition hover:border-violet-500"
+            <button
+              type="button"
+              disabled
+              className="cursor-not-allowed rounded-xl border border-slate-600 px-6 py-3 text-base font-semibold text-slate-400"
             >
-              2. Payer 297 $ CAD
-            </a>
+              2. Payer après la demande
+            </button>
           </div>
           <div className="mt-5 space-y-1 text-sm text-gray-400">
             <p>Pro Pilot 30 jours — 297 $ CAD</p>
@@ -151,18 +152,18 @@ export default function ContactPage() {
           </div>
         </div>
 
-        {status === "received" ? (
-          <div className="bg-violet-900/20 border border-violet-500/30 text-violet-100 rounded-xl p-8 text-center">
+        {status === "received" && paymentLink ? (
+          <div className="rounded-xl border border-blue-400/40 bg-blue-950/30 p-8 text-center text-blue-100">
             <div className="text-4xl mb-4">✓</div>
             <h2 className="text-xl font-bold mb-2">Demande reçue</h2>
             <p className="text-gray-300 mb-3">
               Votre besoin Pro Pilot est transmis. Vous pouvez maintenant finaliser le paiement sécurisé de 297 $ CAD sur Stripe.
             </p>
             <a
-              href={STRIPE_PAYMENT_LINK}
+              href={paymentLink}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-4 inline-flex rounded-xl bg-violet-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-violet-500"
+              className="mt-4 inline-flex rounded-xl bg-blue-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-blue-500"
             >
               Payer le Pilot sur Stripe
             </a>
