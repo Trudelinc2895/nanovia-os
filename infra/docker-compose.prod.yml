@@ -150,6 +150,9 @@ services:
       retries: 5
     networks: [kt-net]
     cap_drop: ["ALL"]
+    # The official entrypoint repairs data-directory ownership before dropping
+    # from root to postgres. Keep ALL dropped and restore only what that requires.
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
@@ -171,6 +174,9 @@ services:
       retries: 5
     networks: [kt-net]
     cap_drop: ["ALL"]
+    # The official entrypoint repairs /data ownership before dropping from root
+    # to redis. Keep ALL dropped and restore only what that requires.
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
