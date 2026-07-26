@@ -257,6 +257,32 @@ jobs:
             fail "${service} did not become healthy"
           }
 
+          wait_for_stable_running() {
+            local service="$1"
+            local container_id
+            local initial_restart_count
+            local restart_count
+            local state
+            local attempt
+            container_id="$(single_container_for_service "${service}")"
+            initial_restart_count="$(
+              docker inspect --format '{{.RestartCount}}' "${container_id}"
+            )"
+            for attempt in $(seq 1 6); do
+              state="$(docker inspect --format '{{.State.Status}}' "${container_id}")"
+              restart_count="$(
+                docker inspect --format '{{.RestartCount}}' "${container_id}"
+              )"
+              [ "${state}" = "running" ] \
+                || fail "${service} is not running"
+              [ "${restart_count}" = "${initial_restart_count}" ] \
+                || fail "${service} restarted during postflight"
+              [ "${attempt}" -eq 6 ] && return 0
+              sleep 5
+            done
+            fail "${service} did not remain stable"
+          }
+
           for name in \
             DEPLOY_SHA \
             TARGET_BRANCH \
@@ -470,7 +496,8 @@ jobs:
           [ "${POST_MIGRATION_ALEMBIC}" = "${EXPECTED_ALEMBIC_HEAD}" ] \
             || fail "Post-migration Alembic revision is incorrect"
 
-          compose up -d --force-recreate --no-deps api ai-orchestrator web admin caddy
+          compose up -d --force-recreate --no-deps \
+            api ai-orchestrator web admin caddy alertmanager
           WRITERS_STOPPED=0
           trap - EXIT
 
@@ -478,6 +505,7 @@ jobs:
           wait_for_healthy redis
           wait_for_healthy api
           wait_for_healthy web
+          wait_for_stable_running alertmanager
 
           [ "$(git rev-parse HEAD)" = "${DEPLOY_SHA}" ] \
             || fail "Deployed checkout no longer matches the requested commit"
