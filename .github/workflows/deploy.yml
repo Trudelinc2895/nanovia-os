@@ -1,297 +1,466 @@
-name: Deploy — OVH staging/production
+name: Deploy Nanovia production
 
 on:
-  push:
-    branches: [staging, main]
   workflow_dispatch:
     inputs:
-      environment:
-        description: Target environment
+      deploy_sha:
+        description: Full 40-character commit SHA to deploy
         required: true
-        default: staging
-        type: choice
-        options:
-          - staging
-          - production
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
-  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+  group: nanovia-production-${{ vars.COMPOSE_PROJECT_NAME }}
   cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Canonical production deploy
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+    environment: production
+    timeout-minutes: 45
     env:
-      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
-      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.environment == 'production' && 'main' || 'staging') || github.ref_name }}
-      REPO_URL: https://github.com/${{ github.repository }}.git
-      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
-      PUBLIC_IP: ${{ vars.PUBLIC_IP }}
-      STAGING_BIND_ADDRESS: ${{ vars.STAGING_BIND_ADDRESS }}
-      STAGING_WEB_PORT: ${{ vars.STAGING_WEB_PORT }}
-      STAGING_ADMIN_PORT: ${{ vars.STAGING_ADMIN_PORT }}
-      STAGING_API_PORT: ${{ vars.STAGING_API_PORT }}
-      STAGING_AI_PORT: ${{ vars.STAGING_AI_PORT }}
+      DEPLOY_SHA: ${{ inputs.deploy_sha }}
+      TARGET_BRANCH: ${{ github.ref_name }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+      POSTGRES_VOLUME_NAME: ${{ vars.POSTGRES_VOLUME_NAME }}
+      REDIS_VOLUME_NAME: ${{ vars.REDIS_VOLUME_NAME }}
+      RUNTIME_ENV_FILE: ${{ vars.RUNTIME_ENV_FILE }}
+      BACKUP_ROOT: ${{ vars.BACKUP_ROOT }}
+      EXPECTED_ALEMBIC_HEAD: c7e4a91f2b60
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check deploy secrets
-        id: secrets-check
+      - name: Check required configuration
+        shell: bash
         run: |
-          if [ -n "$VPS_HOST" ] && [ -n "$VPS_KEY" ] && [ -n "$DEPLOY_PATH" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Deploy ignoré — configurer VPS_HOST, VPS_SSH_PRIVATE_KEY et DEPLOY_PATH pour l'environnement GitHub ciblé"
-          fi
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          set -Eeuo pipefail
 
-      - name: Setup SSH agent
-        if: steps.secrets-check.outputs.configured == 'true'
+          require_value() {
+            local name="$1"
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required production configuration: ${name}"
+              exit 1
+            fi
+          }
+
+          require_safe_path() {
+            local name="$1"
+            local value="${!name}"
+            if ! [[ "${value}" =~ ^/?[A-Za-z0-9._/-]+$ ]] || [[ "${value}" == *..* ]]; then
+              echo "::error::${name} contains unsafe path characters"
+              exit 1
+            fi
+          }
+
+          require_safe_name() {
+            local name="$1"
+            local value="${!name}"
+            if ! [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || [[ "${value}" == *..* ]]; then
+              echo "::error::${name} contains unsafe characters"
+              exit 1
+            fi
+          }
+
+          require_safe_ref() {
+            local name="$1"
+            local value="${!name}"
+            if ! [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "${value}" == *..* ]]; then
+              echo "::error::${name} contains unsafe ref characters"
+              exit 1
+            fi
+          }
+
+          for name in \
+            DEPLOY_SHA \
+            TARGET_BRANCH \
+            DEPLOY_PATH \
+            COMPOSE_PROJECT_NAME \
+            POSTGRES_VOLUME_NAME \
+            REDIS_VOLUME_NAME \
+            RUNTIME_ENV_FILE \
+            BACKUP_ROOT \
+            VPS_HOST; do
+            require_value "${name}"
+          done
+
+          if ! [[ "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::deploy_sha must be a full lowercase 40-character commit SHA"
+            exit 1
+          fi
+
+          case "${COMPOSE_PROJECT_NAME}" in
+            nanovia-prod|nanovia-prod-*)
+              echo "::error::The non-canonical nanovia-prod project is forbidden"
+              exit 1
+              ;;
+          esac
+
+          for volume_name in "${POSTGRES_VOLUME_NAME}" "${REDIS_VOLUME_NAME}"; do
+            case "${volume_name}" in
+              nanovia-prod_*)
+                echo "::error::A non-canonical nanovia-prod volume is forbidden"
+                exit 1
+                ;;
+            esac
+          done
+
+          case "${DEPLOY_PATH}" in
+            /*) ;;
+            *)
+              echo "::error::DEPLOY_PATH must be an absolute path"
+              exit 1
+              ;;
+          esac
+
+          require_safe_ref TARGET_BRANCH
+          require_safe_path DEPLOY_PATH
+          require_safe_name COMPOSE_PROJECT_NAME
+          require_safe_name POSTGRES_VOLUME_NAME
+          require_safe_name REDIS_VOLUME_NAME
+          require_safe_path RUNTIME_ENV_FILE
+          require_safe_path BACKUP_ROOT
+          if ! [[ "${VPS_HOST}" =~ ^[A-Za-z0-9.:-]+$ ]]; then
+            echo "::error::VPS_HOST contains unsafe characters"
+            exit 1
+          fi
+
+      - name: Check out the exact requested commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.deploy_sha }}
+
+      - name: Verify GitHub authentication and commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh auth status --hostname github.com >/dev/null
+          git cat-file -e "${DEPLOY_SHA}^{commit}"
+          test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
+          git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"
+          git merge-base --is-ancestor \
+            "${DEPLOY_SHA}" \
+            "refs/remotes/origin/${TARGET_BRANCH}"
+
+      - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
 
-      - name: Add VPS to known_hosts
-        if: steps.secrets-check.outputs.configured == 'true'
-        run: ssh-keyscan -T 30 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Deploy to VPS
-        if: steps.secrets-check.outputs.configured == 'true'
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      - name: Register the VPS host key
+        shell: bash
         run: |
-          ssh -o BatchMode=yes \
-              -o StrictHostKeyChecking=yes \
-              -o ConnectTimeout=60 \
-              -o ServerAliveInterval=15 \
-              -o ServerAliveCountMax=4 \
-              "deploy@${VPS_HOST}" \
-              "TARGET_ENV='${TARGET_ENV}' TARGET_REF='${TARGET_REF}' DEPLOY_PATH='${DEPLOY_PATH}' REPO_URL='${REPO_URL}' APP_DOMAIN='${APP_DOMAIN}' PUBLIC_IP='${PUBLIC_IP}' STAGING_BIND_ADDRESS='${STAGING_BIND_ADDRESS}' STAGING_WEB_PORT='${STAGING_WEB_PORT}' STAGING_ADMIN_PORT='${STAGING_ADMIN_PORT}' STAGING_API_PORT='${STAGING_API_PORT}' STAGING_AI_PORT='${STAGING_AI_PORT}' timeout 900 bash -seuo pipefail" <<'ENDSSH'
-            mkdir -p "${DEPLOY_PATH}"
-            if [ ! -d "${DEPLOY_PATH}/.git" ]; then
-              git clone "${REPO_URL}" "${DEPLOY_PATH}"
-            fi
+          set -Eeuo pipefail
+          install -d -m 700 "${HOME}/.ssh"
+          ssh-keyscan -T 30 -H "${VPS_HOST}" >> "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
 
-            cd "${DEPLOY_PATH}"
+      - name: Deploy exact commit to the canonical stack
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
-            if [ -n "$(git status --porcelain)" ]; then
-              echo "❌ Deploy checkout is dirty; refusing to deploy over local changes"
-              git status --short
-              exit 1
-            fi
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            "deploy@${VPS_HOST}" \
+            "DEPLOY_SHA='${DEPLOY_SHA}' TARGET_BRANCH='${TARGET_BRANCH}' DEPLOY_PATH='${DEPLOY_PATH}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_VOLUME_NAME='${POSTGRES_VOLUME_NAME}' REDIS_VOLUME_NAME='${REDIS_VOLUME_NAME}' RUNTIME_ENV_FILE='${RUNTIME_ENV_FILE}' BACKUP_ROOT='${BACKUP_ROOT}' EXPECTED_ALEMBIC_HEAD='${EXPECTED_ALEMBIC_HEAD}' timeout 2400 bash -seuo pipefail" <<'ENDSSH'
+          fail() {
+            printf 'ERROR: %s\n' "$*" >&2
+            exit 1
+          }
 
-            upsert_env() {
-              file="$1"
-              key="$2"
-              value="$3"
-              if grep -q "^${key}=" "$file" 2>/dev/null; then
-                sed -i "s|^${key}=.*|${key}=${value}|" "$file"
-              else
-                printf '%s=%s\n' "$key" "$value" >> "$file"
-              fi
-            }
+          require_value() {
+            local name="$1"
+            [ -n "${!name:-}" ] || fail "Missing required value: ${name}"
+          }
 
-            compose() {
-              docker compose -p "${COMPOSE_PROJECT}" "${COMPOSE_FILES[@]}" --env-file "${ENV_FILE}" "$@"
-            }
+          require_safe_path() {
+            local name="$1"
+            local value="${!name}"
+            [[ "${value}" =~ ^/?[A-Za-z0-9._/-]+$ ]] \
+              && [[ "${value}" != *..* ]] \
+              || fail "${name} contains unsafe path characters"
+          }
 
-            git fetch --prune origin
-            if git show-ref --verify --quiet "refs/heads/${TARGET_REF}"; then
-              git checkout "${TARGET_REF}"
-            else
-              git checkout -b "${TARGET_REF}" "origin/${TARGET_REF}"
-            fi
-            git pull --ff-only origin "${TARGET_REF}"
+          require_safe_name() {
+            local name="$1"
+            local value="${!name}"
+            [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+              && [[ "${value}" != *..* ]] \
+              || fail "${name} contains unsafe characters"
+          }
 
-            if [ "${TARGET_ENV}" = "production" ]; then
-              ENV_FILE=".env"
-              if [ -f ".env.production" ]; then
-                ENV_FILE=".env.production"
-              fi
-              COMPOSE_PROJECT="nanovia-prod"
-              COMPOSE_FILES=(-f infra/docker-compose.prod.yml)
-            else
-              ENV_FILE=".env.staging"
-              [ -f "${ENV_FILE}" ] || {
-                echo "❌ Missing ${ENV_FILE}. Copy infra/env/.env.staging.example on the VPS before deploying staging."
-                exit 1
-              }
-              COMPOSE_PROJECT="nanovia-staging"
-              COMPOSE_FILES=(-f infra/docker-compose.prod.yml -f infra/docker-compose.staging.yml)
-            fi
+          require_safe_ref() {
+            local name="$1"
+            local value="${!name}"
+            [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
+              && [[ "${value}" != *..* ]] \
+              || fail "${name} contains unsafe ref characters"
+          }
 
-            [ -f "${ENV_FILE}" ] || {
-              echo "❌ Missing ${ENV_FILE}"
-              exit 1
-            }
+          single_container_for_service() {
+            local service="$1"
+            local ids=()
+            mapfile -t ids < <(
+              docker ps -q \
+                --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+                --filter "label=com.docker.compose.service=${service}"
+            )
+            [ "${#ids[@]}" -eq 1 ] || fail "Expected one active ${service} container; found ${#ids[@]}"
+            printf '%s' "${ids[0]}"
+          }
 
-            DOMAIN_VALUE="${APP_DOMAIN}"
-            if [ -z "${DOMAIN_VALUE}" ] && [ "${TARGET_ENV}" = "production" ]; then
-              DOMAIN_VALUE="nanovia.ca"
-            fi
-            PUBLIC_IP_VALUE="${PUBLIC_IP:-}"
+          mounted_volume_name() {
+            local container_id="$1"
+            local destination="$2"
+            docker inspect \
+              --format '{{range .Mounts}}{{if eq .Destination "'"${destination}"'"}}{{.Name}}{{end}}{{end}}' \
+              "${container_id}"
+          }
 
-            if [ "${TARGET_ENV}" = "production" ]; then
-              upsert_env "${ENV_FILE}" APP_ENV production
-              upsert_env "${ENV_FILE}" APP_NAME "Nanovia OS"
-              upsert_env "${ENV_FILE}" APP_RUNTIME_ENV_FILE "../${ENV_FILE}"
-              if [ -n "${PUBLIC_IP_VALUE}" ]; then
-                upsert_env "${ENV_FILE}" PUBLIC_IP "${PUBLIC_IP_VALUE}"
-              fi
-              if [ -n "${DOMAIN_VALUE}" ]; then
-                upsert_env "${ENV_FILE}" DOMAIN "${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" API_BASE_URL "https://${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" NEXT_PUBLIC_API_URL ""
-                upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "https://${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "https://admin.${DOMAIN_VALUE}"
-                upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "https://${DOMAIN_VALUE},https://www.${DOMAIN_VALUE},https://admin.${DOMAIN_VALUE}"
-              fi
-            else
-              STAGING_BIND_ADDRESS="${STAGING_BIND_ADDRESS:-127.0.0.1}"
-              STAGING_WEB_PORT="${STAGING_WEB_PORT:-13000}"
-              STAGING_ADMIN_PORT="${STAGING_ADMIN_PORT:-13020}"
-              STAGING_API_PORT="${STAGING_API_PORT:-18010}"
-              STAGING_AI_PORT="${STAGING_AI_PORT:-18020}"
-
-              upsert_env "${ENV_FILE}" APP_ENV staging
-              upsert_env "${ENV_FILE}" APP_NAME "Nanovia OS (staging)"
-              upsert_env "${ENV_FILE}" APP_RUNTIME_ENV_FILE "../${ENV_FILE}"
-              upsert_env "${ENV_FILE}" DOMAIN "${DOMAIN_VALUE:-staging.nanovia.local}"
-              if [ -n "${PUBLIC_IP_VALUE}" ]; then
-                upsert_env "${ENV_FILE}" PUBLIC_IP "${PUBLIC_IP_VALUE}"
-              fi
-              upsert_env "${ENV_FILE}" STAGING_BIND_ADDRESS "${STAGING_BIND_ADDRESS}"
-              upsert_env "${ENV_FILE}" STAGING_WEB_PORT "${STAGING_WEB_PORT}"
-              upsert_env "${ENV_FILE}" STAGING_ADMIN_PORT "${STAGING_ADMIN_PORT}"
-              upsert_env "${ENV_FILE}" STAGING_API_PORT "${STAGING_API_PORT}"
-              upsert_env "${ENV_FILE}" STAGING_AI_PORT "${STAGING_AI_PORT}"
-              upsert_env "${ENV_FILE}" NEXT_PUBLIC_API_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}"
-              upsert_env "${ENV_FILE}" API_BASE_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}"
-              upsert_env "${ENV_FILE}" PUBLIC_WEB_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}"
-              upsert_env "${ENV_FILE}" PRIVATE_ADMIN_URL "http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
-              upsert_env "${ENV_FILE}" ALLOWED_ORIGINS_RAW "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT},http://${STAGING_BIND_ADDRESS}:${STAGING_ADMIN_PORT}"
-            fi
-
-            STRIPE_SECRET=$(grep '^STRIPE_SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2- || true)
-            STRIPE_LIVE_PREFIX='sk'"_live_"
-            if [ "${TARGET_ENV}" = "production" ] && ! printf '%s' "${STRIPE_SECRET}" | grep -q "^${STRIPE_LIVE_PREFIX}"; then
-              echo "❌ Production deploy requires a live Stripe secret key in ${ENV_FILE}"
-              exit 1
-            fi
-            if [ "${TARGET_ENV}" = "staging" ] && printf '%s' "${STRIPE_SECRET}" | grep -q "^${STRIPE_LIVE_PREFIX}"; then
-              echo "❌ Staging deploy refuses live Stripe keys in ${ENV_FILE}"
-              exit 1
-            fi
-
-            python3 scripts/validate_runtime_env.py --env-file "${ENV_FILE}" --target-env "${TARGET_ENV}"
-
-            EDGE_MODE=domain
-            if [ "${TARGET_ENV}" = "production" ]; then
-              if [ -z "${DOMAIN_VALUE}" ] || ! getent ahosts "${DOMAIN_VALUE}" >/dev/null 2>&1; then
-                EDGE_MODE=ip
-                upsert_env "${ENV_FILE}" CADDYFILE ./docker/Caddyfile.ip
-              else
-                upsert_env "${ENV_FILE}" CADDYFILE ./docker/Caddyfile
-              fi
-            fi
-
-            PREV_API=$(docker inspect --format='{{.Id}}' "${COMPOSE_PROJECT}-api-1" 2>/dev/null || echo "none")
-
-            compose up -d postgres redis
-            compose build api ai-orchestrator web admin
-            compose run --rm -T api python scripts/ensure_alembic_state.py </dev/null
-            compose run --rm -T api alembic upgrade head </dev/null
-
-            if [ "${TARGET_ENV}" = "production" ]; then
-              compose up -d --force-recreate --no-deps caddy api ai-orchestrator web admin
-            else
-              compose up -d --force-recreate --no-deps --scale caddy=0 api ai-orchestrator web admin
-            fi
-
-            API_CONTAINER=$(compose ps -q api)
-
-            for i in $(seq 1 24); do
-              API_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' "${API_CONTAINER}" 2>/dev/null || echo "unknown")
-              [ "${API_HEALTH}" = "healthy" ] && break
-
-              if [ "${i}" -eq 24 ]; then
-                echo "❌ API container did not become healthy"
-                compose ps
-                compose logs --tail=200 api
-                exit 1
-              fi
-
+          wait_for_healthy() {
+            local service="$1"
+            local container_id
+            local health
+            container_id="$(single_container_for_service "${service}")"
+            for _ in $(seq 1 30); do
+              health="$(
+                docker inspect \
+                  --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                  "${container_id}"
+              )"
+              [ "${health}" = "healthy" ] && return 0
+              [ "${health}" = "running" ] && return 0
               sleep 5
             done
+            fail "${service} did not become healthy"
+          }
 
-            if [ "${TARGET_ENV}" = "production" ]; then
-              PUBLIC_DOMAIN=$(grep '^DOMAIN=' "${ENV_FILE}" | cut -d= -f2- || true)
-              PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-nanovia.ca}
+          for name in \
+            DEPLOY_SHA \
+            TARGET_BRANCH \
+            DEPLOY_PATH \
+            COMPOSE_PROJECT_NAME \
+            POSTGRES_VOLUME_NAME \
+            REDIS_VOLUME_NAME \
+            RUNTIME_ENV_FILE \
+            BACKUP_ROOT \
+            EXPECTED_ALEMBIC_HEAD; do
+            require_value "${name}"
+          done
 
-              probe_caddy_from_api() {
-                local path="$1"
-                compose exec -T api python -c "import sys, urllib.request; resp = urllib.request.urlopen('http://caddy${path}', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
-              }
+          case "${COMPOSE_PROJECT_NAME}" in
+            nanovia-prod|nanovia-prod-*) fail "The nanovia-prod project is forbidden" ;;
+          esac
+          case "${POSTGRES_VOLUME_NAME}:${REDIS_VOLUME_NAME}" in
+            *nanovia-prod_*) fail "A nanovia-prod volume is forbidden" ;;
+          esac
+          require_safe_ref TARGET_BRANCH
+          require_safe_path DEPLOY_PATH
+          require_safe_name COMPOSE_PROJECT_NAME
+          require_safe_name POSTGRES_VOLUME_NAME
+          require_safe_name REDIS_VOLUME_NAME
+          require_safe_path RUNTIME_ENV_FILE
+          require_safe_path BACKUP_ROOT
 
-              for i in $(seq 1 12); do
-                if [ "${EDGE_MODE}" = "ip" ]; then
-                  probe_caddy_from_api /api/v1/health/ready && break
-                else
-                  curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/ready && break
-                fi
+          command -v flock >/dev/null || fail "flock is required"
+          exec 9>"/tmp/nanovia-${COMPOSE_PROJECT_NAME}.deploy.lock"
+          flock -n 9 || fail "Another canonical deployment is already running"
 
-                if [ "${i}" -eq 12 ]; then
-                  echo "❌ Edge healthcheck failed after API became healthy for ${PUBLIC_DOMAIN} (mode=${EDGE_MODE})"
-                  compose ps
-                  compose logs --tail=200 caddy api web admin
-                  exit 1
-                fi
+          [ -d "${DEPLOY_PATH}/.git" ] || fail "Canonical deploy checkout is missing"
+          REAL_DEPLOY_PATH="$(realpath "${DEPLOY_PATH}")"
+          [ "${REAL_DEPLOY_PATH}" = "${DEPLOY_PATH}" ] || fail "DEPLOY_PATH is not its canonical real path"
 
-                sleep 5
-              done
+          cd "${DEPLOY_PATH}"
+          [ -z "$(git status --porcelain --untracked-files=all)" ] || {
+            git status --short >&2
+            fail "Checkout is dirty or contains unreconciled files"
+          }
 
-              if [ "${EDGE_MODE}" = "ip" ]; then
-                probe_caddy_from_api /api/v1/health/public-entrypoint >/dev/null || {
-                  echo "❌ public-entrypoint smoke test failed for raw IP mode"
-                  compose logs --tail=200 api caddy
-                  exit 1
-                }
-              else
-                curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/api/v1/health/public-entrypoint >/dev/null || {
-                  echo "❌ public-entrypoint smoke test failed for ${PUBLIC_DOMAIN}"
-                  compose logs --tail=200 api caddy
-                  exit 1
-                }
-              fi
+          PUBLIC_CADDY_IDS=()
+          mapfile -t PUBLIC_CADDY_IDS < <(
+            docker ps -q \
+              --filter "label=com.docker.compose.service=caddy" \
+              --filter "publish=80"
+          )
+          [ "${#PUBLIC_CADDY_IDS[@]}" -eq 1 ] || fail "Unable to identify one public Caddy container"
 
-              printf 'EDGE_MODE=%s\n' "${EDGE_MODE}" >&2
-              printf 'PUBLIC_DOMAIN=%s\n' "${PUBLIC_DOMAIN}" >&2
-              if [ "${EDGE_MODE}" = "ip" ]; then
-                printf 'localhost title: skipped (ip mode host-port probe unreliable on current VPS)\n' >&2
-                printf 'domain title: skipped (ip mode)\n' >&2
-              else
-                printf 'localhost title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
-                printf 'domain title: %s\n' "$(curl --connect-timeout 3 --max-time 5 -fsS -H "Host: ${PUBLIC_DOMAIN}" http://127.0.0.1/login | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p')" >&2
-              fi
-            else
-              curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_API_PORT}/api/v1/health/ready" >/dev/null || {
-                echo "❌ staging API ready probe failed"
-                compose logs --tail=200 api
-                exit 1
-              }
-              curl --connect-timeout 3 --max-time 5 -fsS "http://${STAGING_BIND_ADDRESS}:${STAGING_WEB_PORT}/login" | tr '\n' ' ' | sed -n 's/.*<title>\([^<]*\)<\/title>.*/staging title: \1/p' >&2
-              printf 'STAGING_TUNNEL=ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s deploy@%s\n' "${STAGING_WEB_PORT}" "${STAGING_WEB_PORT}" "${STAGING_API_PORT}" "${STAGING_API_PORT}" "${VPS_HOST:-${PUBLIC_IP_VALUE}}" >&2
+          ACTIVE_PROJECT="$(
+            docker inspect \
+              --format '{{index .Config.Labels "com.docker.compose.project"}}' \
+              "${PUBLIC_CADDY_IDS[0]}"
+          )"
+          ACTIVE_WORKING_DIR="$(
+            docker inspect \
+              --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+              "${PUBLIC_CADDY_IDS[0]}"
+          )"
+          [ "${ACTIVE_PROJECT}" = "${COMPOSE_PROJECT_NAME}" ] || fail "Configured Compose project is not the public project"
+          [ -n "${ACTIVE_WORKING_DIR}" ] || fail "Public Compose working directory label is absent"
+          [ "$(realpath "${ACTIVE_WORKING_DIR}")" = "${REAL_DEPLOY_PATH}" ] || fail "Configured path is not the public Compose working directory"
+
+          docker volume inspect "${POSTGRES_VOLUME_NAME}" >/dev/null \
+            || fail "Expected PostgreSQL volume is absent"
+          docker volume inspect "${REDIS_VOLUME_NAME}" >/dev/null \
+            || fail "Expected Redis volume is absent"
+
+          POSTGRES_CONTAINER="$(single_container_for_service postgres)"
+          REDIS_CONTAINER="$(single_container_for_service redis)"
+          API_CONTAINER="$(single_container_for_service api)"
+
+          [ "$(mounted_volume_name "${POSTGRES_CONTAINER}" /var/lib/postgresql/data)" = "${POSTGRES_VOLUME_NAME}" ] \
+            || fail "PostgreSQL is mounted on a different volume"
+          [ "$(mounted_volume_name "${REDIS_CONTAINER}" /data)" = "${REDIS_VOLUME_NAME}" ] \
+            || fail "Redis is mounted on a different volume"
+
+          AVAILABLE_BYTES="$(df -Pk "${BACKUP_ROOT%/*}" | awk 'NR == 2 {print $4 * 1024}')"
+          DATABASE_BYTES="$(
+            docker exec "${POSTGRES_CONTAINER}" sh -ceu \
+              'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT pg_database_size(current_database())"'
+          )"
+          REQUIRED_BYTES=$((2147483648 + (DATABASE_BYTES * 2)))
+          [ "${AVAILABLE_BYTES}" -ge "${REQUIRED_BYTES}" ] \
+            || fail "Insufficient free space for build and verified database backup"
+
+          PREVIOUS_COMMIT="$(git rev-parse HEAD)"
+          CURRENT_ALEMBIC="$(
+            docker exec "${API_CONTAINER}" alembic current 2>/dev/null \
+              | awk 'NF {print $1; exit}'
+          )"
+          [ -n "${CURRENT_ALEMBIC}" ] || fail "Unable to read the current Alembic revision"
+
+          git fetch --prune origin
+          git cat-file -e "${DEPLOY_SHA}^{commit}" || fail "Requested commit does not exist after fetch"
+          git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" \
+            || fail "Selected workflow branch does not exist on origin"
+          git merge-base --is-ancestor \
+            "${DEPLOY_SHA}" \
+            "refs/remotes/origin/${TARGET_BRANCH}" \
+            || fail "Requested commit does not belong to the selected workflow branch"
+          git switch --detach "${DEPLOY_SHA}"
+          [ "$(git rev-parse HEAD)" = "${DEPLOY_SHA}" ] || fail "Requested commit was not selected"
+          [ -z "$(git status --porcelain --untracked-files=all)" ] || fail "Checkout became dirty after selecting the requested commit"
+
+          if [[ "${RUNTIME_ENV_FILE}" = /* ]]; then
+            ENV_FILE="${RUNTIME_ENV_FILE}"
+          else
+            case "${RUNTIME_ENV_FILE}" in
+              *..*) fail "RUNTIME_ENV_FILE must not traverse parent directories" ;;
+            esac
+            ENV_FILE="${DEPLOY_PATH}/${RUNTIME_ENV_FILE}"
+          fi
+          [ -f "${ENV_FILE}" ] || fail "Configured runtime environment file is absent"
+
+          COMPOSE_FILES=(
+            -f infra/docker-compose.prod.yml
+            -f infra/docker-compose.canonical-prod.yml
+          )
+          compose() {
+            docker compose \
+              -p "${COMPOSE_PROJECT_NAME}" \
+              "${COMPOSE_FILES[@]}" \
+              --env-file "${ENV_FILE}" \
+              "$@"
+          }
+
+          compose config --quiet
+
+          CANONICAL_VOLUMES=(
+            "${POSTGRES_VOLUME_NAME}"
+            "${REDIS_VOLUME_NAME}"
+            "${COMPOSE_PROJECT_NAME}_caddy_data"
+            "${COMPOSE_PROJECT_NAME}_caddy_config"
+            "${COMPOSE_PROJECT_NAME}_grafana_data"
+            "${COMPOSE_PROJECT_NAME}_prometheus_data"
+            "${COMPOSE_PROJECT_NAME}_alertmanager_data"
+          )
+          for volume_name in "${CANONICAL_VOLUMES[@]}"; do
+            docker volume inspect "${volume_name}" >/dev/null \
+              || fail "A canonical external volume is absent"
+          done
+
+          compose build api ai-orchestrator web admin
+
+          TARGET_ALEMBIC="$(
+            compose run --rm --no-deps -T api alembic heads 2>/dev/null \
+              | awk 'NF {print $1; exit}'
+          )"
+          [ "${TARGET_ALEMBIC}" = "${EXPECTED_ALEMBIC_HEAD}" ] \
+            || fail "Target Alembic head differs from the approved head"
+          compose run --rm --no-deps -T api alembic history 2>/dev/null \
+            | grep -Fq "${CURRENT_ALEMBIC}" \
+            || fail "Current Alembic revision is absent from the target migration history"
+
+          WRITERS_STOPPED=0
+          resume_previous_writers() {
+            if [ "${WRITERS_STOPPED}" -eq 1 ]; then
+              compose start api ai-orchestrator >/dev/null 2>&1 || true
             fi
+          }
+          trap resume_previous_writers EXIT
 
-            printf 'PREV_API=%s\n' "${PREV_API}" >&2
-            compose ps >&2
-            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' >&2
+          compose stop api ai-orchestrator
+          WRITERS_STOPPED=1
 
-            echo "✅ ${TARGET_ENV} deploy $(git rev-parse --short HEAD) successful"
+          BACKUP_RESULT="$(
+            DEPLOY_PATH="${DEPLOY_PATH}" \
+            COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}" \
+            POSTGRES_VOLUME_NAME="${POSTGRES_VOLUME_NAME}" \
+            REDIS_VOLUME_NAME="${REDIS_VOLUME_NAME}" \
+            RUNTIME_ENV_FILE="${ENV_FILE}" \
+            BACKUP_ROOT="${BACKUP_ROOT}" \
+            PREVIOUS_COMMIT="${PREVIOUS_COMMIT}" \
+            DEPLOY_SHA="${DEPLOY_SHA}" \
+            CURRENT_ALEMBIC="${CURRENT_ALEMBIC}" \
+            EXPECTED_ALEMBIC_HEAD="${EXPECTED_ALEMBIC_HEAD}" \
+            bash infra/scripts/pre-migration-backup.sh
+          )"
+          printf '%s\n' "${BACKUP_RESULT}"
+          BACKUP_GATE="$(
+            printf '%s\n' "${BACKUP_RESULT}" \
+              | sed -n 's/^VERIFIED_BACKUP_GATE=//p'
+          )"
+          [ -n "${BACKUP_GATE}" ] && [ -f "${BACKUP_GATE}" ] \
+            || fail "Verified backup gate is absent"
+
+          compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"
+          POST_MIGRATION_ALEMBIC="$(
+            compose run --rm --no-deps -T api alembic current 2>/dev/null \
+              | awk 'NF {print $1; exit}'
+          )"
+          [ "${POST_MIGRATION_ALEMBIC}" = "${EXPECTED_ALEMBIC_HEAD}" ] \
+            || fail "Post-migration Alembic revision is incorrect"
+
+          compose up -d --force-recreate --no-deps api ai-orchestrator web admin caddy
+          WRITERS_STOPPED=0
+          trap - EXIT
+
+          wait_for_healthy postgres
+          wait_for_healthy redis
+          wait_for_healthy api
+          wait_for_healthy web
+
+          [ "$(git rev-parse HEAD)" = "${DEPLOY_SHA}" ] \
+            || fail "Deployed checkout no longer matches the requested commit"
+
+          if docker ps \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+            --format '{{.Status}}' \
+            | grep -qi 'restarting'; then
+            fail "At least one canonical container is restarting"
+          fi
+
+          printf 'DEPLOYED_COMMIT=%s\n' "${DEPLOY_SHA}"
+          printf 'ALEMBIC_REVISION=%s\n' "${POST_MIGRATION_ALEMBIC}"
+          printf 'CANONICAL_DEPLOYMENT=verified\n'
           ENDSSH
