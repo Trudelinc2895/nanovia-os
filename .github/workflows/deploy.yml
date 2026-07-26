@@ -25,6 +25,7 @@ jobs:
       DEPLOY_SHA: ${{ inputs.deploy_sha }}
       TARGET_BRANCH: ${{ github.ref_name }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      COMPOSE_WORKING_DIR: ${{ vars.COMPOSE_WORKING_DIR }}
       COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
       POSTGRES_VOLUME_NAME: ${{ vars.POSTGRES_VOLUME_NAME }}
       REDIS_VOLUME_NAME: ${{ vars.REDIS_VOLUME_NAME }}
@@ -78,6 +79,7 @@ jobs:
             DEPLOY_SHA \
             TARGET_BRANCH \
             DEPLOY_PATH \
+            COMPOSE_WORKING_DIR \
             COMPOSE_PROJECT_NAME \
             POSTGRES_VOLUME_NAME \
             REDIS_VOLUME_NAME \
@@ -116,8 +118,17 @@ jobs:
               ;;
           esac
 
+          case "${COMPOSE_WORKING_DIR}" in
+            /*) ;;
+            *)
+              echo "::error::COMPOSE_WORKING_DIR must be an absolute path"
+              exit 1
+              ;;
+          esac
+
           require_safe_ref TARGET_BRANCH
           require_safe_path DEPLOY_PATH
+          require_safe_path COMPOSE_WORKING_DIR
           require_safe_name COMPOSE_PROJECT_NAME
           require_safe_name POSTGRES_VOLUME_NAME
           require_safe_name REDIS_VOLUME_NAME
@@ -173,7 +184,7 @@ jobs:
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=4 \
             "deploy@${VPS_HOST}" \
-            "DEPLOY_SHA='${DEPLOY_SHA}' TARGET_BRANCH='${TARGET_BRANCH}' DEPLOY_PATH='${DEPLOY_PATH}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_VOLUME_NAME='${POSTGRES_VOLUME_NAME}' REDIS_VOLUME_NAME='${REDIS_VOLUME_NAME}' RUNTIME_ENV_FILE='${RUNTIME_ENV_FILE}' BACKUP_ROOT='${BACKUP_ROOT}' EXPECTED_ALEMBIC_HEAD='${EXPECTED_ALEMBIC_HEAD}' timeout 2400 bash -seuo pipefail" <<'ENDSSH'
+            "DEPLOY_SHA='${DEPLOY_SHA}' TARGET_BRANCH='${TARGET_BRANCH}' DEPLOY_PATH='${DEPLOY_PATH}' COMPOSE_WORKING_DIR='${COMPOSE_WORKING_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_VOLUME_NAME='${POSTGRES_VOLUME_NAME}' REDIS_VOLUME_NAME='${REDIS_VOLUME_NAME}' RUNTIME_ENV_FILE='${RUNTIME_ENV_FILE}' BACKUP_ROOT='${BACKUP_ROOT}' EXPECTED_ALEMBIC_HEAD='${EXPECTED_ALEMBIC_HEAD}' timeout 2400 bash -seuo pipefail" <<'ENDSSH'
           fail() {
             printf 'ERROR: %s\n' "$*" >&2
             exit 1
@@ -250,6 +261,7 @@ jobs:
             DEPLOY_SHA \
             TARGET_BRANCH \
             DEPLOY_PATH \
+            COMPOSE_WORKING_DIR \
             COMPOSE_PROJECT_NAME \
             POSTGRES_VOLUME_NAME \
             REDIS_VOLUME_NAME \
@@ -265,8 +277,17 @@ jobs:
           case "${POSTGRES_VOLUME_NAME}:${REDIS_VOLUME_NAME}" in
             *nanovia-prod_*) fail "A nanovia-prod volume is forbidden" ;;
           esac
+          case "${DEPLOY_PATH}" in
+            /*) ;;
+            *) fail "DEPLOY_PATH must be an absolute path" ;;
+          esac
+          case "${COMPOSE_WORKING_DIR}" in
+            /*) ;;
+            *) fail "COMPOSE_WORKING_DIR must be an absolute path" ;;
+          esac
           require_safe_ref TARGET_BRANCH
           require_safe_path DEPLOY_PATH
+          require_safe_path COMPOSE_WORKING_DIR
           require_safe_name COMPOSE_PROJECT_NAME
           require_safe_name POSTGRES_VOLUME_NAME
           require_safe_name REDIS_VOLUME_NAME
@@ -280,6 +301,10 @@ jobs:
           [ -d "${DEPLOY_PATH}/.git" ] || fail "Canonical deploy checkout is missing"
           REAL_DEPLOY_PATH="$(realpath "${DEPLOY_PATH}")"
           [ "${REAL_DEPLOY_PATH}" = "${DEPLOY_PATH}" ] || fail "DEPLOY_PATH is not its canonical real path"
+          [ -d "${COMPOSE_WORKING_DIR}" ] || fail "Canonical Compose working directory is missing"
+          REAL_COMPOSE_WORKING_DIR="$(realpath "${COMPOSE_WORKING_DIR}")"
+          [ "${REAL_COMPOSE_WORKING_DIR}" = "${COMPOSE_WORKING_DIR}" ] \
+            || fail "COMPOSE_WORKING_DIR is not its canonical real path"
 
           cd "${DEPLOY_PATH}"
           [ -z "$(git status --porcelain --untracked-files=all)" ] || {
@@ -307,7 +332,8 @@ jobs:
           )"
           [ "${ACTIVE_PROJECT}" = "${COMPOSE_PROJECT_NAME}" ] || fail "Configured Compose project is not the public project"
           [ -n "${ACTIVE_WORKING_DIR}" ] || fail "Public Compose working directory label is absent"
-          [ "$(realpath "${ACTIVE_WORKING_DIR}")" = "${REAL_DEPLOY_PATH}" ] || fail "Configured path is not the public Compose working directory"
+          [ "${ACTIVE_WORKING_DIR}" = "${COMPOSE_WORKING_DIR}" ] \
+            || fail "Configured COMPOSE_WORKING_DIR does not match the public Compose working directory label"
 
           docker volume inspect "${POSTGRES_VOLUME_NAME}" >/dev/null \
             || fail "Expected PostgreSQL volume is absent"
@@ -362,15 +388,18 @@ jobs:
           [ -f "${ENV_FILE}" ] || fail "Configured runtime environment file is absent"
 
           COMPOSE_FILES=(
-            -f infra/docker-compose.prod.yml
-            -f infra/docker-compose.canonical-prod.yml
+            -f docker-compose.prod.yml
+            -f docker-compose.canonical-prod.yml
           )
           compose() {
-            docker compose \
-              -p "${COMPOSE_PROJECT_NAME}" \
-              "${COMPOSE_FILES[@]}" \
-              --env-file "${ENV_FILE}" \
-              "$@"
+            (
+              cd "${REAL_COMPOSE_WORKING_DIR}"
+              docker compose \
+                -p "${COMPOSE_PROJECT_NAME}" \
+                "${COMPOSE_FILES[@]}" \
+                --env-file "${ENV_FILE}" \
+                "$@"
+            )
           }
 
           compose config --quiet
