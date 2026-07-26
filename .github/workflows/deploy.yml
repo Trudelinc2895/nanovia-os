@@ -32,7 +32,9 @@ jobs:
       RUNTIME_ENV_FILE: ${{ vars.RUNTIME_ENV_FILE }}
       BACKUP_ROOT: ${{ vars.BACKUP_ROOT }}
       EXPECTED_ALEMBIC_HEAD: c7e4a91f2b60
-      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_HOST: ${{ vars.VPS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT }}
 
     steps:
       - name: Check required configuration
@@ -85,7 +87,9 @@ jobs:
             REDIS_VOLUME_NAME \
             RUNTIME_ENV_FILE \
             BACKUP_ROOT \
-            VPS_HOST; do
+            VPS_HOST \
+            VPS_USER \
+            VPS_PORT; do
             require_value "${name}"
           done
 
@@ -138,6 +142,13 @@ jobs:
             echo "::error::VPS_HOST contains unsafe characters"
             exit 1
           fi
+          require_safe_name VPS_USER
+          if ! [[ "${VPS_PORT}" =~ ^[0-9]+$ ]] \
+            || [ "${VPS_PORT}" -lt 1 ] \
+            || [ "${VPS_PORT}" -gt 65535 ]; then
+            echo "::error::VPS_PORT must be an integer between 1 and 65535"
+            exit 1
+          fi
 
       - name: Check out the exact requested commit
         uses: actions/checkout@v4
@@ -169,7 +180,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           install -d -m 700 "${HOME}/.ssh"
-          ssh-keyscan -T 30 -H "${VPS_HOST}" >> "${HOME}/.ssh/known_hosts"
+          ssh-keyscan -T 30 -p "${VPS_PORT}" -H "${VPS_HOST}" >> "${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
 
       - name: Deploy exact commit to the canonical stack
@@ -183,7 +194,8 @@ jobs:
             -o ConnectTimeout=30 \
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=4 \
-            "deploy@${VPS_HOST}" \
+            -p "${VPS_PORT}" \
+            "${VPS_USER}@${VPS_HOST}" \
             "DEPLOY_SHA='${DEPLOY_SHA}' TARGET_BRANCH='${TARGET_BRANCH}' DEPLOY_PATH='${DEPLOY_PATH}' COMPOSE_WORKING_DIR='${COMPOSE_WORKING_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_VOLUME_NAME='${POSTGRES_VOLUME_NAME}' REDIS_VOLUME_NAME='${REDIS_VOLUME_NAME}' RUNTIME_ENV_FILE='${RUNTIME_ENV_FILE}' BACKUP_ROOT='${BACKUP_ROOT}' EXPECTED_ALEMBIC_HEAD='${EXPECTED_ALEMBIC_HEAD}' timeout 2400 bash -seuo pipefail" <<'ENDSSH'
           fail() {
             printf 'ERROR: %s\n' "$*" >&2
