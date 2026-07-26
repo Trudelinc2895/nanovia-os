@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -10,15 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
-
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_auth.db"
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-minimum-32-chars-long-for-auth-tests"
-os.environ["APP_ENV"] = "development"
-os.environ["ALLOWED_ORIGINS_RAW"] = "http://localhost:3000"
-os.environ["PUBLIC_WEB_URL"] = "http://localhost:3000"
-os.environ["PRIVATE_ADMIN_URL"] = "http://localhost:3020"
-os.environ["API_BASE_URL"] = "http://127.0.0.1:8010"
-os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
 Path("test_auth.db").unlink(missing_ok=True)
 
@@ -188,6 +178,7 @@ def test_refresh_rate_limit_kicks_in(monkeypatch):
 
     monkeypatch.setattr(main_module, "_redis_pool", None)
     monkeypatch.setattr(main_module, "_get_redis", _fake_get_redis)
+    monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
 
     email = f"{uuid.uuid4()}@example.com"
 
@@ -1022,14 +1013,18 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
             headers={"Authorization": f"Bearer {access_token}"},
         )
 
-        assert response.status_code == 502, response.text
-        assert "processor exploded" in response.json()["detail"]
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == "Webhook reprocess temporarily unavailable"
         process_event.assert_awaited_once()
 
         with sqlite3.connect("test_auth.db") as conn:
             row = conn.execute(
-                "SELECT status, error FROM webhook_events WHERE stripe_event_id = ?",
+                """
+                SELECT status, error, attempt_count
+                FROM webhook_events
+                WHERE stripe_event_id = ?
+                """,
                 (event_id,),
             ).fetchone()
 
-        assert row == ("failed", "processor exploded")
+        assert row == ("retryable_failure", "processor exploded", 2)

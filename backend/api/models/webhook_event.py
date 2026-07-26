@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,13 @@ class WebhookEvent(Base):
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
-    # "processed" | "failed" | "ignored"
-    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Operational lifecycle only. Pilot business state lives in PilotPayment.
+    # "processing" | "processed" | "retryable_failure" | "ignored"
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

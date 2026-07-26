@@ -27,6 +27,10 @@ from api.config import settings
 from api.models.subscription import Subscription
 from api.models.user import User
 from api.models.webhook_event import WebhookEvent
+from api.services.pilot_payment_service import (
+    PILOT_EVENT_TYPES,
+    process_pilot_checkout_event,
+)
 from api.services.module_registry import (
     MODULE_REGISTRY,
     PUBLIC_MONETIZATION_CATALOG,
@@ -624,8 +628,21 @@ async def process_stripe_event(
     event_type: str,
     data: dict[str, Any],
     db: AsyncSession,
+    event_id: str | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
+    if event_type in PILOT_EVENT_TYPES:
+        if not event_id:
+            raise RuntimeError("Stripe event id is required for Pilot processing")
+        pilot_status = await process_pilot_checkout_event(
+            event_id,
+            event_type,
+            data,
+            db,
+        )
+        if pilot_status != "ignored" or event_type != "checkout.session.completed":
+            return pilot_status
+
     if event_type == "checkout.session.completed":
         await handle_checkout_completed(data, db)
         return "processed"
@@ -785,37 +802,130 @@ async def _write_audit(
 
 # ─── Webhook idempotency ──────────────────────────────────────────────────────
 
-async def claim_webhook_event(event_id: str, event_type: str, db: AsyncSession) -> bool:
-    """
-    Atomically claim a webhook event for processing.
-    Returns True if claimed (first time). Returns False if already claimed (duplicate).
+WEBHOOK_CLAIMED = "claimed"
+WEBHOOK_DUPLICATE = "duplicate"
+WEBHOOK_IN_PROGRESS = "in_progress"
 
-    Race-safe: uses the DB UNIQUE constraint on stripe_event_id as the
-    synchronization mechanism. Two concurrent requests for the same event_id
-    will both attempt the INSERT; only one succeeds. The loser gets
-    IntegrityError → returns False → caller returns HTTP 200 immediately.
+
+async def _claim_existing_webhook(
+    event: WebhookEvent,
+    event_type: str,
+    db: AsyncSession,
+) -> str:
+    if event.status == "retryable_failure":
+        event.status = "processing"
+        event.error = None
+        event.event_type = event_type
+        event.processed_at = datetime.now(timezone.utc)
+        event.attempt_count = (event.attempt_count or 0) + 1
+        await db.flush()
+        return WEBHOOK_CLAIMED
+    if event.status == "processing":
+        return WEBHOOK_IN_PROGRESS
+    logger.info(
+        "[webhook] Final event %s already handled with status=%s",
+        event.stripe_event_id,
+        event.status,
+    )
+    return WEBHOOK_DUPLICATE
+
+
+async def claim_webhook_event(
+    event_id: str,
+    event_type: str,
+    db: AsyncSession,
+) -> str:
     """
+    Claim an event without committing the surrounding business transaction.
+
+    New events synchronize through the unique event id. Retries lock the
+    existing retryable row until PilotPayment and the final webhook status are
+    committed together.
+    """
+    existing_result = await db.execute(
+        select(WebhookEvent)
+        .where(WebhookEvent.stripe_event_id == event_id)
+        .with_for_update()
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing is not None:
+        return await _claim_existing_webhook(existing, event_type, db)
+
     try:
         we = WebhookEvent(
             stripe_event_id=event_id,
             event_type=event_type,
             processed_at=datetime.now(timezone.utc),
             status="processing",
+            attempt_count=1,
             error=None,
         )
         db.add(we)
-        await db.commit()
-        return True
+        await db.flush()
+        return WEBHOOK_CLAIMED
     except IntegrityError:
         await db.rollback()
-        logger.info("[webhook] Duplicate event %s — already claimed", event_id)
-        return False
+
+    existing_result = await db.execute(
+        select(WebhookEvent)
+        .where(WebhookEvent.stripe_event_id == event_id)
+        .with_for_update()
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing is None:
+        raise RuntimeError("Webhook claim conflict could not be reloaded")
+    return await _claim_existing_webhook(existing, event_type, db)
+
+
+async def mark_webhook_retryable_failure(
+    event_id: str,
+    event_type: str,
+    error: str,
+    db: AsyncSession,
+) -> None:
+    """Persist a retry marker only after all business changes were rolled back."""
+    for attempt in range(2):
+        update_result = await db.execute(
+            sql_update(WebhookEvent)
+            .where(WebhookEvent.stripe_event_id == event_id)
+            .values(
+                event_type=event_type,
+                status="retryable_failure",
+                error=error,
+                processed_at=datetime.now(timezone.utc),
+                attempt_count=WebhookEvent.attempt_count + 1,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if update_result.rowcount:
+            await db.commit()
+            return
+
+        try:
+            db.add(
+                WebhookEvent(
+                    stripe_event_id=event_id,
+                    event_type=event_type,
+                    processed_at=datetime.now(timezone.utc),
+                    status="retryable_failure",
+                    attempt_count=1,
+                    error=error,
+                )
+            )
+            await db.commit()
+            return
+        except IntegrityError:
+            await db.rollback()
+            if attempt == 1:
+                raise
+
+    raise RuntimeError("Retryable webhook failure could not be persisted")
 
 
 async def update_webhook_status(
     event_id: str, status: str, error: str | None, db: AsyncSession
 ) -> None:
-    """Update the status of a previously claimed webhook event. Called after processing."""
+    """Update a claimed event inside the caller's transaction."""
     await db.execute(
         sql_update(WebhookEvent)
         .where(WebhookEvent.stripe_event_id == event_id)
@@ -825,7 +935,7 @@ async def update_webhook_status(
             processed_at=datetime.now(timezone.utc),
         )
     )
-    await db.commit()
+    await db.flush()
 
 
 async def get_webhook_event(event_id: str, db: AsyncSession) -> WebhookEvent | None:

@@ -76,6 +76,47 @@ export async function apiFetch<T>(
   return res.json();
 }
 
+export interface ContactRequest {
+  name: string;
+  email: string;
+  subject: "demo";
+  message: string;
+}
+
+declare const pilotRequestIdBrand: unique symbol;
+export type PilotRequestId = string & {
+  readonly [pilotRequestIdBrand]: "PilotRequestId";
+};
+
+export interface ContactResponse {
+  received: true;
+  request_id: PilotRequestId;
+  notification_sent: boolean;
+  message: string;
+}
+
+export async function submitContact(body: ContactRequest): Promise<ContactResponse> {
+  return apiFetch<ContactResponse>("/api/v1/contact", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type PilotConfirmationStatus = "confirmed" | "processing" | "manual_review";
+
+export interface PilotConfirmationResponse {
+  status: PilotConfirmationStatus;
+}
+
+export async function getPilotConfirmation(
+  sessionId: string
+): Promise<PilotConfirmationResponse> {
+  const query = new URLSearchParams({ session_id: sessionId });
+  return apiFetch<PilotConfirmationResponse>(
+    `/api/v1/billing/pilot/confirmation?${query.toString()}`
+  );
+}
+
 async function refreshAccessToken(): Promise<boolean> {
   try {
     // Browser sends httpOnly cookie automatically via credentials: "include"
