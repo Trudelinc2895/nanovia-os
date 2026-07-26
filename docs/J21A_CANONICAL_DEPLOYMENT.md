@@ -32,11 +32,18 @@ Environment variables:
 | Name | Required production value |
 | --- | --- |
 | `DEPLOY_PATH` | `/opt/kt-monetization-os` |
+| `COMPOSE_WORKING_DIR` | `/opt/kt-monetization-os/infra` |
 | `COMPOSE_PROJECT_NAME` | `infra` |
 | `POSTGRES_VOLUME_NAME` | Exact existing volume observed on the public PostgreSQL container |
 | `REDIS_VOLUME_NAME` | Exact existing volume observed on the public Redis container |
 | `RUNTIME_ENV_FILE` | Exact existing runtime env-file path; no fallback is applied |
 | `BACKUP_ROOT` | Explicit absolute backup directory outside the Git checkout |
+
+`DEPLOY_PATH` is the Git checkout root. `COMPOSE_WORKING_DIR` is the canonical
+directory from which Compose commands run and must exactly match the
+`com.docker.compose.project.working_dir` label of the public Caddy container.
+Both are non-secret GitHub variables on the `production` environment. Neither
+value has a workflow fallback.
 
 Environment secrets:
 
@@ -67,7 +74,7 @@ configuration values or env-file contents:
 
 1. every required variable exists;
 2. the deployment lock is available;
-3. the checkout exists and its real path is exact;
+3. the checkout and Compose working directory exist and their real paths are exact;
 4. the checkout is clean, including untracked files;
 5. exactly one public Caddy container publishes port 80;
 6. its Compose project and working-directory labels match the configured values;
