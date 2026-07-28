@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api.config import settings
 from api.core.monetization import webhook_handler_service
 from api.core.monetization.webhook_handler_service import (
-    WebhookProcessingUnavailable,
     handle_stripe_webhook,
 )
 from api.database import Base

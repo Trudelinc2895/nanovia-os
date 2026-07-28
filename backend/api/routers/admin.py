@@ -534,7 +534,8 @@ async def admin_reprocess_webhook(
     stored_event = await get_webhook_event(stripe_event_id, db)
     if not stored_event:
         raise HTTPException(status_code=404, detail="Webhook event not found")
-    admin_email = admin.email
+    safe_event_id = _sanitize_log_value(stripe_event_id)
+    safe_admin_id = _sanitize_log_value(str(admin.id))
     stored_event_type = stored_event.event_type
 
     force = body.force if body else False
@@ -581,12 +582,12 @@ async def admin_reprocess_webhook(
             await db.rollback()
             logger.exception(
                 "[admin] Failed to persist retryable webhook state event=%s",
-                stripe_event_id,
+                safe_event_id,
             )
         logger.exception(
-            "[admin] Webhook reprocess failed event=%s by admin=%s",
-            stripe_event_id,
-            admin_email,
+            "[admin] Webhook reprocess failed event=%s by admin_id=%s",
+            safe_event_id,
+            safe_admin_id,
         )
         raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
 
@@ -607,14 +608,14 @@ async def admin_reprocess_webhook(
             await db.rollback()
             logger.exception(
                 "[admin] Failed to persist retryable webhook state event=%s",
-                stripe_event_id,
+                safe_event_id,
             )
         raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
 
     logger.info(
-        "[admin] Webhook reprocessed event=%s by admin=%s status=%s force=%s",
-        stripe_event_id,
-        admin_email,
+        "[admin] Webhook reprocessed event=%s by admin_id=%s status=%s force=%s",
+        safe_event_id,
+        safe_admin_id,
         final_status,
         force,
     )

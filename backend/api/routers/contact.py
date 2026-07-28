@@ -22,6 +22,12 @@ from api.services.email_service import _send as send_email
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _sanitize_log_value(value: str | None) -> str:
+    """Keep untrusted values on a single physical log line."""
+    return (value or "").replace("\n", " ").replace("\r", " ")
+
+
 SUBJECTS = {
     "general": "Message général",
     "billing": "Question de facturation",
@@ -75,7 +81,11 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
     ip = request.client.host if request.client else "unknown"
     subject_label = SUBJECTS.get(body.subject, body.subject)
 
-    logger.info("[contact] New message | subject=%s | ip=%s", body.subject, ip)
+    logger.info(
+        "[contact] New message | subject=%s | ip=%s",
+        _sanitize_log_value(body.subject),
+        _sanitize_log_value(ip),
+    )
 
     pilot_request = PilotRequest(
         name=body.name,

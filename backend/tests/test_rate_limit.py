@@ -25,10 +25,11 @@ def test_adaptive_rate_limit_multiplier(monkeypatch, cpu, memory, expected):
     from api import main as main_module
 
     monkeypatch.setattr(psutil, "cpu_percent", lambda: cpu)
+    memory_snapshot = type("Memory", (), {"percent": memory})
     monkeypatch.setattr(
         psutil,
         "virtual_memory",
-        lambda: type("Memory", (), {"percent": memory})(),
+        memory_snapshot,
     )
 
     assert main_module._get_load_multiplier() == expected

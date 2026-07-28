@@ -23,11 +23,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _uuid_type() -> sa.TypeEngine:
-    try:
-        if op.get_bind().dialect.name == "postgresql":
-            return postgresql.UUID(as_uuid=True)
-    except Exception:
-        pass
+    if op.get_bind().dialect.name == "postgresql":
+        return postgresql.UUID(as_uuid=True)
     return sa.String(36)
 
 

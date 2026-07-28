@@ -54,6 +54,20 @@ def _payment_values(
     }
 
 
+def test_j20_migration_uuid_type_propagates_bind_failures(monkeypatch):
+    migration = _load_migration()
+
+    class BrokenOperations:
+        @staticmethod
+        def get_bind():
+            raise RuntimeError("migration bind unavailable")
+
+    monkeypatch.setattr(migration, "op", BrokenOperations())
+
+    with pytest.raises(RuntimeError, match="migration bind unavailable"):
+        migration._uuid_type()
+
+
 def test_j20_migration_upgrade_and_downgrade_are_reversible(tmp_path):
     alembic_config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     alembic_config.set_main_option(

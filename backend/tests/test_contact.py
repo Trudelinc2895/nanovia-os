@@ -1,6 +1,7 @@
 """Focused tests for the public Nanovia Pro Pilot contact endpoint."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,8 @@ from api.models.pilot import PilotRequest
 from api.routers import contact
 
 
-def _request() -> Request:
-    return Request({"type": "http", "client": ("127.0.0.1", 12345)})
+def _request(client_host: str = "127.0.0.1") -> Request:
+    return Request({"type": "http", "client": (client_host, 12345)})
 
 
 async def _isolated_session(
@@ -64,6 +65,44 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
         assert "<script>" not in sent["html"]
         assert "&lt;script&gt;" in sent["html"]
         assert "127.0.0.1" not in sent["html"]
+    finally:
+        await db.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_contact_log_sanitizes_client_address_and_omits_form_content(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
+        return True
+
+    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    db, engine = await _isolated_session(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger=contact.__name__):
+            await contact.contact_form(
+                _body(
+                    name="Client\r\nFORGED_NAME",
+                    email="private@example.com",
+                    message="Message légitime.\r\nFORGED_FORM_CONTENT",
+                ),
+                _request("203.0.113.10\r\nFORGED_LOG_RECORD"),
+                db,
+            )
+
+        messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == contact.__name__
+        ]
+        assert len(messages) == 1
+        assert all("\r" not in message and "\n" not in message for message in messages)
+        assert all("private@example.com" not in message for message in messages)
+        assert all("FORGED_NAME" not in message for message in messages)
+        assert all("FORGED_FORM_CONTENT" not in message for message in messages)
     finally:
         await db.close()
         await engine.dispose()
