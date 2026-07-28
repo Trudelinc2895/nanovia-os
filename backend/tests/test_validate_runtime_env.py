@@ -82,6 +82,73 @@ def test_runtime_env_detects_unknown_keys():
     assert "Unknown env key: MYSTERY_FLAG" in errors
 
 
+def test_runtime_env_accepts_valid_pilot_environment_keys():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "development",
+            "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "CONTACT_RECIPIENT_EMAIL": "pilot@example.invalid",
+            "STRIPE_ACCOUNT_ID": "acct_test123",
+            "STRIPE_PILOT_PAYMENT_LINK_ID": "plink_test123",
+            "STRIPE_PILOT_PAYMENT_LINK_URL": "https://buy.stripe.com/test_123",
+            "STRIPE_PILOT_PRICE_ID": "price_test123",
+            "STRIPE_PILOT_PRODUCT_ID": "prod_test123",
+        },
+        target_env="development",
+    )
+
+    assert errors == []
+
+
+def test_runtime_env_rejects_invalid_pilot_environment_key_formats():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "development",
+            "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "CONTACT_RECIPIENT_EMAIL": "not-an-email",
+            "STRIPE_ACCOUNT_ID": "account_123",
+            "STRIPE_PILOT_PAYMENT_LINK_ID": "payment_link_123",
+            "STRIPE_PILOT_PAYMENT_LINK_URL": "http://example.invalid/not-stripe",
+            "STRIPE_PILOT_PRICE_ID": "pilot_price_123",
+            "STRIPE_PILOT_PRODUCT_ID": "pilot_product_123",
+        },
+        target_env="development",
+    )
+
+    assert set(errors) == {
+        "CONTACT_RECIPIENT_EMAIL must be a valid email address",
+        "STRIPE_ACCOUNT_ID must use the acct_... format",
+        "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format",
+        "STRIPE_PILOT_PAYMENT_LINK_URL must use an https://buy.stripe.com/... URL",
+        "STRIPE_PILOT_PRICE_ID must use the price_... format",
+        "STRIPE_PILOT_PRODUCT_ID must use the prod_... format",
+    }
+
+
+def test_runtime_env_allows_unconfigured_or_placeholder_pilot_keys():
+    errors = validate_runtime_env(
+        {
+            "APP_ENV": "development",
+            "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "JWT_SECRET_KEY": "x" * 40,
+            "CONTACT_RECIPIENT_EMAIL": "",
+            "STRIPE_ACCOUNT_ID": "REPLACE_WITH_STRIPE_ACCOUNT_ID",
+            "STRIPE_PILOT_PAYMENT_LINK_ID": "REPLACE_WITH_PAYMENT_LINK_ID",
+            "STRIPE_PILOT_PAYMENT_LINK_URL": "REPLACE_WITH_PAYMENT_LINK_URL",
+            "STRIPE_PILOT_PRICE_ID": "REPLACE_WITH_PRICE_ID",
+            "STRIPE_PILOT_PRODUCT_ID": "REPLACE_WITH_PRODUCT_ID",
+        },
+        target_env="development",
+    )
+
+    assert errors == []
+
+
 def test_staging_runtime_env_rejects_public_bind_and_live_stripe():
     errors = validate_runtime_env(
         {

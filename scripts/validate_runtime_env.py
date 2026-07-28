@@ -19,6 +19,38 @@ _ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
     ("PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"),
 )
+_PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
+    (
+        "CONTACT_RECIPIENT_EMAIL",
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        "must be a valid email address",
+    ),
+    (
+        "STRIPE_ACCOUNT_ID",
+        r"^acct_[A-Za-z0-9_]+$",
+        "must use the acct_... format",
+    ),
+    (
+        "STRIPE_PILOT_PAYMENT_LINK_ID",
+        r"^plink_[A-Za-z0-9_]+$",
+        "must use the plink_... format",
+    ),
+    (
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        r"^https://buy\.stripe\.com/[A-Za-z0-9_-]+(?:\?[^\s#]*)?$",
+        "must use an https://buy.stripe.com/... URL",
+    ),
+    (
+        "STRIPE_PILOT_PRICE_ID",
+        r"^price_[A-Za-z0-9_]+$",
+        "must use the price_... format",
+    ),
+    (
+        "STRIPE_PILOT_PRODUCT_ID",
+        r"^prod_[A-Za-z0-9_]+$",
+        "must use the prod_... format",
+    ),
+)
 _KNOWN_ENV_KEYS = {
     "ACME_EMAIL",
     "ADMIN_ALLOWED_IP",
@@ -35,6 +67,7 @@ _KNOWN_ENV_KEYS = {
     "APP_REGION",
     "APP_RUNTIME_ENV_FILE",
     "APP_VERSION",
+    "CONTACT_RECIPIENT_EMAIL",
     "DATABASE_URL",
     "CHAOS_ENABLED",
     "DOMAIN",
@@ -114,6 +147,11 @@ _KNOWN_ENV_KEYS = {
     "STAGING_WEB_PORT",
     "STRIPE_CREDIT_PACK_SIZE",
     "STRIPE_CREDIT_PRICE_ID",
+    "STRIPE_ACCOUNT_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_URL",
+    "STRIPE_PILOT_PRICE_ID",
+    "STRIPE_PILOT_PRODUCT_ID",
     "STRIPE_PRICE_ADDON_API_PACK",
     "STRIPE_PRICE_ADDON_STORAGE_10GB",
     "STRIPE_PRICE_BUSINESS_MONTHLY_ID",
@@ -181,6 +219,17 @@ def _is_loopback_host(value: str) -> bool:
 
 def _validate_known_keys(values: dict[str, str]) -> list[str]:
     return [f"Unknown env key: {key}" for key in sorted(values) if key not in _KNOWN_ENV_KEYS]
+
+
+def _validate_pilot_formats(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    for key, pattern, message in _PILOT_FORMAT_RULES:
+        value = values.get(key, "").strip()
+        if not value or _looks_placeholder(value):
+            continue
+        if re.fullmatch(pattern, value) is None:
+            errors.append(f"{key} {message}")
+    return errors
 
 
 def _validate_alias_conflicts(values: dict[str, str]) -> list[str]:
@@ -276,6 +325,7 @@ def validate_runtime_env(
         return [f"Unsupported target environment: {target_env}"]
 
     errors.extend(_validate_known_keys(values))
+    errors.extend(_validate_pilot_formats(values))
     errors.extend(_validate_alias_conflicts(values))
 
     app_env = values.get("APP_ENV", "").strip()
