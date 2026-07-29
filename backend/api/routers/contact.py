@@ -9,6 +9,7 @@ Pilot request endpoint.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, status
 from markupsafe import escape
@@ -26,6 +27,29 @@ router = APIRouter()
 def _sanitize_log_value(value: str | None) -> str:
     """Keep untrusted values on a single physical log line."""
     return (value or "").replace("\n", " ").replace("\r", " ")
+
+
+def _configured_payment_link_url() -> str | None:
+    """Return the configured public Payment Link only when it is safe to expose."""
+    value = settings.STRIPE_PILOT_PAYMENT_LINK_URL.strip()
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "buy.stripe.com"
+        or parsed.username
+        or parsed.password
+        or port is not None
+        or not parsed.path.strip("/")
+        or parsed.fragment
+    ):
+        return None
+    return value
 
 
 SUBJECTS = {
@@ -146,6 +170,7 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
     return {
         "received": True,
         "request_id": request_id,
+        "payment_link_url": _configured_payment_link_url(),
         "notification_sent": delivered,
         "message": "Votre demande a été enregistrée.",
     }

@@ -5,10 +5,10 @@ const PUBLIC_EMAIL = "nanovia@duck.com";
 const PUBLIC_EMAIL_LINK = `mailto:${PUBLIC_EMAIL}`;
 
 const deliverables = [
-  "Analyse d'une tache repetitive de votre entreprise",
-  "Configuration d'un assistant IA adapte a votre realite",
-  "Processus clair, documente et reutilisable",
-  "Recommandations d'automatisation concretes",
+  "Analyse d'une tâche répétitive de votre entreprise",
+  "Configuration d'un assistant IA adapté à votre réalité",
+  "Processus clair, documenté et réutilisable",
+  "Recommandations d'automatisation concrètes",
   "Livraison d'un plan exploitable en 30 jours",
 ];
 
@@ -66,11 +66,11 @@ export default function HomePage() {
           Nanovia Pro Pilot
         </h1>
         <p className="mx-auto mt-6 max-w-3xl text-lg text-gray-200">
-          Automatisez une tache repetitive de votre entreprise avec un assistant IA configure pour vous.
+          Automatisez une tâche répétitive de votre entreprise avec un assistant IA configuré pour vous.
         </p>
         <p className="mx-auto mt-4 max-w-3xl text-base text-gray-400 md:text-lg">
-          En 30 jours, Nanovia vous aide a transformer une tache repetitive en processus assiste par IA,
-          clair, documente et reutilisable.
+          En 30 jours, Nanovia vous aide à transformer une tâche répétitive en processus assisté par IA,
+          clair, documenté et réutilisable.
         </p>
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a

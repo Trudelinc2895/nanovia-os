@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  buildPilotPaymentLink,
-  PILOT_PAYMENT_LINK_URL,
-} from "../lib/pilot-payment-link.ts";
+import { buildPilotPaymentLink } from "../lib/pilot-payment-link.ts";
 
 
 const REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
+const CONFIGURED_PAYMENT_LINK = "https://buy.stripe.com/test_configured";
 
 
 test("builds a Stripe Payment Link with only client_reference_id", () => {
   const paymentLink = buildPilotPaymentLink(
     REQUEST_ID,
-    `${PILOT_PAYMENT_LINK_URL}?email=client%40example.com&name=Client#message`
+    `${CONFIGURED_PAYMENT_LINK}?email=client%40example.com&name=Client#message`
   );
   const parsed = new URL(paymentLink);
 
@@ -48,7 +46,25 @@ test("rejects unsafe or non-Stripe base URLs", () => {
 
 test("rejects a non-UUID request identifier", () => {
   assert.throws(
-    () => buildPilotPaymentLink("client@example.com"),
+    () => buildPilotPaymentLink("client@example.com", CONFIGURED_PAYMENT_LINK),
     /Invalid Pilot request identifier/
   );
+});
+
+
+test("fails closed when the Payment Link is not configured", () => {
+  for (const missingUrl of [undefined, null, ""]) {
+    assert.throws(
+      () => buildPilotPaymentLink(REQUEST_ID, missingUrl),
+      /Pilot payment link is not configured/
+    );
+  }
+});
+
+
+test("uses a rotated configured Payment Link without a fallback", () => {
+  const rotatedUrl = "https://buy.stripe.com/test_rotated";
+  const paymentLink = buildPilotPaymentLink(REQUEST_ID, rotatedUrl);
+
+  assert.equal(new URL(paymentLink).pathname, "/test_rotated");
 });

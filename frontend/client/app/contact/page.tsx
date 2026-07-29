@@ -91,7 +91,15 @@ export default function ContactPage() {
         subject: "demo",
         message: buildPilotMessage(form),
       });
-      setPaymentLink(buildPilotPaymentLink(response.request_id));
+      try {
+        setPaymentLink(
+          buildPilotPaymentLink(response.request_id, response.payment_link_url)
+        );
+      } catch {
+        setError(
+          "Votre demande est enregistrée, mais le paiement est temporairement indisponible."
+        );
+      }
       setStatus("received");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "La transmission a échoué.");
@@ -152,21 +160,29 @@ export default function ContactPage() {
           </div>
         </div>
 
-        {status === "received" && paymentLink ? (
+        {status === "received" ? (
           <div className="rounded-xl border border-blue-400/40 bg-blue-950/30 p-8 text-center text-blue-100">
             <div className="text-4xl mb-4">✓</div>
             <h2 className="text-xl font-bold mb-2">Demande reçue</h2>
-            <p className="text-gray-300 mb-3">
-              Votre besoin Pro Pilot est transmis. Vous pouvez maintenant finaliser le paiement sécurisé de 297 $ CAD sur Stripe.
-            </p>
-            <a
-              href={paymentLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-4 inline-flex rounded-xl bg-blue-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-blue-500"
-            >
-              Payer le Pilot sur Stripe
-            </a>
+            {paymentLink ? (
+              <>
+                <p className="text-gray-300 mb-3">
+                  Votre besoin Pro Pilot est transmis. Vous pouvez maintenant finaliser le paiement sécurisé de 297 $ CAD sur Stripe.
+                </p>
+                <a
+                  href={paymentLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-4 inline-flex rounded-xl bg-blue-600 px-8 py-4 text-lg font-bold text-white transition hover:bg-blue-500"
+                >
+                  Payer le Pilot sur Stripe
+                </a>
+              </>
+            ) : (
+              <p role="alert" className="mt-3 text-amber-200">
+                {error || "Le paiement est temporairement indisponible."}
+              </p>
+            )}
           </div>
         ) : (
           <form id="demande" onSubmit={handleSubmit} className="scroll-mt-24 bg-gray-900 border border-gray-800 rounded-2xl p-8 space-y-5">

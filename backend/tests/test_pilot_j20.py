@@ -26,7 +26,7 @@ from api.database import Base
 from api.models.pilot import PilotPayment, PilotRequest
 from api.models.webhook_event import WebhookEvent
 from api.routers import billing as billing_router
-from api.services import pilot_payment_service
+from api.services import billing_service, pilot_payment_service
 from api.services.billing_service import (
     WEBHOOK_CLAIMED,
     WEBHOOK_IN_PROGRESS,
@@ -210,6 +210,175 @@ async def test_invalid_stripe_signature_returns_400(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Invalid Stripe signature"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_ids", "incoming_link"),
+    [
+        pytest.param(("", "", ""), PAYMENT_LINK_ID, id="configuration-absent"),
+        pytest.param(
+            (PAYMENT_LINK_ID, "", PRODUCT_ID),
+            PAYMENT_LINK_ID,
+            id="configuration-partial",
+        ),
+        pytest.param(
+            (PAYMENT_LINK_ID, PRICE_ID, PRODUCT_ID),
+            "",
+            id="incoming-link-empty",
+        ),
+        pytest.param(
+            (PAYMENT_LINK_ID, PRICE_ID, PRODUCT_ID),
+            "plink_other",
+            id="different-payment-link",
+        ),
+    ],
+)
+async def test_non_pilot_checkout_never_enters_pilot_dispatch(
+    monkeypatch,
+    configured_ids,
+    incoming_link,
+):
+    payment_link_id, price_id, product_id = configured_ids
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PAYMENT_LINK_ID",
+        payment_link_id,
+    )
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PRICE_ID", price_id)
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PRODUCT_ID", product_id)
+    pilot_processor = AsyncMock(return_value="paid")
+    legacy_processor = AsyncMock()
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "handle_checkout_completed",
+        legacy_processor,
+    )
+    db = AsyncMock()
+
+    result = await billing_service.process_stripe_event(
+        "checkout.session.completed",
+        {"payment_link": incoming_link},
+        db,
+        event_id="evt_non_pilot",
+    )
+
+    assert result == "processed"
+    pilot_processor.assert_not_awaited()
+    legacy_processor.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_only_matching_configured_payment_link_enters_pilot_dispatch(
+    monkeypatch,
+):
+    pilot_processor = AsyncMock(return_value="paid")
+    legacy_processor = AsyncMock()
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "handle_checkout_completed",
+        legacy_processor,
+    )
+    db = AsyncMock()
+    payload = {"payment_link": {"id": PAYMENT_LINK_ID}}
+
+    result = await billing_service.process_stripe_event(
+        "checkout.session.completed",
+        payload,
+        db,
+        event_id="evt_matching_pilot",
+    )
+
+    assert result == "paid"
+    pilot_processor.assert_awaited_once_with(
+        "evt_matching_pilot",
+        "checkout.session.completed",
+        payload,
+        db,
+    )
+    legacy_processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rejected_matching_pilot_event_never_falls_back_to_legacy(
+    monkeypatch,
+):
+    pilot_processor = AsyncMock(return_value="ignored")
+    legacy_processor = AsyncMock()
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "handle_checkout_completed",
+        legacy_processor,
+    )
+
+    result = await billing_service.process_stripe_event(
+        "checkout.session.completed",
+        {"payment_link": PAYMENT_LINK_ID},
+        AsyncMock(),
+        event_id="evt_rejected_pilot",
+    )
+
+    assert result == "ignored"
+    pilot_processor.assert_awaited_once()
+    legacy_processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_event_is_ignored_without_pilot_side_effect(monkeypatch):
+    pilot_processor = AsyncMock(return_value="paid")
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+
+    result = await billing_service.process_stripe_event(
+        "payment_intent.created",
+        {},
+        AsyncMock(),
+        event_id="evt_unrelated",
+    )
+
+    assert result == "ignored"
+    pilot_processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_async_pilot_event_is_ignored(monkeypatch):
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PAYMENT_LINK_ID", "")
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PRICE_ID", "")
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PRODUCT_ID", "")
+    pilot_processor = AsyncMock(return_value="paid")
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+
+    result = await billing_service.process_stripe_event(
+        "checkout.session.async_payment_succeeded",
+        {"payment_link": PAYMENT_LINK_ID},
+        AsyncMock(),
+        event_id="evt_unconfigured_async",
+    )
+
+    assert result == "ignored"
+    pilot_processor.assert_not_awaited()
 
 
 @pytest.mark.asyncio

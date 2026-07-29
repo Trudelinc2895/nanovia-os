@@ -18,7 +18,9 @@ SECURITY:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from typing import Annotated
 
 import stripe
@@ -53,7 +55,7 @@ from api.schemas.billing import (
     PortalResponse,
     UsageResponse,
 )
-from api.models.pilot import PilotPayment
+from api.models.pilot import PilotPayment, PilotRequest
 from api.services.billing_service import (
     ADDONS_CONFIG,
     MODULES_CONFIG,
@@ -121,6 +123,43 @@ async def list_plans() -> list[PlanPublic]:
     ]
 
 
+async def _retrieve_pilot_checkout_session(session_id: str):
+    """Retrieve Stripe state without blocking the async request worker."""
+    return await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
+
+
+def _stripe_field(value, field: str):
+    if isinstance(value, dict):
+        return value.get(field)
+    return getattr(value, field, None)
+
+
+def _stripe_id(value) -> str | None:
+    if isinstance(value, str):
+        return value
+    identifier = _stripe_field(value, "id")
+    return str(identifier) if identifier else None
+
+
+def _validated_pilot_request_id(session_id: str, session) -> uuid.UUID | None:
+    if _stripe_id(session) != session_id:
+        return None
+    if (
+        not settings.STRIPE_PILOT_PAYMENT_LINK_ID
+        or _stripe_id(_stripe_field(session, "payment_link"))
+        != settings.STRIPE_PILOT_PAYMENT_LINK_ID
+        or _stripe_field(session, "mode") != "payment"
+        or bool(_stripe_field(session, "livemode"))
+        != (settings.APP_ENV == "production")
+        or str(_stripe_field(session, "currency") or "").lower() != "cad"
+    ):
+        return None
+    try:
+        return uuid.UUID(str(_stripe_field(session, "client_reference_id")))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get(
     "/pilot/confirmation",
     response_model=PilotConfirmationResponse,
@@ -129,7 +168,7 @@ async def get_pilot_confirmation(
     db: DB,
     session_id: str | None = None,
 ) -> PilotConfirmationResponse:
-    """Return a public state derived only from a persisted PilotPayment."""
+    """Return a non-sensitive state verified against Stripe and local storage."""
     normalized_session_id = (session_id or "").strip()
     if (
         not normalized_session_id.startswith("cs_")
@@ -141,15 +180,60 @@ async def get_pilot_confirmation(
     ):
         return PilotConfirmationResponse(status="manual_review")
 
-    result = await db.execute(
-        select(PilotPayment.status).where(
+    try:
+        stripe_session = await _retrieve_pilot_checkout_session(
+            normalized_session_id
+        )
+    except stripe.error.InvalidRequestError:
+        return PilotConfirmationResponse(status="manual_review")
+    except stripe.error.StripeError:
+        return PilotConfirmationResponse(status="processing")
+    except Exception:
+        logger.warning("[billing] Pilot confirmation provider lookup unavailable")
+        return PilotConfirmationResponse(status="processing")
+
+    request_id = _validated_pilot_request_id(
+        normalized_session_id,
+        stripe_session,
+    )
+    if request_id is None:
+        return PilotConfirmationResponse(status="manual_review")
+
+    request_result = await db.execute(
+        select(PilotRequest.id).where(PilotRequest.id == request_id)
+    )
+    if request_result.scalar_one_or_none() is None:
+        return PilotConfirmationResponse(status="manual_review")
+
+    payment_result = await db.execute(
+        select(PilotPayment).where(
             PilotPayment.stripe_checkout_session_id == normalized_session_id
         )
     )
-    payment_status = result.scalar_one_or_none()
-    if payment_status == "paid":
+    payment = payment_result.scalar_one_or_none()
+    if payment is None:
+        return PilotConfirmationResponse(status="processing")
+
+    if (
+        payment.pilot_request_id != request_id
+        or payment.stripe_payment_link_id
+        != settings.STRIPE_PILOT_PAYMENT_LINK_ID
+        or payment.stripe_price_id != settings.STRIPE_PILOT_PRICE_ID
+        or payment.currency.lower() != "cad"
+        or payment.livemode != bool(_stripe_field(stripe_session, "livemode"))
+    ):
+        return PilotConfirmationResponse(status="manual_review")
+
+    stripe_payment_status = str(
+        _stripe_field(stripe_session, "payment_status") or ""
+    )
+    if (
+        payment.status == "paid"
+        and payment.payment_status == "paid"
+        and stripe_payment_status == "paid"
+    ):
         public_status = "confirmed"
-    elif payment_status in {"pending", "processing"}:
+    elif payment.status in {"pending", "processing"}:
         public_status = "processing"
     else:
         public_status = "manual_review"

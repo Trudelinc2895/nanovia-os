@@ -91,6 +91,7 @@ export type PilotRequestId = string & {
 export interface ContactResponse {
   received: true;
   request_id: PilotRequestId;
+  payment_link_url: string | null;
   notification_sent: boolean;
   message: string;
 }

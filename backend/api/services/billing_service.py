@@ -631,17 +631,35 @@ async def process_stripe_event(
     event_id: str | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
-    if event_type in PILOT_EVENT_TYPES:
+    pilot_identifiers = (
+        settings.STRIPE_PILOT_PAYMENT_LINK_ID,
+        settings.STRIPE_PILOT_PRICE_ID,
+        settings.STRIPE_PILOT_PRODUCT_ID,
+    )
+    pilot_is_configured = all(pilot_identifiers)
+    incoming_payment_link = data.get("payment_link")
+    if isinstance(incoming_payment_link, dict):
+        incoming_payment_link = incoming_payment_link.get("id")
+    elif not isinstance(incoming_payment_link, str):
+        incoming_payment_link = getattr(incoming_payment_link, "id", None)
+    is_matching_pilot_event = (
+        event_type in PILOT_EVENT_TYPES
+        and pilot_is_configured
+        and bool(incoming_payment_link)
+        and incoming_payment_link == settings.STRIPE_PILOT_PAYMENT_LINK_ID
+    )
+
+    if is_matching_pilot_event:
         if not event_id:
             raise RuntimeError("Stripe event id is required for Pilot processing")
-        pilot_status = await process_pilot_checkout_event(
+        return await process_pilot_checkout_event(
             event_id,
             event_type,
             data,
             db,
         )
-        if pilot_status != "ignored" or event_type != "checkout.session.completed":
-            return pilot_status
+    elif event_type in PILOT_EVENT_TYPES and event_type != "checkout.session.completed":
+        return "ignored"
 
     if event_type == "checkout.session.completed":
         await handle_checkout_completed(data, db)

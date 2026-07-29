@@ -42,12 +42,18 @@ def _body(**overrides: str) -> contact.ContactRequest:
 @pytest.mark.asyncio
 async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_path):
     sent: dict[str, str] = {}
+    configured_url = "https://buy.stripe.com/test_configured"
 
     async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
         sent.update(to=to, subject=subject, html=html)
         return True
 
     monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(
+        contact.settings,
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        configured_url,
+    )
     db, engine = await _isolated_session(tmp_path)
     try:
         response = await contact.contact_form(
@@ -59,6 +65,7 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
 
         assert response["received"] is True
         assert response["request_id"] == str(stored.id)
+        assert response["payment_link_url"] == configured_url
         assert response["notification_sent"] is True
         assert stored.notification_status == "sent"
         assert sent["to"] == contact.settings.CONTACT_RECIPIENT_EMAIL
@@ -68,6 +75,28 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
     finally:
         await db.close()
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "configured_url",
+    [
+        "",
+        "not-a-url",
+        "http://buy.stripe.com/test",
+        "https://buy.stripe.com.evil.example/test",
+        "https://user:password@buy.stripe.com/test",
+        "https://buy.stripe.com:444/test",
+        "https://buy.stripe.com/test#fragment",
+    ],
+)
+def test_payment_link_configuration_fails_closed(monkeypatch, configured_url):
+    monkeypatch.setattr(
+        contact.settings,
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        configured_url,
+    )
+
+    assert contact._configured_payment_link_url() is None
 
 
 @pytest.mark.asyncio

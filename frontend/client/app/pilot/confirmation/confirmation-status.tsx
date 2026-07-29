@@ -7,13 +7,13 @@ import {
   getPilotConfirmation,
   type PilotConfirmationStatus,
 } from "@/lib/api";
+import {
+  PILOT_CONFIRMATION_POLL_INTERVAL_MS,
+  normalizePilotConfirmationStatus,
+  shouldPollPilotConfirmation,
+} from "@/lib/pilot-confirmation";
 
 const SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]{3,252}$/;
-const PUBLIC_STATES = new Set<PilotConfirmationStatus>([
-  "confirmed",
-  "processing",
-  "manual_review",
-]);
 
 const STATE_CONTENT: Record<
   PilotConfirmationStatus,
@@ -50,6 +50,7 @@ export function ConfirmationStatus() {
   const [publicStatus, setPublicStatus] = useState<PilotConfirmationStatus>(
     validSessionId ? "processing" : "manual_review"
   );
+  const [pollingExhausted, setPollingExhausted] = useState(false);
 
   useEffect(() => {
     if (!validSessionId) {
@@ -60,26 +61,45 @@ export function ConfirmationStatus() {
 
     let active = true;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let completedAttempts = 0;
 
     async function refreshStatus() {
+      completedAttempts += 1;
       try {
         const response = await getPilotConfirmation(checkoutSessionId);
-        const nextStatus = PUBLIC_STATES.has(response.status)
-          ? response.status
-          : "manual_review";
+        const nextStatus = normalizePilotConfirmationStatus(response.status);
         if (!active) return;
         setPublicStatus(nextStatus);
-        if (nextStatus === "processing") {
-          retryTimer = setTimeout(refreshStatus, 3000);
+        const shouldPoll = shouldPollPilotConfirmation(
+          nextStatus,
+          completedAttempts
+        );
+        setPollingExhausted(nextStatus === "processing" && !shouldPoll);
+        if (shouldPoll) {
+          retryTimer = setTimeout(
+            refreshStatus,
+            PILOT_CONFIRMATION_POLL_INTERVAL_MS
+          );
         }
       } catch {
-        if (active) {
-          setPublicStatus("manual_review");
+        if (!active) return;
+        setPublicStatus("processing");
+        const shouldPoll = shouldPollPilotConfirmation(
+          "processing",
+          completedAttempts
+        );
+        setPollingExhausted(!shouldPoll);
+        if (shouldPoll) {
+          retryTimer = setTimeout(
+            refreshStatus,
+            PILOT_CONFIRMATION_POLL_INTERVAL_MS
+          );
         }
       }
     }
 
     setPublicStatus("processing");
+    setPollingExhausted(false);
     void refreshStatus();
     return () => {
       active = false;
@@ -88,6 +108,10 @@ export function ConfirmationStatus() {
   }, [validSessionId]);
 
   const content = STATE_CONTENT[publicStatus];
+  const description =
+    publicStatus === "processing" && pollingExhausted
+      ? "La confirmation prend plus de temps que prévu. Le paiement reste en attente de vérification; actualisez cette page plus tard."
+      : content.description;
   return (
     <section
       aria-live="polite"
@@ -101,7 +125,7 @@ export function ConfirmationStatus() {
         {content.title}
       </h1>
       <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-300 sm:text-base">
-        {content.description}
+        {description}
       </p>
     </section>
   );
