@@ -444,6 +444,15 @@ def validate_runtime_env(
             errors.append("Staging refuses live Stripe public keys")
         return errors
 
+    if not allow_placeholders:
+        for key, _, _ in _PILOT_FORMAT_RULES:
+            _require_value(
+                errors,
+                values,
+                key,
+                message=f"{key} is required in production",
+            )
+
     if not stripe_secret and not stripe_secret_ref:
         errors.append("Production requires a live Stripe secret key")
     elif not stripe_secret_ref and not allow_placeholders and not stripe_secret.startswith(stripe_live_secret_prefix):

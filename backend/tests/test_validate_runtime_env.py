@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "validate_runtime_env.py"
 _SPEC = importlib.util.spec_from_file_location("validate_runtime_env_script", _SCRIPT_PATH)
@@ -11,6 +13,31 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 resolve_target_env = _MODULE.resolve_target_env
 validate_runtime_env = _MODULE.validate_runtime_env
+
+
+def _complete_production_values() -> dict[str, str]:
+    return {
+        "APP_ENV": "production",
+        "DATABASE_URL": "postgresql+psycopg://test:test@postgres:5432/test",
+        "REDIS_URL": "redis://redis:6379/0",
+        "JWT_SECRET_KEY": "x" * 40,
+        "TOTP_ENCRYPTION_KEY": "safe-test-value-without-production-secret",
+        "STRIPE_SECRET_KEY": "sk" + "_live_test_value",
+        "STRIPE_PUBLIC_KEY": "pk" + "_live_test_value",
+        "STRIPE_WEBHOOK_SECRET": "wh" + "sec_test_value",
+        "ADMIN_ALLOWED_IP": "203.0.113.10/32",
+        "ALLOWED_ORIGINS_RAW": "https://nanovia.invalid,https://admin.nanovia.invalid",
+        "API_BASE_URL": "https://nanovia.invalid",
+        "PUBLIC_WEB_URL": "https://nanovia.invalid",
+        "PRIVATE_ADMIN_URL": "https://admin.nanovia.invalid",
+        "NEXT_PUBLIC_API_URL": "",
+        "CONTACT_RECIPIENT_EMAIL": "pilot@example.invalid",
+        "STRIPE_ACCOUNT_ID": "acct_test123",
+        "STRIPE_PILOT_PRODUCT_ID": "prod_test123",
+        "STRIPE_PILOT_PRICE_ID": "price_test123",
+        "STRIPE_PILOT_PAYMENT_LINK_ID": "plink_test123",
+        "STRIPE_PILOT_PAYMENT_LINK_URL": "https://buy.stripe.com/test_123",
+    }
 
 
 def test_production_runtime_env_requires_admin_allowlist_and_totp_key():
@@ -32,24 +59,82 @@ def test_production_runtime_env_requires_admin_allowlist_and_totp_key():
 
 
 def test_production_runtime_env_accepts_safe_values():
-    errors = validate_runtime_env(
-        {
-            "APP_ENV": "production",
-            "DATABASE_URL": "postgresql+psycopg://user:pass@postgres:5432/nanovia",
-            "REDIS_URL": "redis://redis:6379/0",
-            "JWT_SECRET_KEY": "x" * 40,
-            "TOTP_ENCRYPTION_KEY": "safe-fernet-key-placeholder-free",
-            "STRIPE_SECRET_KEY": "sk" + "_live_prod",
-            "STRIPE_PUBLIC_KEY": "pk" + "_live_prod",
-            "STRIPE_WEBHOOK_SECRET": "wh" + "sec_prod",
-            "ADMIN_ALLOWED_IP": "203.0.113.10/32",
-            "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
-            "NEXT_PUBLIC_API_URL": "",
-        },
-        target_env="production",
-    )
+    errors = validate_runtime_env(_complete_production_values(), target_env="production")
 
     assert errors == []
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "CONTACT_RECIPIENT_EMAIL",
+        "STRIPE_ACCOUNT_ID",
+        "STRIPE_PILOT_PRODUCT_ID",
+        "STRIPE_PILOT_PRICE_ID",
+        "STRIPE_PILOT_PAYMENT_LINK_ID",
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+    ),
+)
+@pytest.mark.parametrize("missing_value", (None, "", "   "))
+def test_production_runtime_env_requires_each_pilot_key(key: str, missing_value: str | None):
+    values = _complete_production_values()
+    if missing_value is None:
+        values.pop(key)
+    else:
+        values[key] = missing_value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert f"{key} is required in production" in errors
+
+
+@pytest.mark.parametrize(
+    ("key", "invalid_value", "expected_error"),
+    (
+        (
+            "CONTACT_RECIPIENT_EMAIL",
+            "not-an-email",
+            "CONTACT_RECIPIENT_EMAIL must be a valid email address",
+        ),
+        (
+            "STRIPE_ACCOUNT_ID",
+            "account_test123",
+            "STRIPE_ACCOUNT_ID must use the acct_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRODUCT_ID",
+            "product_test123",
+            "STRIPE_PILOT_PRODUCT_ID must use the prod_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRICE_ID",
+            "pilot_price_test123",
+            "STRIPE_PILOT_PRICE_ID must use the price_... format",
+        ),
+        (
+            "STRIPE_PILOT_PAYMENT_LINK_ID",
+            "payment_link_test123",
+            "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format",
+        ),
+        (
+            "STRIPE_PILOT_PAYMENT_LINK_URL",
+            "https://example.invalid/not-stripe",
+            "STRIPE_PILOT_PAYMENT_LINK_URL must use an https://buy.stripe.com/... URL",
+        ),
+    ),
+)
+def test_production_runtime_env_rejects_each_invalid_pilot_format(
+    key: str,
+    invalid_value: str,
+    expected_error: str,
+):
+    values = _complete_production_values()
+    values[key] = invalid_value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert expected_error in errors
+    assert invalid_value not in "\n".join(errors)
 
 
 def test_runtime_env_detects_conflicting_alias_values():
@@ -207,28 +292,27 @@ def test_production_template_mode_allows_placeholders():
 
 
 def test_runtime_env_accepts_vault_managed_secret_references():
-    errors = validate_runtime_env(
+    values = _complete_production_values()
+    for key in (
+        "JWT_SECRET_KEY",
+        "TOTP_ENCRYPTION_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+    ):
+        values.pop(key)
+    values.update(
         {
-            "APP_ENV": "production",
             "SECRET_PROVIDER": "auto",
-            "DATABASE_URL": "postgresql+psycopg://user:pass@postgres:5432/nanovia",
-            "REDIS_URL": "redis://redis:6379/0",
             "JWT_SECRET_KEY_REF": "vault://secret/nanovia/backend#jwt_secret_key",
             "TOTP_ENCRYPTION_KEY_REF": "vault://secret/nanovia/backend#totp_encryption_key",
             "STRIPE_SECRET_KEY_REF": "vault://secret/nanovia/backend#stripe_secret_key",
             "STRIPE_WEBHOOK_SECRET_REF": "vault://secret/nanovia/backend#stripe_webhook_secret",
-            "STRIPE_PUBLIC_KEY": "pk" + "_live_prod",
-            "ADMIN_ALLOWED_IP": "203.0.113.10/32",
-            "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
-            "API_BASE_URL": "https://nanovia.ca",
-            "PUBLIC_WEB_URL": "https://nanovia.ca",
-            "PRIVATE_ADMIN_URL": "https://admin.nanovia.ca",
-            "NEXT_PUBLIC_API_URL": "",
             "VAULT_ADDR": "http://127.0.0.1:8200",
             "VAULT_TOKEN": "vault-token",
-        },
-        target_env="production",
+        }
     )
+
+    errors = validate_runtime_env(values, target_env="production")
 
     assert errors == []
 

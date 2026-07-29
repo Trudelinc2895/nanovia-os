@@ -130,6 +130,14 @@ jobs:
               ;;
           esac
 
+          case "${BACKUP_ROOT}" in
+            /*) ;;
+            *)
+              echo "::error::BACKUP_ROOT must be an absolute path"
+              exit 1
+              ;;
+          esac
+
           require_safe_ref TARGET_BRANCH
           require_safe_path DEPLOY_PATH
           require_safe_path COMPOSE_WORKING_DIR
@@ -323,6 +331,10 @@ jobs:
             /*) ;;
             *) fail "COMPOSE_WORKING_DIR must be an absolute path" ;;
           esac
+          case "${BACKUP_ROOT}" in
+            /*) ;;
+            *) fail "BACKUP_ROOT must be an absolute path" ;;
+          esac
           require_safe_ref TARGET_BRANCH
           require_safe_path DEPLOY_PATH
           require_safe_path COMPOSE_WORKING_DIR
@@ -387,7 +399,13 @@ jobs:
           [ "$(mounted_volume_name "${REDIS_CONTAINER}" /data)" = "${REDIS_VOLUME_NAME}" ] \
             || fail "Redis is mounted on a different volume"
 
-          AVAILABLE_BYTES="$(df -Pk "${BACKUP_ROOT%/*}" | awk 'NR == 2 {print $4 * 1024}')"
+          NORMALIZED_BACKUP_ROOT="$(realpath -m -- "${BACKUP_ROOT}")"
+          [ -n "${NORMALIZED_BACKUP_ROOT}" ] || fail "Unable to normalize BACKUP_ROOT"
+          BACKUP_PARENT="$(dirname -- "${NORMALIZED_BACKUP_ROOT}")"
+          [ -n "${BACKUP_PARENT}" ] || fail "Unable to determine the BACKUP_ROOT parent"
+          AVAILABLE_BYTES="$(df -Pk -- "${BACKUP_PARENT}" | awk 'NR == 2 {print $4 * 1024}')"
+          [[ "${AVAILABLE_BYTES}" =~ ^[0-9]+$ ]] \
+            || fail "Unable to determine available backup storage"
           DATABASE_BYTES="$(
             docker exec "${POSTGRES_CONTAINER}" sh -ceu \
               'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT pg_database_size(current_database())"'
@@ -424,6 +442,12 @@ jobs:
             ENV_FILE="${DEPLOY_PATH}/${RUNTIME_ENV_FILE}"
           fi
           [ -f "${ENV_FILE}" ] || fail "Configured runtime environment file is absent"
+          command -v python3 >/dev/null || fail "python3 is required for runtime environment validation"
+          RUNTIME_ENV_VALIDATOR="${DEPLOY_PATH}/scripts/validate_runtime_env.py"
+          [ -f "${RUNTIME_ENV_VALIDATOR}" ] || fail "Canonical runtime environment validator is absent"
+          python3 "${RUNTIME_ENV_VALIDATOR}" \
+            --env-file "${ENV_FILE}" \
+            --target-env production
 
           COMPOSE_FILES=(
             -f docker-compose.prod.yml
