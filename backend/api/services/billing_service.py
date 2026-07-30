@@ -235,7 +235,10 @@ async def get_active_subscription(user_id: uuid.UUID, db: AsyncSession) -> Subsc
 
 
 async def sync_subscription_from_stripe(
-    stripe_sub: dict[str, Any], db: AsyncSession
+    stripe_sub: dict[str, Any],
+    db: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> Subscription | None:
     """
     Upsert Subscription row from Stripe subscription object.
@@ -265,7 +268,12 @@ async def sync_subscription_from_stripe(
         else price_id_to_module(price_id)
     )
     if module_slug:
-        await sync_module_subscription_from_stripe(stripe_sub, module_slug, db)
+        await sync_module_subscription_from_stripe(
+            stripe_sub,
+            module_slug,
+            db,
+            commit=commit,
+        )
         return None
 
     plan = price_id_to_plan(price_id)
@@ -285,7 +293,10 @@ async def sync_subscription_from_stripe(
                 action="subscription_sync_skipped_unknown_price",
                 detail=f"stripe_sub={stripe_sub_id} price_id={price_id}",
             )
-            await db.commit()
+            if commit:
+                await db.commit()
+            else:
+                await db.flush()
             return None
 
     result = await db.execute(
@@ -344,7 +355,10 @@ async def sync_subscription_from_stripe(
             detail=f"{old_plan}->{user.plan} stripe_sub={stripe_sub_id} status={stripe_sub['status']}",
         )
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(sub)
     logger.info(f"[billing] Synced sub {stripe_sub_id} plan={plan} status={stripe_sub['status']}")
     return sub
@@ -354,6 +368,8 @@ async def sync_module_subscription_from_stripe(
     stripe_sub: dict[str, Any],
     module_slug: str,
     db: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> None:
     """Upsert module access from a Stripe subscription without mutating User.plan."""
     from api.models.user_module import UserModule
@@ -415,7 +431,10 @@ async def sync_module_subscription_from_stripe(
         action=f"module_subscription_{stripe_sub['status']}",
         detail=f"module={module_slug} stripe_sub={stripe_sub_id}",
     )
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     logger.info(
         "[billing] Synced module subscription %s module=%s status=%s",
         stripe_sub_id,
@@ -490,6 +509,8 @@ async def activate_user_module(
     stripe_subscription_id: str | None,
     stripe_customer_id: str | None,
     db: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> None:
     """
     Grant a user access to a specific module after successful payment.
@@ -531,11 +552,19 @@ async def activate_user_module(
         )
         db.add(row)
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     logger.info(f"[billing] Module '{module_slug}' activated for user {user_id}")
 
 
-async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -> None:
+async def handle_checkout_completed(
+    session: dict[str, Any],
+    db: AsyncSession,
+    *,
+    commit: bool = True,
+) -> None:
     """
     Handle checkout.session.completed:
     - Links Stripe customer to our user (first purchase)
@@ -585,6 +614,7 @@ async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -
                 db=db,
                 idempotency_key=idempotency_key,
                 note=f"Credit pack purchased via Stripe checkout {session.get('id', '')}",
+                commit=commit,
             )
             logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
             await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
@@ -600,6 +630,7 @@ async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -
                 stripe_subscription_id=session.get("subscription"),
                 stripe_customer_id=customer_id,
                 db=db,
+                commit=commit,
             )
             try:
                 from prometheus_client import Counter
@@ -611,7 +642,10 @@ async def handle_checkout_completed(session: dict[str, Any], db: AsyncSession) -
             except Exception:
                 pass
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
 
 
 async def _get_user_by_stripe_customer_id(
@@ -662,7 +696,7 @@ async def process_stripe_event(
         return "ignored"
 
     if event_type == "checkout.session.completed":
-        await handle_checkout_completed(data, db)
+        await handle_checkout_completed(data, db, commit=False)
         return "processed"
 
     if event_type in (
@@ -670,7 +704,7 @@ async def process_stripe_event(
         "customer.subscription.updated",
         "customer.subscription.deleted",
     ):
-        await sync_subscription_from_stripe(data, db)
+        await sync_subscription_from_stripe(data, db, commit=False)
         user = await _get_user_by_stripe_customer_id(data.get("customer"), db)
         await _write_audit(
             db,

@@ -38,17 +38,23 @@ Environment variables:
 | `REDIS_VOLUME_NAME` | Exact existing volume observed on the public Redis container |
 | `RUNTIME_ENV_FILE` | Exact existing runtime env-file path; no fallback is applied |
 | `BACKUP_ROOT` | Explicit absolute backup directory outside the Git checkout |
+| `VPS_HOST` | Approved VPS hostname or IP address |
+| `VPS_USER` | Approved SSH account name |
+| `VPS_PORT` | Approved SSH port, from `1` to `65535` |
 
 `DEPLOY_PATH` is the Git checkout root. `COMPOSE_WORKING_DIR` is the canonical
 directory from which Compose commands run and must exactly match the
 `com.docker.compose.project.working_dir` label of the public Caddy container.
-Both are non-secret GitHub variables on the `production` environment. Neither
-value has a workflow fallback.
+All values in this table are non-secret GitHub environment variables on the
+`production` environment and are read through `vars.*`. None has a workflow
+fallback.
 
-Environment secrets:
+Environment secret:
 
-- `VPS_HOST`
 - `VPS_SSH_PRIVATE_KEY`
+
+`VPS_HOST`, `VPS_USER`, and `VPS_PORT` are variables, not secrets. The private
+SSH key remains the only VPS connection value read through `secrets.*`.
 
 The GitHub `production` environment must have required reviewers enabled before
 the workflow is used. Referencing `environment: production` in YAML enables the

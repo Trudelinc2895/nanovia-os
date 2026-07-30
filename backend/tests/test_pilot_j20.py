@@ -23,10 +23,14 @@ from api.core.monetization.webhook_handler_service import (
     handle_stripe_webhook,
 )
 from api.database import Base
+from api.models.audit import AuditLog
+from api.models.credit_ledger import CreditLedger
 from api.models.pilot import PilotPayment, PilotRequest
+from api.models.user import User
+from api.models.user_module import UserModule
 from api.models.webhook_event import WebhookEvent
 from api.routers import billing as billing_router
-from api.services import billing_service, pilot_payment_service
+from api.services import billing_service, credit_service, pilot_payment_service
 from api.services.billing_service import (
     WEBHOOK_CLAIMED,
     WEBHOOK_IN_PROGRESS,
@@ -65,6 +69,49 @@ async def _isolated_database(tmp_path: Path, name: str):
         yield session_factory
     finally:
         await engine.dispose()
+
+
+@asynccontextmanager
+async def _isolated_legacy_database(tmp_path: Path, name: str):
+    database_path = (tmp_path / f"{name}.db").as_posix()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            Base.metadata.create_all,
+            tables=[
+                User.__table__,
+                CreditLedger.__table__,
+                AuditLog.__table__,
+                UserModule.__table__,
+                WebhookEvent.__table__,
+            ],
+        )
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield session_factory
+    finally:
+        await engine.dispose()
+
+
+def _legacy_credit_checkout(user_id: uuid.UUID, *, session_id: str) -> dict:
+    return {
+        "id": session_id,
+        "mode": "payment",
+        "customer": "cus_legacy",
+        "client_reference_id": str(user_id),
+        "metadata": {"type": "credits", "credits": "25"},
+    }
+
+
+def _legacy_module_checkout(user_id: uuid.UUID, *, session_id: str) -> dict:
+    return {
+        "id": session_id,
+        "mode": "subscription",
+        "customer": "cus_legacy_module",
+        "subscription": "sub_legacy_module",
+        "client_reference_id": str(user_id),
+        "metadata": {"type": "module", "module": "operator"},
+    }
 
 
 def _valid_session(
@@ -604,6 +651,226 @@ async def test_two_event_ids_for_same_session_keep_one_payment(
             assert payment_count == 1
             assert len(events) == 2
             assert all(event.status == "processed" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_legacy_checkout_and_final_status_commit_atomically(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    async with _isolated_legacy_database(tmp_path, "legacy_atomic_success") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="legacy-success@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Success",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            user_id = user.id
+            payload = _legacy_credit_checkout(user_id, session_id="cs_legacy_success")
+
+            first = await handle_stripe_webhook(
+                "evt_legacy_success",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_legacy_success",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            persisted_user = await db.scalar(select(User).where(User.id == user_id))
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_legacy_success"
+                )
+            )
+            assert first["status"] == "processed"
+            assert duplicate["status"] == "duplicate"
+            assert persisted_user is not None and persisted_user.credits == 25
+            assert ledger_count == 1
+            assert event is not None and event.status == "processed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_status_failure_rolls_back_then_retry_is_safe(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    real_update = webhook_handler_service.update_webhook_status
+    update_attempts = 0
+
+    async def fail_first_final_status(*args, **kwargs):
+        nonlocal update_attempts
+        update_attempts += 1
+        if update_attempts == 1:
+            raise OperationalError(
+                "UPDATE webhook_events",
+                {},
+                RuntimeError("final status unavailable"),
+            )
+        return await real_update(*args, **kwargs)
+
+    monkeypatch.setattr(
+        webhook_handler_service,
+        "update_webhook_status",
+        fail_first_final_status,
+    )
+
+    async with _isolated_legacy_database(tmp_path, "legacy_atomic_retry") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="legacy-retry@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Retry",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            user_id = user.id
+            payload = _legacy_credit_checkout(user_id, session_id="cs_legacy_retry")
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_legacy_retry",
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            await db.refresh(user)
+            ledger_after_failure = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            retryable = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_legacy_retry"
+                )
+            )
+            assert user.credits == 0
+            assert ledger_after_failure == 0
+            assert retryable is not None
+            assert retryable.status == "retryable_failure"
+
+            retry = await handle_stripe_webhook(
+                "evt_legacy_retry",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_legacy_retry",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            await db.refresh(retryable)
+            ledger_after_retry = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert retry["status"] == "processed"
+            assert duplicate["status"] == "duplicate"
+            assert user.credits == 25
+            assert ledger_after_retry == 1
+            assert retryable.status == "processed"
+            assert retryable.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_module_retry_never_double_provisions(monkeypatch, tmp_path):
+    real_update = webhook_handler_service.update_webhook_status
+    update_attempts = 0
+
+    async def fail_first_final_status(*args, **kwargs):
+        nonlocal update_attempts
+        update_attempts += 1
+        if update_attempts == 1:
+            raise OperationalError(
+                "UPDATE webhook_events",
+                {},
+                RuntimeError("final status unavailable"),
+            )
+        return await real_update(*args, **kwargs)
+
+    monkeypatch.setattr(
+        webhook_handler_service,
+        "update_webhook_status",
+        fail_first_final_status,
+    )
+
+    async with _isolated_legacy_database(tmp_path, "legacy_module_retry") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="legacy-module@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Module",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_module_checkout(
+                user.id,
+                session_id="cs_legacy_module_retry",
+            )
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_legacy_module_retry",
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            modules_after_failure = await db.scalar(
+                select(func.count()).select_from(UserModule)
+            )
+            assert modules_after_failure == 0
+
+            retry = await handle_stripe_webhook(
+                "evt_legacy_module_retry",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_legacy_module_retry",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            modules = list((await db.execute(select(UserModule))).scalars())
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_legacy_module_retry"
+                )
+            )
+            assert retry["status"] == "processed"
+            assert duplicate["status"] == "duplicate"
+            assert len(modules) == 1
+            assert modules[0].module_slug == "operator"
+            assert modules[0].status == "active"
+            assert event is not None and event.status == "processed"
 
 
 @pytest.mark.asyncio

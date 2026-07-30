@@ -543,6 +543,10 @@ jobs:
           wait_for_healthy web
           wait_for_stable_running alertmanager
 
+          COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}" \
+          RUNTIME_ENV_FILE="${ENV_FILE}" \
+            bash infra/scripts/verify-caddy-postflight.sh
+
           [ "$(git rev-parse HEAD)" = "${DEPLOY_SHA}" ] \
             || fail "Deployed checkout no longer matches the requested commit"
 

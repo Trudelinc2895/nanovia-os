@@ -86,8 +86,13 @@ async def add_credits(
     db: AsyncSession,
     idempotency_key: str | None = None,
     note: str | None = None,
+    *,
+    commit: bool = True,
 ) -> CreditLedger:
-    """Add credits and record in ledger. Idempotent when idempotency_key is provided."""
+    """Add credits and record in ledger. Idempotent when idempotency_key is provided.
+
+    ``commit=False`` lets a transaction orchestrator own the final commit.
+    """
     if amount <= 0:
         raise ValueError(f"add_credits: amount must be positive, got {amount}")
     if not idempotency_key:
@@ -124,9 +129,13 @@ async def add_credits(
         db.add(user)
         db.add(entry)
         await _sync_workspace_credit_projection(user, db)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
     except Exception:
-        await db.rollback()
+        if commit:
+            await db.rollback()
         raise
     logger.info("[credits] +%d for user=%s balance=%d source=%s", amount, user_id, user.credits, source)
     if _HAS_PROM:

@@ -57,6 +57,7 @@ async def handle_stripe_webhook(
         )
         webhook_status = "ignored" if final_status == "ignored" else "processed"
         await update_webhook_status(event_id, webhook_status, None, db)
+        # Sole commit owner for the claim, business effects, and final status.
         await db.commit()
     except Exception as exc:
         await db.rollback()
