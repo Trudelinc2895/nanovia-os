@@ -88,6 +88,19 @@ async def test_add_credits_idempotency(mock_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("amount", [0, -1, -100])
+async def test_add_credits_rejects_non_positive_amount(amount, mock_db):
+    """No zero or negative credit grant can enter the ledger."""
+    from api.services.credit_service import add_credits
+
+    with pytest.raises(ValueError, match="amount must be positive"):
+        await add_credits(uuid.uuid4(), amount, source="stripe", db=mock_db)
+
+    mock_db.execute.assert_not_called()
+    mock_db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_realign_credit_projections_uses_ledger_as_authority(mock_user, mock_db):
     """Ledger wins over stale projections and triggers projection sync."""
     from api.services.credit_service import _realign_credit_projections

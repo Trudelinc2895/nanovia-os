@@ -41,6 +41,8 @@ from api.services.billing_service import (
 PAYMENT_LINK_ID = "plink_pilot"
 PRICE_ID = "price_pilot_297_cad"
 PRODUCT_ID = "prod_pilot"
+CREDIT_PRICE_ID = "price_credit_pack"
+CREDIT_PACK_SIZE = 25
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +51,17 @@ def _pilot_settings(monkeypatch):
     monkeypatch.setattr(settings, "STRIPE_PILOT_PAYMENT_LINK_ID", PAYMENT_LINK_ID)
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRICE_ID", PRICE_ID)
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRODUCT_ID", PRODUCT_ID)
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_PRICE_ID", CREDIT_PRICE_ID)
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_PACK_SIZE", CREDIT_PACK_SIZE)
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_line_items",
+        AsyncMock(
+            return_value={
+                "data": [{"price": {"id": CREDIT_PRICE_ID}, "quantity": 1}]
+            }
+        ),
+    )
 
 
 @asynccontextmanager
@@ -93,13 +106,22 @@ async def _isolated_legacy_database(tmp_path: Path, name: str):
         await engine.dispose()
 
 
-def _legacy_credit_checkout(user_id: uuid.UUID, *, session_id: str) -> dict:
+def _legacy_credit_checkout(
+    user_id: uuid.UUID,
+    *,
+    session_id: str,
+    payment_status: str = "paid",
+    credits: object = CREDIT_PACK_SIZE,
+    amount_total: object = 400,
+) -> dict:
     return {
         "id": session_id,
         "mode": "payment",
+        "payment_status": payment_status,
+        "amount_total": amount_total,
         "customer": "cus_legacy",
         "client_reference_id": str(user_id),
-        "metadata": {"type": "credits", "credits": "25"},
+        "metadata": {"type": "credits", "credits": str(credits)},
     }
 
 
@@ -703,6 +725,185 @@ async def test_legacy_checkout_and_final_status_commit_atomically(
             assert persisted_user is not None and persisted_user.credits == 25
             assert ledger_count == 1
             assert event is not None and event.status == "processed"
+
+
+@pytest.mark.asyncio
+async def test_same_stripe_payment_never_grants_credits_twice(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    async with _isolated_legacy_database(tmp_path, "legacy_payment_idempotency") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="legacy-idempotent@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Idempotent",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_same_stripe_payment",
+            )
+
+            first = await handle_stripe_webhook(
+                "evt_same_payment_first",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            second = await handle_stripe_webhook(
+                "evt_same_payment_second",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            event_count = await db.scalar(
+                select(func.count()).select_from(WebhookEvent)
+            )
+            assert first["status"] == "processed"
+            assert second["status"] == "processed"
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
+            assert event_count == 2
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_payment_never_grants_credits(monkeypatch, tmp_path):
+    line_items = AsyncMock(
+        return_value={
+            "data": [{"price": {"id": CREDIT_PRICE_ID}, "quantity": 1}]
+        }
+    )
+    monkeypatch.setattr(billing_service, "retrieve_credit_line_items", line_items)
+    async with _isolated_legacy_database(tmp_path, "legacy_unconfirmed_payment") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="legacy-unconfirmed@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Unconfirmed",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_unconfirmed_payment",
+                payment_status="unpaid",
+            )
+
+            result = await handle_stripe_webhook(
+                "evt_unconfirmed_payment",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert result["status"] == "processed"
+            assert user.credits == 0
+            assert ledger_count == 0
+            line_items.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_name", "checkout_overrides", "line_item"),
+    [
+        pytest.param(
+            "negative_metadata",
+            {"credits": -CREDIT_PACK_SIZE},
+            {"price": {"id": CREDIT_PRICE_ID}, "quantity": 1},
+            id="negative-credit-metadata",
+        ),
+        pytest.param(
+            "unbounded_metadata",
+            {"credits": 2_500_000},
+            {"price": {"id": CREDIT_PRICE_ID}, "quantity": 1},
+            id="unbounded-credit-metadata",
+        ),
+        pytest.param(
+            "zero_amount",
+            {"amount_total": 0},
+            {"price": {"id": CREDIT_PRICE_ID}, "quantity": 1},
+            id="zero-payment-amount",
+        ),
+        pytest.param(
+            "wrong_price",
+            {},
+            {"price": {"id": "price_not_configured"}, "quantity": 1},
+            id="untrusted-price",
+        ),
+        pytest.param(
+            "coerced_quantity",
+            {},
+            {"price": {"id": CREDIT_PRICE_ID}, "quantity": "1"},
+            id="no-permissive-quantity-coercion",
+        ),
+        pytest.param(
+            "unbounded_quantity",
+            {"credits": 101 * CREDIT_PACK_SIZE},
+            {"price": {"id": CREDIT_PRICE_ID}, "quantity": 101},
+            id="unbounded-pack-quantity",
+        ),
+    ],
+)
+async def test_invalid_credit_contract_fails_closed(
+    monkeypatch,
+    tmp_path,
+    case_name,
+    checkout_overrides,
+    line_item,
+):
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_line_items",
+        AsyncMock(return_value={"data": [line_item]}),
+    )
+    async with _isolated_legacy_database(
+        tmp_path,
+        f"legacy_invalid_credit_{case_name}",
+    ) as sessions:
+        async with sessions() as db:
+            user = User(
+                email=f"legacy-{case_name}@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Legacy Invalid Credit",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id=f"cs_invalid_credit_{case_name}",
+                **checkout_overrides,
+            )
+
+            result = await handle_stripe_webhook(
+                f"evt_invalid_credit_{case_name}",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert result["status"] == "processed"
+            assert user.credits == 0
+            assert ledger_count == 0
 
 
 @pytest.mark.asyncio

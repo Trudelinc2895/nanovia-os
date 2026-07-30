@@ -77,6 +77,7 @@ def _build_addons() -> dict[str, dict]:
 
 
 ADDONS_CONFIG: dict[str, dict] = _build_addons()
+MAX_CREDIT_PACK_QUANTITY = 100
 
 # ─── Per-module à-la-carte pricing ────────────────────────────────────────────
 def _build_modules() -> dict[str, dict]:
@@ -559,6 +560,74 @@ async def activate_user_module(
     logger.info(f"[billing] Module '{module_slug}' activated for user {user_id}")
 
 
+async def retrieve_credit_line_items(session_id: str) -> Any:
+    """Retrieve Checkout line items; tests replace this read-only boundary."""
+    return await asyncio.to_thread(
+        stripe.checkout.Session.list_line_items,
+        session_id,
+        limit=10,
+        expand=["data.price"],
+    )
+
+
+def _stripe_object_id(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        identifier = value.get("id")
+    else:
+        identifier = getattr(value, "id", None)
+    return str(identifier) if identifier else None
+
+
+def _stripe_line_item_data(response: Any) -> list[Any]:
+    if isinstance(response, dict):
+        return list(response.get("data") or [])
+    return list(getattr(response, "data", []) or [])
+
+
+async def _validated_credit_grant(
+    session_id: str,
+    session: dict[str, Any],
+) -> int | None:
+    """Return the server-authorized credit amount for a confirmed Stripe payment."""
+    if session.get("payment_status") != "paid":
+        return None
+    amount_total = session.get("amount_total")
+    if isinstance(amount_total, bool) or not isinstance(amount_total, int) or amount_total <= 0:
+        return None
+    if not settings.STRIPE_CREDIT_PRICE_ID or settings.STRIPE_CREDIT_PACK_SIZE <= 0:
+        return None
+
+    line_items = _stripe_line_item_data(await retrieve_credit_line_items(session_id))
+    if len(line_items) != 1:
+        return None
+    line_item = line_items[0]
+    if isinstance(line_item, dict):
+        price = line_item.get("price")
+        raw_quantity = line_item.get("quantity")
+    else:
+        price = getattr(line_item, "price", None)
+        raw_quantity = getattr(line_item, "quantity", None)
+    if _stripe_object_id(price) != settings.STRIPE_CREDIT_PRICE_ID:
+        return None
+    if isinstance(raw_quantity, bool) or not isinstance(raw_quantity, int):
+        return None
+    quantity = raw_quantity
+    if not 1 <= quantity <= MAX_CREDIT_PACK_QUANTITY:
+        return None
+
+    metadata = session.get("metadata") or {}
+    raw_declared_credits = metadata.get("credits")
+    if not isinstance(raw_declared_credits, str) or not raw_declared_credits.isdecimal():
+        return None
+    declared_credits = int(raw_declared_credits)
+    expected_credits = quantity * settings.STRIPE_CREDIT_PACK_SIZE
+    if declared_credits != expected_credits or expected_credits <= 0:
+        return None
+    return expected_credits
+
+
 async def handle_checkout_completed(
     session: dict[str, Any],
     db: AsyncSession,
@@ -596,15 +665,12 @@ async def handle_checkout_completed(
     # Credit pack one-time purchase
     metadata = session.get("metadata") or {}
     if session.get("mode") == "payment" and metadata.get("type") == "credits":
-        try:
-            credits_to_add = int(metadata.get("credits", 0))
-        except (ValueError, TypeError):
-            credits_to_add = 0
         session_id = session.get("id")
         if not session_id:
             logger.error("[billing] checkout.session.completed missing session id — cannot safely credit")
             return
-        if credits_to_add > 0:
+        credits_to_add = await _validated_credit_grant(session_id, session)
+        if credits_to_add is not None:
             from api.services.credit_service import add_credits
             idempotency_key = f"stripe_checkout_{session_id}_{credits_to_add}"
             await add_credits(

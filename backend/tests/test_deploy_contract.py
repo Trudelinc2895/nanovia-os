@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 
@@ -15,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 RUNBOOK = REPO_ROOT / "docs" / "J21A_CANONICAL_DEPLOYMENT.md"
 POSTFLIGHT = REPO_ROOT / "infra" / "scripts" / "verify-caddy-postflight.sh"
+TEST_PUBLIC_WEB_URL = "https://nanovia.invalid"
 
 
 def _bash_executable() -> str:
@@ -34,6 +36,7 @@ def _bash_executable() -> str:
         if probe.returncode == 0:
             return candidate
     pytest.skip("A functional Bash executable is required for postflight tests")
+    raise RuntimeError("pytest.skip() unexpectedly returned")
 
 
 def _write_fake_command(path: Path, body: str) -> None:
@@ -84,7 +87,7 @@ esac
         {
             "PATH": f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
             "COMPOSE_PROJECT_NAME": "nanovia-test",
-            "PUBLIC_WEB_URL": "https://nanovia.invalid",
+            "PUBLIC_WEB_URL": TEST_PUBLIC_WEB_URL,
             "PYTHON_BIN": python_bin,
             "DOCKER_BIN": (fake_bin / "docker").as_posix(),
             "CURL_BIN": (fake_bin / "curl").as_posix(),
@@ -142,8 +145,16 @@ def test_caddy_postflight_succeeds_with_healthy_service_and_https(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert "CADDY_POSTFLIGHT=verified" in completed.stdout
     curl_calls = curl_log.read_text(encoding="utf-8")
-    assert "/api/v1/health/ready" in curl_calls
-    assert "https://nanovia.invalid/" in curl_calls
+    curl_arguments = [
+        argument
+        for call in curl_calls.splitlines()
+        for argument in shlex.split(call)
+    ]
+    expected_urls = {
+        f"{TEST_PUBLIC_WEB_URL}/api/v1/health/ready",
+        f"{TEST_PUBLIC_WEB_URL}/",
+    }
+    assert expected_urls.issubset(set(curl_arguments))
     assert "--proto =https" in curl_calls
     assert " -k " not in f" {curl_calls} "
 
