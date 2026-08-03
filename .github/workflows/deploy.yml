@@ -251,6 +251,19 @@ jobs:
             printf '%s' "${ids[0]}"
           }
 
+          single_container_for_service_any_state() {
+            local service="$1"
+            local ids=()
+            mapfile -t ids < <(
+              docker ps -aq \
+                --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+                --filter "label=com.docker.compose.service=${service}"
+            )
+            [ "${#ids[@]}" -eq 1 ] \
+              || fail "Expected one ${service} container; found ${#ids[@]}"
+            printf '%s' "${ids[0]}"
+          }
+
           mounted_volume_name() {
             local container_id="$1"
             local destination="$2"
@@ -279,16 +292,18 @@ jobs:
 
           wait_for_stable_running() {
             local service="$1"
+            local attempts="${2:-6}"
+            local delay_seconds="${3:-5}"
             local container_id
             local initial_restart_count
             local restart_count
             local state
             local attempt
-            container_id="$(single_container_for_service "${service}")"
+            container_id="$(single_container_for_service_any_state "${service}")"
             initial_restart_count="$(
               docker inspect --format '{{.RestartCount}}' "${container_id}"
             )"
-            for attempt in $(seq 1 6); do
+            for attempt in $(seq 1 "${attempts}"); do
               state="$(docker inspect --format '{{.State.Status}}' "${container_id}")"
               restart_count="$(
                 docker inspect --format '{{.RestartCount}}' "${container_id}"
@@ -297,10 +312,93 @@ jobs:
                 || fail "${service} is not running"
               [ "${restart_count}" = "${initial_restart_count}" ] \
                 || fail "${service} restarted during postflight"
-              [ "${attempt}" -eq 6 ] && return 0
-              sleep 5
+              [ "${attempt}" -eq "${attempts}" ] && return 0
+              sleep "${delay_seconds}"
             done
             fail "${service} did not remain stable"
+          }
+
+          wait_for_stable_http_readiness() {
+            local service="$1"
+            local readiness_url="$2"
+            local attempts="${3:-12}"
+            local delay_seconds="${4:-5}"
+            local container_id
+            local initial_restart_count
+            local restart_count
+            local state
+            local ready_observations=0
+            local attempt
+            container_id="$(single_container_for_service_any_state "${service}")"
+            initial_restart_count="$(
+              docker inspect --format '{{.RestartCount}}' "${container_id}"
+            )"
+            for attempt in $(seq 1 "${attempts}"); do
+              state="$(docker inspect --format '{{.State.Status}}' "${container_id}")"
+              restart_count="$(
+                docker inspect --format '{{.RestartCount}}' "${container_id}"
+              )"
+              [ "${state}" = "running" ] \
+                || fail "${service} is not running"
+              [ "${restart_count}" = "${initial_restart_count}" ] \
+                || fail "${service} restarted during readiness checks"
+              if compose exec -T "${service}" python -c \
+                'import sys, urllib.request; response = urllib.request.urlopen(sys.argv[1], timeout=5); sys.exit(0 if 200 <= response.status < 300 else 1)' \
+                "${readiness_url}" >/dev/null 2>&1; then
+                ready_observations=$((ready_observations + 1))
+                [ "${ready_observations}" -ge 2 ] && return 0
+              else
+                ready_observations=0
+              fi
+              [ "${attempt}" -eq "${attempts}" ] && break
+              sleep "${delay_seconds}"
+            done
+            fail "${service} did not become stably ready"
+          }
+
+          backup_filesystem_target() {
+            local requested_root="$1"
+            local normalized_root
+            local candidate
+            local parent
+            [ -n "${requested_root}" ] || fail "BACKUP_ROOT must not be empty"
+            case "${requested_root}" in
+              /*) ;;
+              *) fail "BACKUP_ROOT must be an absolute path" ;;
+            esac
+            normalized_root="$(realpath -m -- "${requested_root}")"
+            [ -n "${normalized_root}" ] || fail "Unable to normalize BACKUP_ROOT"
+            if [ -e "${normalized_root}" ]; then
+              [ -d "${normalized_root}" ] \
+                || fail "Existing BACKUP_ROOT is not a directory"
+              candidate="${normalized_root}"
+            else
+              candidate="${normalized_root}"
+              while [ ! -e "${candidate}" ]; do
+                parent="$(dirname -- "${candidate}")"
+                [ -n "${parent}" ] && [ "${parent}" != "${candidate}" ] \
+                  || fail "Unable to find an existing BACKUP_ROOT ancestor"
+                candidate="${parent}"
+              done
+              [ -d "${candidate}" ] \
+                || fail "Existing BACKUP_ROOT ancestor is not a directory"
+            fi
+            [ -n "${candidate}" ] && [ -e "${candidate}" ] \
+              || fail "Backup filesystem target must exist and be non-empty"
+            printf '%s' "${candidate}"
+          }
+
+          available_backup_bytes() {
+            local requested_root="$1"
+            local filesystem_target
+            local available_kib
+            filesystem_target="$(backup_filesystem_target "${requested_root}")" || return 1
+            available_kib="$(
+              df -Pk -- "${filesystem_target}" | awk 'NR == 2 {print $4}'
+            )"
+            [[ "${available_kib}" =~ ^[0-9]+$ ]] \
+              || fail "Unable to determine available backup storage"
+            printf '%s' "$((available_kib * 1024))"
           }
 
           for name in \
@@ -399,13 +497,7 @@ jobs:
           [ "$(mounted_volume_name "${REDIS_CONTAINER}" /data)" = "${REDIS_VOLUME_NAME}" ] \
             || fail "Redis is mounted on a different volume"
 
-          NORMALIZED_BACKUP_ROOT="$(realpath -m -- "${BACKUP_ROOT}")"
-          [ -n "${NORMALIZED_BACKUP_ROOT}" ] || fail "Unable to normalize BACKUP_ROOT"
-          BACKUP_PARENT="$(dirname -- "${NORMALIZED_BACKUP_ROOT}")"
-          [ -n "${BACKUP_PARENT}" ] || fail "Unable to determine the BACKUP_ROOT parent"
-          AVAILABLE_BYTES="$(df -Pk -- "${BACKUP_PARENT}" | awk 'NR == 2 {print $4 * 1024}')"
-          [[ "${AVAILABLE_BYTES}" =~ ^[0-9]+$ ]] \
-            || fail "Unable to determine available backup storage"
+          AVAILABLE_BYTES="$(available_backup_bytes "${BACKUP_ROOT}")"
           DATABASE_BYTES="$(
             docker exec "${POSTGRES_CONTAINER}" sh -ceu \
               'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT pg_database_size(current_database())"'
@@ -541,6 +633,10 @@ jobs:
           wait_for_healthy redis
           wait_for_healthy api
           wait_for_healthy web
+          wait_for_healthy admin
+          wait_for_stable_http_readiness \
+            ai-orchestrator \
+            http://127.0.0.1:8020/health
           wait_for_stable_running alertmanager
 
           COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}" \
