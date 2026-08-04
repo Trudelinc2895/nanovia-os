@@ -23,6 +23,51 @@ Stripe inventory note only:
 These account IDs are not credentials. This procedure does not create, copy,
 modify, or disable a Stripe object and does not invent any Stripe object ID.
 
+## Canonical Pro Pilot Stripe contract
+
+The only authorized initial Pilot offer is `Nanovia Pro Pilot`, one unit,
+one-time, `CAD 297.00` (`29700` cents). The runtime contract requires the
+configured Stripe Account, Product, Price, Payment Link ID, and Payment Link URL
+to agree exactly. The Product, Price, and Payment Link must be active and in the
+same Stripe mode. Promotions, adjustable quantity, automatic tax, extra line
+items, currency conversion, and a recurring Price are rejected. The canonical
+Product, Payment Link, Checkout Session, and PaymentIntent carry the
+server-verified marker `nanovia_pro_pilot_v1`. The supported Stripe API version
+is explicitly `2024-12-18.acacia` for the currently pinned SDK.
+
+The browser redirect never confirms payment or grants value. A webhook signature
+is verified with a 300-second tolerance, then the event is retrieved from the
+configured Stripe account and checked against the canonical Checkout Session,
+PaymentIntent, Charge, and balance transaction. Delivery requires a paid and
+captured charge, exactly `29700` cents actually received in CAD, one line item,
+one quantity, the expected Pilot request and beneficiary, and no refund or
+dispute. The webhook event ledger and Pilot payment uniqueness constraints
+provide replay and concurrent-delivery protection inside the existing atomic
+webhook transaction.
+
+Full or successful refunds, lost disputes, and canceled PaymentIntents move the
+Pilot to a failed state. Partial or pending refunds and open disputes require
+manual review. Late success events never reactivate a failed or manual-review
+Pilot automatically. The public confirmation endpoint checks only a previously
+recorded canonical Pilot payment and cannot be used as an oracle for arbitrary
+Stripe Session or PaymentIntent identifiers.
+
+### Production Stripe preflight — currently NOT VERIFIED
+
+No authenticated Stripe read is authorized by this runbook or by the contract
+tests. The real account, Product, Price, Payment Link, webhook endpoint, API
+version, livemode, active states, relationships, metadata, amount, currency,
+billing type, quantity controls, promotion/tax settings, and charge behavior
+remain **NOT VERIFIED** until a separate read-only production preflight is
+explicitly authorized.
+
+That future preflight must use a restricted read-only Stripe key, bounded
+timeouts and retries, and must not print secrets, personal data, or the complete
+private Payment Link URL. It must not create or mutate Stripe objects. Its margin
+observation should report gross revenue, tax, Stripe fee, and net revenue before
+delivery. Delivery cost remains an external business input, so this observation
+must not claim or guarantee profitability.
+
 ## Required GitHub production configuration
 
 The workflow fails closed when any required value is absent.

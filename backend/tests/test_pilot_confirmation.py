@@ -7,22 +7,38 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-import stripe
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.database import Base
 from api.models.pilot import PilotPayment, PilotRequest
 from api.routers import billing as billing_router
+from api.services.pilot_stripe_contract_service import (
+    VerifiedPilotCheckout,
+    load_pilot_stripe_config,
+)
 
 
+ACCOUNT_ID = "acct_pilot"
 PAYMENT_LINK_ID = "plink_pilot"
+PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
 PRICE_ID = "price_pilot"
+PRODUCT_ID = "prod_pilot"
 
 
 @pytest.fixture(autouse=True)
 def _pilot_settings(monkeypatch):
     monkeypatch.setattr(billing_router.settings, "APP_ENV", "test")
+    monkeypatch.setattr(
+        billing_router.settings,
+        "STRIPE_ACCOUNT_ID",
+        ACCOUNT_ID,
+    )
+    monkeypatch.setattr(
+        billing_router.settings,
+        "STRIPE_PILOT_PRODUCT_ID",
+        PRODUCT_ID,
+    )
     monkeypatch.setattr(
         billing_router.settings,
         "STRIPE_PILOT_PAYMENT_LINK_ID",
@@ -32,6 +48,11 @@ def _pilot_settings(monkeypatch):
         billing_router.settings,
         "STRIPE_PILOT_PRICE_ID",
         PRICE_ID,
+    )
+    monkeypatch.setattr(
+        billing_router.settings,
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        PAYMENT_LINK_URL,
     )
 
 
@@ -108,7 +129,21 @@ def _stripe_session(
 
 
 def _install_stripe_session(monkeypatch, session: dict) -> AsyncMock:
-    retrieve = AsyncMock(return_value=session)
+    retrieve = AsyncMock(
+        return_value=VerifiedPilotCheckout(
+            session=session,
+            line_item={},
+            config=load_pilot_stripe_config(),
+            request_id=uuid.UUID(session["client_reference_id"]),
+            customer_id="cus_pilot",
+            customer_email="client@example.com",
+            payment_intent_id=f"pi_{session['id']}",
+            paid=session.get("payment_status") == "paid",
+            gross_amount=29_700,
+            stripe_fee_amount=1_174,
+            tax_amount=0,
+        )
+    )
     monkeypatch.setattr(
         billing_router,
         "_retrieve_pilot_checkout_session",
@@ -235,7 +270,7 @@ async def test_redirect_before_webhook_retries_then_confirms_without_provisionin
             assert confirmed.model_dump() == {"status": "confirmed"}
             assert repeated.model_dump() == {"status": "confirmed"}
             assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 1
-            assert retrieve.await_count == 3
+            assert retrieve.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -268,7 +303,7 @@ async def test_incomplete_verified_payment_remains_processing(monkeypatch, tmp_p
 async def test_forged_or_unrelated_session_never_confirms(monkeypatch, tmp_path):
     session_id = "cs_forged"
     retrieve = AsyncMock(
-        side_effect=stripe.error.InvalidRequestError("No such session", "id")
+        side_effect=AssertionError("Unknown sessions must not call Stripe")
     )
     monkeypatch.setattr(
         billing_router,
@@ -283,8 +318,9 @@ async def test_forged_or_unrelated_session_never_confirms(monkeypatch, tmp_path)
                 session_id=session_id,
             )
 
-            assert response.model_dump() == {"status": "manual_review"}
+            assert response.model_dump() == {"status": "processing"}
             assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+            retrieve.assert_not_awaited()
 
 
 @pytest.mark.asyncio

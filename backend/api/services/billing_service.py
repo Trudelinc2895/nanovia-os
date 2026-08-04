@@ -30,6 +30,13 @@ from api.models.webhook_event import WebhookEvent
 from api.services.pilot_payment_service import (
     PILOT_EVENT_TYPES,
     process_pilot_checkout_event,
+    process_pilot_reversal_event,
+)
+from api.services.pilot_stripe_contract_service import (
+    PILOT_REVERSAL_EVENT_TYPES,
+    is_canonical_payment_link,
+    load_pilot_stripe_config,
+    stripe_field,
 )
 from api.services.module_registry import (
     MODULE_REGISTRY,
@@ -731,35 +738,32 @@ async def process_stripe_event(
     event_id: str | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
-    pilot_identifiers = (
-        settings.STRIPE_PILOT_PAYMENT_LINK_ID,
-        settings.STRIPE_PILOT_PRICE_ID,
-        settings.STRIPE_PILOT_PRODUCT_ID,
-    )
-    pilot_is_configured = all(pilot_identifiers)
-    incoming_payment_link = data.get("payment_link")
-    if isinstance(incoming_payment_link, dict):
-        incoming_payment_link = incoming_payment_link.get("id")
-    elif not isinstance(incoming_payment_link, str):
-        incoming_payment_link = getattr(incoming_payment_link, "id", None)
-    is_matching_pilot_event = (
-        event_type in PILOT_EVENT_TYPES
-        and pilot_is_configured
-        and bool(incoming_payment_link)
-        and incoming_payment_link == settings.STRIPE_PILOT_PAYMENT_LINK_ID
-    )
-
-    if is_matching_pilot_event:
+    if event_type in PILOT_REVERSAL_EVENT_TYPES:
         if not event_id:
             raise RuntimeError("Stripe event id is required for Pilot processing")
-        return await process_pilot_checkout_event(
+        return await process_pilot_reversal_event(
             event_id,
             event_type,
             data,
             db,
         )
-    elif event_type in PILOT_EVENT_TYPES and event_type != "checkout.session.completed":
-        return "ignored"
+
+    if event_type in PILOT_EVENT_TYPES:
+        incoming_payment_link = stripe_field(data, "payment_link")
+        if incoming_payment_link:
+            config = load_pilot_stripe_config()
+            if not is_canonical_payment_link(incoming_payment_link, config):
+                return "ignored"
+            if not event_id:
+                raise RuntimeError("Stripe event id is required for Pilot processing")
+            return await process_pilot_checkout_event(
+                event_id,
+                event_type,
+                data,
+                db,
+            )
+        if event_type != "checkout.session.completed":
+            return "ignored"
 
     if event_type == "checkout.session.completed":
         await handle_checkout_completed(data, db, commit=False)

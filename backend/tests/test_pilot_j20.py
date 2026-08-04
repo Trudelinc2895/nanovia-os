@@ -30,16 +30,28 @@ from api.models.user import User
 from api.models.user_module import UserModule
 from api.models.webhook_event import WebhookEvent
 from api.routers import billing as billing_router
-from api.services import billing_service, credit_service, pilot_payment_service
+from api.services import (
+    billing_service,
+    credit_service,
+    pilot_payment_service,
+    pilot_stripe_contract_service,
+)
 from api.services.billing_service import (
     WEBHOOK_CLAIMED,
     WEBHOOK_IN_PROGRESS,
     claim_webhook_event,
 )
+from api.services.pilot_stripe_contract_service import (
+    PILOT_CONTRACT_MARKER,
+    PilotStripeContractError,
+    validate_pilot_checkout,
+)
 
 
+ACCOUNT_ID = "acct_pilot"
 PAYMENT_LINK_ID = "plink_pilot"
-PRICE_ID = "price_pilot_297_cad"
+PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
+PRICE_ID = "price_pilot297cad"
 PRODUCT_ID = "prod_pilot"
 CREDIT_PRICE_ID = "price_credit_pack"
 CREDIT_PACK_SIZE = 25
@@ -48,9 +60,16 @@ CREDIT_PACK_SIZE = 25
 @pytest.fixture(autouse=True)
 def _pilot_settings(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "test")
+    monkeypatch.setattr(settings, "STRIPE_ACCOUNT_ID", ACCOUNT_ID)
     monkeypatch.setattr(settings, "STRIPE_PILOT_PAYMENT_LINK_ID", PAYMENT_LINK_ID)
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        PAYMENT_LINK_URL,
+    )
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRICE_ID", PRICE_ID)
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRODUCT_ID", PRODUCT_ID)
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_local_test")
     monkeypatch.setattr(settings, "STRIPE_CREDIT_PRICE_ID", CREDIT_PRICE_ID)
     monkeypatch.setattr(settings, "STRIPE_CREDIT_PACK_SIZE", CREDIT_PACK_SIZE)
     monkeypatch.setattr(
@@ -62,6 +81,7 @@ def _pilot_settings(monkeypatch):
             }
         ),
     )
+    _install_line_items(monkeypatch)
 
 
 @asynccontextmanager
@@ -149,10 +169,14 @@ def _valid_session(
         "mode": "payment",
         "livemode": False,
         "currency": "cad",
+        "amount_subtotal": 29700,
+        "amount_total": 29700,
         "payment_link": PAYMENT_LINK_ID,
         "payment_intent": payment_intent_id,
         "payment_status": payment_status,
+        "customer": "cus_pilot",
         "customer_details": {"email": email},
+        "metadata": {"nanovia_contract": PILOT_CONTRACT_MARKER},
     }
     if request_id is not None:
         session["client_reference_id"] = str(request_id)
@@ -167,29 +191,111 @@ def _line_items(
     recurring=None,
     price_type: str = "one_time",
     quantity: int = 1,
+    unit_amount: int = 29700,
+    price_active: bool = True,
+    product_active: bool = True,
 ) -> dict:
     return {
         "data": [
             {
                 "quantity": quantity,
                 "amount_subtotal": 29700,
+                "amount_total": 29700,
                 "price": {
                     "id": price_id,
+                    "active": price_active,
+                    "livemode": False,
+                    "unit_amount": unit_amount,
                     "currency": currency,
                     "recurring": recurring,
                     "type": price_type,
-                    "product": product_id,
+                    "product": {
+                        "id": product_id,
+                        "active": product_active,
+                        "livemode": False,
+                        "name": "Nanovia Pro Pilot",
+                        "metadata": {
+                            "nanovia_contract": PILOT_CONTRACT_MARKER,
+                        },
+                    },
                 },
             }
         ]
     }
 
 
+def _provider_session(signed_session: dict) -> dict:
+    payment_status = signed_session.get("payment_status", "paid")
+    paid = payment_status == "paid"
+    payment_intent_id = signed_session.get("payment_intent", "pi_pilot")
+    customer_id = signed_session.get("customer", "cus_pilot")
+    provider = dict(signed_session)
+    provider.update(
+        {
+            "status": "complete" if paid else "open",
+            "amount_subtotal": signed_session.get("amount_subtotal", 29700),
+            "amount_total": signed_session.get("amount_total", 29700),
+            "total_details": {
+                "amount_discount": 0,
+                "amount_tax": 0,
+                "amount_shipping": 0,
+            },
+            "discounts": [],
+            "customer": customer_id,
+            "metadata": {"nanovia_contract": PILOT_CONTRACT_MARKER},
+            "payment_intent": {
+                "id": payment_intent_id,
+                "livemode": False,
+                "amount": 29700,
+                "amount_received": 29700 if paid else 0,
+                "currency": "cad",
+                "customer": customer_id,
+                "status": "succeeded" if paid else "processing",
+                "latest_charge": {
+                    "id": "ch_pilot",
+                    "livemode": False,
+                    "paid": paid,
+                    "refunded": False,
+                    "disputed": False,
+                    "amount": 29700,
+                    "amount_captured": 29700 if paid else 0,
+                    "amount_refunded": 0,
+                    "currency": "cad",
+                    "customer": customer_id,
+                    "balance_transaction": {
+                        "id": "txn_pilot",
+                        "amount": 29700,
+                        "currency": "cad",
+                        "fee": 1174,
+                        "net": 28526,
+                    },
+                },
+            },
+        }
+    )
+    return provider
+
+
 def _install_line_items(monkeypatch, **overrides) -> AsyncMock:
-    boundary = AsyncMock(return_value=_line_items(**overrides))
+    async def verify(event_id, event_type, signed_session):
+        del event_id
+        provider_session = _provider_session(signed_session)
+        config = pilot_stripe_contract_service.load_pilot_stripe_config()
+        require_paid = event_type == "checkout.session.async_payment_succeeded" or (
+            event_type == "checkout.session.completed"
+            and provider_session.get("payment_status") == "paid"
+        )
+        return validate_pilot_checkout(
+            provider_session,
+            _line_items(**overrides),
+            config,
+            require_paid=require_paid,
+        )
+
+    boundary = AsyncMock(side_effect=verify)
     monkeypatch.setattr(
         pilot_payment_service,
-        "retrieve_pilot_line_items",
+        "verify_pilot_checkout_event",
         boundary,
     )
     return boundary
@@ -282,23 +388,93 @@ async def test_invalid_stripe_signature_returns_400(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_webhook_signature_uses_bounded_tolerance_and_server_secret(monkeypatch):
+    captured = {}
+
+    def construct_event(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": "evt_signature_contract",
+            "type": "payment_intent.created",
+            "data": {"object": {"id": "pi_signature_contract"}},
+        }
+
+    handler = AsyncMock(
+        return_value={
+            "event_id": "evt_signature_contract",
+            "event_type": "payment_intent.created",
+            "status": "ignored",
+        }
+    )
+    monkeypatch.setattr(
+        billing_router.stripe.Webhook,
+        "construct_event",
+        construct_event,
+    )
+    monkeypatch.setattr(billing_router, "handle_stripe_webhook", handler)
+
+    response = await billing_router.stripe_webhook(
+        _request(b'{"synthetic":true}'),
+        AsyncMock(),
+        stripe_signature="t=123,v1=synthetic",
+    )
+
+    assert captured["secret"] == "whsec_local_test"
+    assert captured["tolerance"] == 300
+    assert captured["payload"] == b'{"synthetic":true}'
+    assert response["status"] == "ignored"
+    handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_webhook_secret_fails_before_signature_processing(monkeypatch):
+    construct_event = AsyncMock(
+        side_effect=AssertionError("Missing secret must fail before Stripe")
+    )
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(
+        billing_router.stripe.Webhook,
+        "construct_event",
+        construct_event,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_router.stripe_webhook(
+            _request(),
+            AsyncMock(),
+            stripe_signature="t=123,v1=synthetic",
+        )
+
+    assert exc_info.value.status_code == 503
+    construct_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("configured_ids", "incoming_link"),
+    ("configured_ids", "incoming_link", "expected"),
     [
-        pytest.param(("", "", ""), PAYMENT_LINK_ID, id="configuration-absent"),
+        pytest.param(
+            ("", "", ""),
+            PAYMENT_LINK_ID,
+            "configuration_error",
+            id="configuration-absent",
+        ),
         pytest.param(
             (PAYMENT_LINK_ID, "", PRODUCT_ID),
             PAYMENT_LINK_ID,
+            "configuration_error",
             id="configuration-partial",
         ),
         pytest.param(
             (PAYMENT_LINK_ID, PRICE_ID, PRODUCT_ID),
             "",
+            "legacy",
             id="incoming-link-empty",
         ),
         pytest.param(
             (PAYMENT_LINK_ID, PRICE_ID, PRODUCT_ID),
             "plink_other",
+            "ignored",
             id="different-payment-link",
         ),
     ],
@@ -307,6 +483,7 @@ async def test_non_pilot_checkout_never_enters_pilot_dispatch(
     monkeypatch,
     configured_ids,
     incoming_link,
+    expected,
 ):
     payment_link_id, price_id, product_id = configured_ids
     monkeypatch.setattr(
@@ -330,16 +507,27 @@ async def test_non_pilot_checkout_never_enters_pilot_dispatch(
     )
     db = AsyncMock()
 
-    result = await billing_service.process_stripe_event(
-        "checkout.session.completed",
-        {"payment_link": incoming_link},
-        db,
-        event_id="evt_non_pilot",
-    )
-
-    assert result == "processed"
+    if expected == "configuration_error":
+        with pytest.raises(PilotStripeContractError):
+            await billing_service.process_stripe_event(
+                "checkout.session.completed",
+                {"payment_link": incoming_link},
+                db,
+                event_id="evt_non_pilot",
+            )
+    else:
+        result = await billing_service.process_stripe_event(
+            "checkout.session.completed",
+            {"payment_link": incoming_link},
+            db,
+            event_id="evt_non_pilot",
+        )
+        assert result == ("processed" if expected == "legacy" else "ignored")
     pilot_processor.assert_not_awaited()
-    legacy_processor.assert_awaited_once()
+    if expected == "legacy":
+        legacy_processor.assert_awaited_once()
+    else:
+        legacy_processor.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -428,7 +616,7 @@ async def test_unrelated_event_is_ignored_without_pilot_side_effect(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_async_pilot_event_is_ignored(monkeypatch):
+async def test_unconfigured_async_pilot_event_fails_closed(monkeypatch):
     monkeypatch.setattr(settings, "STRIPE_PILOT_PAYMENT_LINK_ID", "")
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRICE_ID", "")
     monkeypatch.setattr(settings, "STRIPE_PILOT_PRODUCT_ID", "")
@@ -439,14 +627,13 @@ async def test_unconfigured_async_pilot_event_is_ignored(monkeypatch):
         pilot_processor,
     )
 
-    result = await billing_service.process_stripe_event(
-        "checkout.session.async_payment_succeeded",
-        {"payment_link": PAYMENT_LINK_ID},
-        AsyncMock(),
-        event_id="evt_unconfigured_async",
-    )
-
-    assert result == "ignored"
+    with pytest.raises(PilotStripeContractError):
+        await billing_service.process_stripe_event(
+            "checkout.session.async_payment_succeeded",
+            {"payment_link": PAYMENT_LINK_ID},
+            AsyncMock(),
+            event_id="evt_unconfigured_async",
+        )
     pilot_processor.assert_not_awaited()
 
 
@@ -501,12 +688,22 @@ async def test_wrong_payment_link_or_price_is_ignored(
             if wrong_field == "payment_link":
                 session["payment_link"] = wrong_value
 
-            result = await pilot_payment_service.process_pilot_checkout_event(
-                f"evt_wrong_{wrong_field}",
-                "checkout.session.completed",
-                session,
-                db,
-            )
+            if wrong_field == "price":
+                with pytest.raises(PilotStripeContractError):
+                    await pilot_payment_service.process_pilot_checkout_event(
+                        f"evt_wrong_{wrong_field}",
+                        "checkout.session.completed",
+                        session,
+                        db,
+                    )
+                result = "ignored"
+            else:
+                result = await pilot_payment_service.process_pilot_checkout_event(
+                    f"evt_wrong_{wrong_field}",
+                    "checkout.session.completed",
+                    session,
+                    db,
+                )
             await db.commit()
 
             payment_count = await db.scalar(
@@ -519,23 +716,28 @@ async def test_wrong_payment_link_or_price_is_ignored(
 
 
 @pytest.mark.asyncio
-async def test_unique_open_email_is_safe_fallback(monkeypatch, tmp_path):
+async def test_unique_open_email_without_request_reference_is_rejected(
+    monkeypatch,
+    tmp_path,
+):
     _install_line_items(monkeypatch)
     async with _isolated_database(tmp_path, "email_fallback") as sessions:
         async with sessions() as db:
             pilot_request = await _add_request(db, email="client@example.com")
-            result = await pilot_payment_service.process_pilot_checkout_event(
-                "evt_email",
-                "checkout.session.completed",
-                _valid_session(email="CLIENT@example.com"),
-                db,
-            )
+            with pytest.raises(PilotStripeContractError):
+                await pilot_payment_service.process_pilot_checkout_event(
+                    "evt_email",
+                    "checkout.session.completed",
+                    _valid_session(email="CLIENT@example.com"),
+                    db,
+                )
             await db.commit()
 
-            payment = (await db.execute(select(PilotPayment))).scalar_one()
-            assert result == "paid"
-            assert payment.pilot_request_id == pilot_request.id
-            assert pilot_request.status == "paid"
+            payment_count = await db.scalar(
+                select(func.count()).select_from(PilotPayment)
+            )
+            assert payment_count == 0
+            assert pilot_request.status == "pending"
 
 
 @pytest.mark.asyncio
@@ -546,18 +748,19 @@ async def test_ambiguous_email_requires_manual_review(monkeypatch, tmp_path):
             first = await _add_request(db, name="Premier client")
             second = await _add_request(db, name="Deuxième client")
 
-            result = await pilot_payment_service.process_pilot_checkout_event(
-                "evt_ambiguous",
-                "checkout.session.completed",
-                _valid_session(),
-                db,
-            )
+            with pytest.raises(PilotStripeContractError):
+                await pilot_payment_service.process_pilot_checkout_event(
+                    "evt_ambiguous",
+                    "checkout.session.completed",
+                    _valid_session(),
+                    db,
+                )
             await db.commit()
 
-            payment = (await db.execute(select(PilotPayment))).scalar_one()
-            assert result == "manual_review"
-            assert payment.status == "manual_review"
-            assert payment.pilot_request_id is None
+            payment_count = await db.scalar(
+                select(func.count()).select_from(PilotPayment)
+            )
+            assert payment_count == 0
             assert first.status == "pending"
             assert second.status == "pending"
 
@@ -673,6 +876,227 @@ async def test_two_event_ids_for_same_session_keep_one_payment(
             assert payment_count == 1
             assert len(events) == 2
             assert all(event.status == "processed" for event in events)
+
+
+def _reversal_object(
+    event_type: str,
+    *,
+    amount: int = 29_700,
+    status: str | None = None,
+) -> dict:
+    if event_type == "payment_intent.canceled":
+        return {
+            "id": "pi_reversal",
+            "livemode": False,
+            "currency": "cad",
+            "status": "canceled",
+        }
+    value = {
+        "id": "ch_reversal" if event_type == "charge.refunded" else "obj_reversal",
+        "payment_intent": "pi_reversal",
+        "livemode": False,
+        "currency": "cad",
+    }
+    if event_type == "charge.refunded":
+        value["amount_refunded"] = amount
+    elif event_type.startswith("refund."):
+        value["amount"] = amount
+        value["status"] = status or "succeeded"
+    elif event_type == "charge.dispute.closed":
+        value["status"] = status or "lost"
+    return value
+
+
+def _install_reversal_verification(monkeypatch, provider_object: dict) -> AsyncMock:
+    boundary = AsyncMock(
+        return_value=(
+            provider_object,
+            pilot_stripe_contract_service.load_pilot_stripe_config(),
+        )
+    )
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "verify_pilot_reversal_event",
+        boundary,
+    )
+    return boundary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "amount", "provider_status", "expected_status"),
+    [
+        pytest.param(
+            "charge.refunded",
+            29_700,
+            None,
+            "failed",
+            id="full-refund",
+        ),
+        pytest.param(
+            "charge.refunded",
+            10_000,
+            None,
+            "manual_review",
+            id="partial-refund",
+        ),
+        pytest.param(
+            "refund.updated",
+            29_700,
+            "pending",
+            "manual_review",
+            id="pending-refund",
+        ),
+        pytest.param(
+            "charge.dispute.created",
+            29_700,
+            None,
+            "manual_review",
+            id="dispute-created",
+        ),
+        pytest.param(
+            "charge.dispute.closed",
+            29_700,
+            "lost",
+            "failed",
+            id="dispute-lost",
+        ),
+        pytest.param(
+            "charge.dispute.closed",
+            29_700,
+            "won",
+            "manual_review",
+            id="dispute-won-no-reactivation",
+        ),
+        pytest.param(
+            "payment_intent.canceled",
+            29_700,
+            None,
+            "failed",
+            id="payment-intent-canceled",
+        ),
+    ],
+)
+async def test_refund_dispute_and_cancellation_never_leave_pilot_paid(
+    monkeypatch,
+    tmp_path,
+    event_type,
+    amount,
+    provider_status,
+    expected_status,
+):
+    provider_object = _reversal_object(
+        event_type,
+        amount=amount,
+        status=provider_status,
+    )
+    verifier = _install_reversal_verification(monkeypatch, provider_object)
+    async with _isolated_database(tmp_path, f"reversal_{event_type}_{expected_status}") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status="paid")
+            payment = _existing_payment(
+                request=pilot_request,
+                session_id="cs_reversal",
+                payment_intent_id="pi_reversal",
+            )
+            db.add(payment)
+            await db.commit()
+
+            first = await handle_stripe_webhook(
+                f"evt_{event_type}_{expected_status}",
+                event_type,
+                provider_object,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                f"evt_{event_type}_{expected_status}",
+                event_type,
+                provider_object,
+                db,
+            )
+            persisted_payment = (
+                await db.execute(select(PilotPayment))
+            ).scalar_one()
+            persisted_request = (
+                await db.execute(select(PilotRequest))
+            ).scalar_one()
+
+            assert first["status"] == expected_status
+            assert duplicate["status"] == "duplicate"
+            assert persisted_payment.status == expected_status
+            assert persisted_request.status == expected_status
+            assert persisted_payment.status != "paid"
+            verifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_reversal_never_calls_provider_or_changes_pilot(
+    monkeypatch,
+    tmp_path,
+):
+    verifier = AsyncMock(
+        side_effect=AssertionError("Unrelated reversals must not call Stripe")
+    )
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "verify_pilot_reversal_event",
+        verifier,
+    )
+    async with _isolated_database(tmp_path, "unrelated_reversal") as sessions:
+        async with sessions() as db:
+            result = await handle_stripe_webhook(
+                "evt_unrelated_refund",
+                "charge.refunded",
+                _reversal_object("charge.refunded"),
+                db,
+            )
+
+            assert result["status"] == "ignored"
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+            verifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refunded_payment_cannot_be_reactivated_by_late_success(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("charge.refunded")
+    _install_reversal_verification(monkeypatch, provider_object)
+    async with _isolated_database(tmp_path, "refund_no_reactivation") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status="paid")
+            payment = _existing_payment(
+                request=pilot_request,
+                session_id="cs_reversal",
+                payment_intent_id="pi_reversal",
+            )
+            db.add(payment)
+            await db.commit()
+
+            refunded = await handle_stripe_webhook(
+                "evt_refund_before_late_success",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+            _install_line_items(monkeypatch)
+            late_success = await handle_stripe_webhook(
+                "evt_late_success_after_refund",
+                "checkout.session.async_payment_succeeded",
+                _valid_session(
+                    session_id="cs_reversal",
+                    payment_intent_id="pi_reversal",
+                    request_id=pilot_request.id,
+                ),
+                db,
+            )
+
+            assert refunded["status"] == "failed"
+            assert late_success["status"] == "manual_review"
+            assert payment.status == "manual_review"
+            assert pilot_request.status == "manual_review"
+            assert payment.status != "paid"
 
 
 @pytest.mark.asyncio

@@ -18,15 +18,12 @@ SECURITY:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-import uuid
 from typing import Annotated
 
 import stripe
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
 from api.core.deps import CurrentUser, DB
@@ -60,14 +57,22 @@ from api.services.billing_service import (
     ADDONS_CONFIG,
     MODULES_CONFIG,
     PLANS_CONFIG,
-    compute_entitlements,
     get_active_subscription,
     get_or_create_stripe_customer,
     get_upsell_suggestion,
-    has_feature,
 )
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
+from api.services.pilot_stripe_contract_service import (
+    PILOT_AMOUNT_CENTS,
+    PILOT_CURRENCY,
+    PILOT_WEBHOOK_TOLERANCE_SECONDS,
+    PilotStripeContractError,
+    PilotStripeProviderUnavailable,
+    VerifiedPilotCheckout,
+    load_pilot_stripe_config,
+    verify_pilot_checkout_session,
+)
 from api.services.usage_service import get_monthly_usage
 
 logger = logging.getLogger(__name__)
@@ -123,41 +128,11 @@ async def list_plans() -> list[PlanPublic]:
     ]
 
 
-async def _retrieve_pilot_checkout_session(session_id: str):
-    """Retrieve Stripe state without blocking the async request worker."""
-    return await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
-
-
-def _stripe_field(value, field: str):
-    if isinstance(value, dict):
-        return value.get(field)
-    return getattr(value, field, None)
-
-
-def _stripe_id(value) -> str | None:
-    if isinstance(value, str):
-        return value
-    identifier = _stripe_field(value, "id")
-    return str(identifier) if identifier else None
-
-
-def _validated_pilot_request_id(session_id: str, session) -> uuid.UUID | None:
-    if _stripe_id(session) != session_id:
-        return None
-    if (
-        not settings.STRIPE_PILOT_PAYMENT_LINK_ID
-        or _stripe_id(_stripe_field(session, "payment_link"))
-        != settings.STRIPE_PILOT_PAYMENT_LINK_ID
-        or _stripe_field(session, "mode") != "payment"
-        or bool(_stripe_field(session, "livemode"))
-        != (settings.APP_ENV == "production")
-        or str(_stripe_field(session, "currency") or "").lower() != "cad"
-    ):
-        return None
-    try:
-        return uuid.UUID(str(_stripe_field(session, "client_reference_id")))
-    except (TypeError, ValueError):
-        return None
+async def _retrieve_pilot_checkout_session(
+    session_id: str,
+) -> VerifiedPilotCheckout:
+    """Verify the complete provider-side Pilot contract with bounded calls."""
+    return await verify_pilot_checkout_session(session_id)
 
 
 @router.get(
@@ -168,7 +143,7 @@ async def get_pilot_confirmation(
     db: DB,
     session_id: str | None = None,
 ) -> PilotConfirmationResponse:
-    """Return a non-sensitive state verified against Stripe and local storage."""
+    """Return a non-sensitive state; this endpoint never provisions Pilot value."""
     normalized_session_id = (session_id or "").strip()
     if (
         not normalized_session_id.startswith("cs_")
@@ -180,31 +155,6 @@ async def get_pilot_confirmation(
     ):
         return PilotConfirmationResponse(status="manual_review")
 
-    try:
-        stripe_session = await _retrieve_pilot_checkout_session(
-            normalized_session_id
-        )
-    except stripe.error.InvalidRequestError:
-        return PilotConfirmationResponse(status="manual_review")
-    except stripe.error.StripeError:
-        return PilotConfirmationResponse(status="processing")
-    except Exception:
-        logger.warning("[billing] Pilot confirmation provider lookup unavailable")
-        return PilotConfirmationResponse(status="processing")
-
-    request_id = _validated_pilot_request_id(
-        normalized_session_id,
-        stripe_session,
-    )
-    if request_id is None:
-        return PilotConfirmationResponse(status="manual_review")
-
-    request_result = await db.execute(
-        select(PilotRequest.id).where(PilotRequest.id == request_id)
-    )
-    if request_result.scalar_one_or_none() is None:
-        return PilotConfirmationResponse(status="manual_review")
-
     payment_result = await db.execute(
         select(PilotPayment).where(
             PilotPayment.stripe_checkout_session_id == normalized_session_id
@@ -214,30 +164,47 @@ async def get_pilot_confirmation(
     if payment is None:
         return PilotConfirmationResponse(status="processing")
 
+    try:
+        config = load_pilot_stripe_config()
+    except PilotStripeContractError:
+        return PilotConfirmationResponse(status="manual_review")
     if (
-        payment.pilot_request_id != request_id
-        or payment.stripe_payment_link_id
-        != settings.STRIPE_PILOT_PAYMENT_LINK_ID
-        or payment.stripe_price_id != settings.STRIPE_PILOT_PRICE_ID
-        or payment.currency.lower() != "cad"
-        or payment.livemode != bool(_stripe_field(stripe_session, "livemode"))
+        payment.pilot_request_id is None
+        or payment.stripe_payment_link_id != config.payment_link_id
+        or payment.stripe_price_id != config.price_id
+        or payment.currency.lower() != PILOT_CURRENCY
+        or payment.amount_subtotal != PILOT_AMOUNT_CENTS
+        or payment.livemode != config.livemode
     ):
         return PilotConfirmationResponse(status="manual_review")
 
-    stripe_payment_status = str(
-        _stripe_field(stripe_session, "payment_status") or ""
+    request_result = await db.execute(
+        select(PilotRequest.id).where(PilotRequest.id == payment.pilot_request_id)
     )
+    if request_result.scalar_one_or_none() is None:
+        return PilotConfirmationResponse(status="manual_review")
+    if payment.status in {"pending", "processing"}:
+        return PilotConfirmationResponse(status="processing")
+    if payment.status != "paid" or payment.payment_status != "paid":
+        return PilotConfirmationResponse(status="manual_review")
+
+    try:
+        verified = await _retrieve_pilot_checkout_session(normalized_session_id)
+    except PilotStripeContractError:
+        return PilotConfirmationResponse(status="manual_review")
+    except (PilotStripeProviderUnavailable, stripe.error.StripeError):
+        return PilotConfirmationResponse(status="processing")
+    except Exception:
+        logger.warning("[billing] Pilot confirmation provider lookup unavailable")
+        return PilotConfirmationResponse(status="processing")
+
     if (
-        payment.status == "paid"
-        and payment.payment_status == "paid"
-        and stripe_payment_status == "paid"
+        verified.request_id != payment.pilot_request_id
+        or verified.payment_intent_id != payment.stripe_payment_intent_id
+        or not verified.paid
     ):
-        public_status = "confirmed"
-    elif payment.status in {"pending", "processing"}:
-        public_status = "processing"
-    else:
-        public_status = "manual_review"
-    return PilotConfirmationResponse(status=public_status)
+        return PilotConfirmationResponse(status="manual_review")
+    return PilotConfirmationResponse(status="confirmed")
 
 
 @router.get("/modules", response_model=list[ModulePublic])
@@ -596,6 +563,13 @@ async def stripe_webhook(
     """
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+    webhook_secret = (settings.STRIPE_WEBHOOK_SECRET or "").strip()
+    if not webhook_secret.startswith("whsec_"):
+        logger.error("[webhook] Stripe webhook verification is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        )
 
     payload = await request.body()  # raw bytes — must not be parsed first
 
@@ -603,19 +577,20 @@ async def stripe_webhook(
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=stripe_signature,
-            secret=settings.STRIPE_WEBHOOK_SECRET,
+            secret=webhook_secret,
+            tolerance=PILOT_WEBHOOK_TOLERANCE_SECONDS,
         )
     except stripe.error.SignatureVerificationError:
         logger.warning("[webhook] Invalid Stripe signature — rejecting")
         raise HTTPException(status_code=400, detail="Invalid Stripe signature")
-    except Exception as exc:
-        logger.error(f"[webhook] Malformed payload: {exc}")
+    except Exception:
+        logger.error("[webhook] Malformed signed payload")
         raise HTTPException(status_code=400, detail="Malformed payload")
 
     event_id = event["id"]
     event_type = event["type"]
 
-    logger.info(f"[webhook] Processing {event_type} id={event_id}")
+    logger.info("[webhook] Processing %s id=%s", event_type, event_id)
 
     try:
         result = await handle_stripe_webhook(event_id, event_type, event["data"]["object"], db)
