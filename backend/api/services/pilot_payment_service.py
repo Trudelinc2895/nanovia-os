@@ -1,9 +1,12 @@
 """Validated, atomic, and idempotent Stripe processing for Pro Pilot."""
 from __future__ import annotations
 
+import asyncio
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
+import stripe
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,15 +15,21 @@ from api.models.pilot import PilotPayment, PilotRequest
 from api.services.pilot_stripe_contract_service import (
     PILOT_AMOUNT_CENTS,
     PILOT_CHECKOUT_EVENT_TYPES,
+    PILOT_CONTRACT_MARKER,
     PILOT_CURRENCY,
+    PILOT_PROVIDER_MAX_ATTEMPTS,
+    PILOT_PROVIDER_TIMEOUT_SECONDS,
     PILOT_REVERSAL_EVENT_TYPES,
+    PILOT_STRIPE_API_VERSION,
     PilotStripeConfig,
     PilotStripeContractError,
+    PilotStripeProviderUnavailable,
     VerifiedPilotCheckout,
     is_canonical_payment_link,
     load_pilot_stripe_config,
     stripe_field,
     stripe_id,
+    stripe_list_data,
     verify_pilot_checkout_event,
     verify_pilot_reversal_event,
 )
@@ -28,6 +37,21 @@ from api.services.pilot_stripe_contract_service import (
 
 PILOT_EVENT_TYPES = PILOT_CHECKOUT_EVENT_TYPES
 OPEN_REQUEST_STATES = ("pending", "processing")
+ADVERSE_STATE_PRIORITY = {"processing": 0, "paid": 0, "manual_review": 1, "failed": 2}
+
+
+class PilotAdverseEventPendingCommit(RuntimeError):
+    """A canonical adverse event arrived before its local PilotPayment commit."""
+
+
+@dataclass(frozen=True)
+class PreparedPilotReversal:
+    """Provider-verified reversal identity prepared before database locking."""
+
+    signed_intent_id: str | None
+    provider_object: Any | None
+    config: PilotStripeConfig | None
+    classification: str
 
 
 async def _match_request(
@@ -153,6 +177,10 @@ def _transition_is_safe(current: str, target: str) -> bool:
     return False
 
 
+def _monotone_pilot_status(*statuses: str) -> str:
+    return max(statuses, key=lambda value: ADVERSE_STATE_PRIORITY.get(value, 1))
+
+
 async def process_pilot_checkout_event(
     event_id: str,
     event_type: str,
@@ -219,6 +247,11 @@ async def process_pilot_checkout_event(
 
     target_status = _target_checkout_status(event_type, verified)
     if session_payment is not None:
+        if session_payment.status in {"manual_review", "failed"} and target_status in {
+            "processing",
+            "paid",
+        }:
+            return session_payment.status
         if session_payment.status == "paid" and target_status in {
             "paid",
             "processing",
@@ -309,6 +342,114 @@ def _reversal_payment_intent_id(event_type: str, value: Any) -> str | None:
     return stripe_id(stripe_field(value, "payment_intent"))
 
 
+async def retrieve_pilot_reversal_sessions(payment_intent_id: str) -> Any:
+    """List at most two Checkout Sessions before any local row lock is acquired."""
+    retryable = (stripe.error.APIConnectionError, stripe.error.RateLimitError, TimeoutError)
+    for attempt in range(PILOT_PROVIDER_MAX_ATTEMPTS):
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    stripe.checkout.Session.list,
+                    payment_intent=payment_intent_id,
+                    limit=2,
+                    stripe_version=PILOT_STRIPE_API_VERSION,
+                ),
+                timeout=PILOT_PROVIDER_TIMEOUT_SECONDS,
+            )
+        except retryable as exc:
+            if attempt + 1 >= PILOT_PROVIDER_MAX_ATTEMPTS:
+                raise PilotStripeProviderUnavailable(
+                    "Stripe reversal identity lookup was unavailable"
+                ) from exc
+            await asyncio.sleep(0.2 * (attempt + 1))
+        except stripe.error.StripeError as exc:
+            raise PilotStripeProviderUnavailable(
+                "Stripe reversal identity lookup was unavailable"
+            ) from exc
+    raise PilotStripeProviderUnavailable("Stripe reversal identity lookup was unavailable")
+
+
+def _classify_pilot_reversal_sessions(
+    response: Any,
+    payment_intent_id: str,
+    config: PilotStripeConfig,
+) -> str:
+    sessions = stripe_list_data(response)
+    pilot_sessions = [
+        session
+        for session in sessions
+        if is_canonical_payment_link(stripe_field(session, "payment_link"), config)
+    ]
+    if not pilot_sessions:
+        return "foreign"
+    if len(sessions) != 1 or len(pilot_sessions) != 1:
+        return "rejected"
+    session = pilot_sessions[0]
+    metadata = stripe_field(session, "metadata", {}) or {}
+    if (
+        stripe_id(stripe_field(session, "payment_intent")) != payment_intent_id
+        or stripe_field(session, "mode") != "payment"
+        or bool(stripe_field(session, "livemode")) != config.livemode
+        or str(stripe_field(session, "currency") or "").lower() != PILOT_CURRENCY
+        or stripe_field(session, "amount_subtotal") != PILOT_AMOUNT_CENTS
+        or stripe_field(session, "amount_total") != PILOT_AMOUNT_CENTS
+        or stripe_field(metadata, "nanovia_contract") != PILOT_CONTRACT_MARKER
+    ):
+        return "rejected"
+    return "pilot"
+
+
+def _pilot_payment_for_update_statement(payment_intent_id: str):
+    return (
+        select(PilotPayment)
+        .where(PilotPayment.stripe_payment_intent_id == payment_intent_id)
+        .with_for_update()
+    )
+
+
+async def prepare_pilot_reversal_event(
+    event_id: str,
+    event_type: str,
+    signed_object: Any,
+) -> PreparedPilotReversal:
+    """Verify and classify a reversal before starting the business transaction."""
+    signed_intent_id = _reversal_payment_intent_id(event_type, signed_object)
+    if not signed_intent_id:
+        return PreparedPilotReversal(None, None, None, "ignored")
+
+    provider_object, config = await verify_pilot_reversal_event(
+        event_id,
+        event_type,
+        signed_object,
+    )
+    provider_intent_id = _reversal_payment_intent_id(event_type, provider_object)
+    currency = stripe_field(provider_object, "currency")
+    if (
+        provider_intent_id != signed_intent_id
+        or bool(stripe_field(provider_object, "livemode")) != config.livemode
+        or (currency is not None and str(currency).lower() != PILOT_CURRENCY)
+    ):
+        return PreparedPilotReversal(
+            signed_intent_id,
+            provider_object,
+            config,
+            "rejected",
+        )
+
+    session_response = await retrieve_pilot_reversal_sessions(signed_intent_id)
+    classification = _classify_pilot_reversal_sessions(
+        session_response,
+        signed_intent_id,
+        config,
+    )
+    return PreparedPilotReversal(
+        signed_intent_id,
+        provider_object,
+        config,
+        classification,
+    )
+
+
 def _validate_stored_payment_contract(
     payment: PilotPayment,
     config: PilotStripeConfig,
@@ -358,35 +499,34 @@ async def process_pilot_reversal_event(
     event_type: str,
     signed_object: dict[str, Any],
     db: AsyncSession,
+    *,
+    prepared_event: PreparedPilotReversal | None = None,
 ) -> str:
     """Downgrade an existing Pilot payment; never reactivate automatically."""
     if event_type not in PILOT_REVERSAL_EVENT_TYPES:
         return "ignored"
-    signed_intent_id = _reversal_payment_intent_id(event_type, signed_object)
-    if not signed_intent_id:
-        return "ignored"
-    result = await db.execute(
-        select(PilotPayment)
-        .where(PilotPayment.stripe_payment_intent_id == signed_intent_id)
-        .with_for_update()
-    )
-    payment = result.scalar_one_or_none()
-    if payment is None:
-        return "ignored"
-
-    provider_object, config = await verify_pilot_reversal_event(
+    prepared = prepared_event or await prepare_pilot_reversal_event(
         event_id,
         event_type,
         signed_object,
     )
-    provider_intent_id = _reversal_payment_intent_id(event_type, provider_object)
-    if provider_intent_id != signed_intent_id:
-        raise PilotStripeContractError("Pilot reversal PaymentIntent mismatch")
-    if bool(stripe_field(provider_object, "livemode")) != config.livemode:
-        raise PilotStripeContractError("Pilot reversal livemode mismatch")
-    currency = stripe_field(provider_object, "currency")
-    if currency is not None and str(currency).lower() != PILOT_CURRENCY:
-        raise PilotStripeContractError("Pilot reversal currency mismatch")
+    signed_intent_id = prepared.signed_intent_id
+    if prepared.classification == "ignored" or not signed_intent_id:
+        return "ignored"
+    result = await db.execute(_pilot_payment_for_update_statement(signed_intent_id))
+    payment = result.scalar_one_or_none()
+    if prepared.classification == "foreign":
+        return "rejected" if payment is not None else "ignored"
+    if prepared.classification == "rejected":
+        return "rejected"
+    if payment is None:
+        raise PilotAdverseEventPendingCommit(
+            "Canonical Pilot payment is not committed yet"
+        )
+    provider_object = prepared.provider_object
+    config = prepared.config
+    if provider_object is None or config is None:
+        raise PilotStripeContractError("Prepared Pilot reversal is incomplete")
     _validate_stored_payment_contract(payment, config)
 
     request = None
@@ -401,10 +541,16 @@ async def process_pilot_reversal_event(
         event_type,
         provider_object,
     )
-    payment.stripe_event_id = event_id
-    payment.status = target_status
-    payment.payment_status = payment_status
+    effective_status = _monotone_pilot_status(
+        payment.status,
+        request.status if request is not None else payment.status,
+        target_status,
+    )
+    if effective_status == target_status:
+        payment.stripe_event_id = event_id
+        payment.payment_status = payment_status
+    payment.status = effective_status
     if request is not None:
-        request.status = target_status
+        request.status = effective_status
     await db.flush()
-    return target_status
+    return effective_status

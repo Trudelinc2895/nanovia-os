@@ -12,6 +12,7 @@ from api.services.billing_service import (
     claim_webhook_event,
     get_webhook_event,
     mark_webhook_retryable_failure,
+    prepare_stripe_event,
     process_stripe_event,
     update_webhook_status,
 )
@@ -28,6 +29,39 @@ async def handle_stripe_webhook(
     db: AsyncSession,
 ) -> dict[str, Any]:
     """Claim, process, and persist the final status for a Stripe webhook event."""
+    try:
+        existing = await get_webhook_event(event_id, db)
+        existing_status = getattr(existing, "status", None)
+        if not isinstance(existing_status, str):
+            existing_status = None
+        await db.rollback()
+    except Exception as exc:
+        await db.rollback()
+        raise WebhookProcessingUnavailable(
+            "Webhook state lookup is temporarily unavailable"
+        ) from exc
+
+    if existing_status and existing_status not in {"processing", "retryable_failure"}:
+        return {
+            "event_id": event_id,
+            "event_type": event_type,
+            "status": "duplicate",
+        }
+    if existing_status == "processing":
+        raise WebhookProcessingUnavailable("Webhook event is already being processed")
+
+    preparation_error: Exception | None = None
+    try:
+        prepared_event = await prepare_stripe_event(
+            event_type,
+            payload,
+            event_id=event_id,
+        )
+    except Exception as exc:
+        await db.rollback()
+        prepared_event = None
+        preparation_error = exc
+
     try:
         claim_status = await claim_webhook_event(event_id, event_type, db)
     except Exception as exc:
@@ -49,13 +83,18 @@ async def handle_stripe_webhook(
         raise WebhookProcessingUnavailable("Webhook claim returned an invalid state")
 
     try:
+        if preparation_error is not None:
+            raise preparation_error
         final_status = await process_stripe_event(
             event_type,
             payload,
             db,
             event_id=event_id,
+            prepared_event=prepared_event,
         )
-        webhook_status = "ignored" if final_status == "ignored" else "processed"
+        webhook_status = (
+            final_status if final_status in {"ignored", "rejected"} else "processed"
+        )
         await update_webhook_status(event_id, webhook_status, None, db)
         # Sole commit owner for the claim, business effects, and final status.
         await db.commit()

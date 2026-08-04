@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from api.services.pilot_stripe_contract_service import (
+    PilotStripeContractError,
+    load_pilot_stripe_config,
+)
 
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "validate_runtime_env.py"
@@ -36,7 +42,7 @@ def _complete_production_values() -> dict[str, str]:
         "STRIPE_PILOT_PRODUCT_ID": "prod_test123",
         "STRIPE_PILOT_PRICE_ID": "price_test123",
         "STRIPE_PILOT_PAYMENT_LINK_ID": "plink_test123",
-        "STRIPE_PILOT_PAYMENT_LINK_URL": "https://buy.stripe.com/test_123",
+        "STRIPE_PILOT_PAYMENT_LINK_URL": "https://buy.stripe.com/ABC123",
     }
 
 
@@ -62,6 +68,89 @@ def test_production_runtime_env_accepts_safe_values():
     errors = validate_runtime_env(_complete_production_values(), target_env="production")
 
     assert errors == []
+
+
+def _runtime_accepts_payment_link_url(value: str, *, app_env: str) -> bool:
+    settings = SimpleNamespace(
+        APP_ENV=app_env,
+        STRIPE_ACCOUNT_ID="acct_ABC123",
+        STRIPE_PILOT_PRODUCT_ID="prod_ABC123",
+        STRIPE_PILOT_PRICE_ID="price_ABC123",
+        STRIPE_PILOT_PAYMENT_LINK_ID="plink_ABC123",
+        STRIPE_PILOT_PAYMENT_LINK_URL=value,
+    )
+    try:
+        load_pilot_stripe_config(settings)
+    except PilotStripeContractError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com:443/ABC123",
+    ),
+)
+def test_pilot_payment_link_url_matches_runtime_for_canonical_values(value: str):
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PAYMENT_LINK_URL"] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert errors == []
+    assert _runtime_accepts_payment_link_url(value, app_env="production") is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "http://buy.stripe.com/ABC123",
+        "https://example.com/ABC123",
+        "https://user@buy.stripe.com/ABC123",
+        "https://buy.stripe.com:444/ABC123",
+        "https://buy.stripe.com/ABC123?locale=fr",
+        "https://buy.stripe.com/ABC123#fragment",
+        "https://buy.stripe.com/",
+        "https://buy.stripe.com/test_ABC123",
+    ),
+)
+def test_pilot_payment_link_url_rejects_runtime_contract_mismatches(value: str):
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PAYMENT_LINK_URL"] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert (
+        "STRIPE_PILOT_PAYMENT_LINK_URL must use a canonical "
+        "https://buy.stripe.com/... URL"
+    ) in errors
+    assert _runtime_accepts_payment_link_url(value, app_env="production") is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        " https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com/ABC123 ",
+        "https://buy.stripe.com/ABC 123",
+        "https://buy.stripe.com/ABC%20123",
+        "https://buy.stripe.com/ABC-123",
+        "https://buy.stripe.com/ABC123/extra",
+        "https://BUY.stripe.com/ABC123",
+    ),
+)
+def test_pilot_payment_link_url_rejects_ambiguous_or_normalized_paths(value: str):
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PAYMENT_LINK_URL"] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert (
+        "STRIPE_PILOT_PAYMENT_LINK_URL must use a canonical "
+        "https://buy.stripe.com/... URL"
+    ) in errors
 
 
 @pytest.mark.parametrize(
@@ -217,7 +306,7 @@ def test_production_runtime_env_requires_each_pilot_key(key: str, missing_value:
         (
             "STRIPE_PILOT_PAYMENT_LINK_URL",
             "https://example.invalid/not-stripe",
-            "STRIPE_PILOT_PAYMENT_LINK_URL must use an https://buy.stripe.com/... URL",
+            "STRIPE_PILOT_PAYMENT_LINK_URL must use a canonical https://buy.stripe.com/... URL",
         ),
     ),
 )
@@ -306,7 +395,7 @@ def test_runtime_env_rejects_invalid_pilot_environment_key_formats():
         "CONTACT_RECIPIENT_EMAIL must be a valid email address",
         "STRIPE_ACCOUNT_ID must use the acct_... format",
         "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format",
-        "STRIPE_PILOT_PAYMENT_LINK_URL must use an https://buy.stripe.com/... URL",
+        "STRIPE_PILOT_PAYMENT_LINK_URL must use a canonical https://buy.stripe.com/... URL",
         "STRIPE_PILOT_PRICE_ID must use the price_... format",
         "STRIPE_PILOT_PRODUCT_ID must use the prod_... format",
     }

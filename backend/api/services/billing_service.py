@@ -29,6 +29,8 @@ from api.models.user import User
 from api.models.webhook_event import WebhookEvent
 from api.services.pilot_payment_service import (
     PILOT_EVENT_TYPES,
+    PreparedPilotReversal,
+    prepare_pilot_reversal_event,
     process_pilot_checkout_event,
     process_pilot_reversal_event,
 )
@@ -731,11 +733,26 @@ async def _get_user_by_stripe_customer_id(
     return result.scalar_one_or_none()
 
 
+async def prepare_stripe_event(
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    event_id: str | None = None,
+) -> PreparedPilotReversal | None:
+    """Complete Pilot provider reads before the webhook database transaction."""
+    if event_type not in PILOT_REVERSAL_EVENT_TYPES:
+        return None
+    if not event_id:
+        raise RuntimeError("Stripe event id is required for Pilot processing")
+    return await prepare_pilot_reversal_event(event_id, event_type, data)
+
+
 async def process_stripe_event(
     event_type: str,
     data: dict[str, Any],
     db: AsyncSession,
     event_id: str | None = None,
+    prepared_event: PreparedPilotReversal | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
     if event_type in PILOT_REVERSAL_EVENT_TYPES:
@@ -746,6 +763,7 @@ async def process_stripe_event(
             event_type,
             data,
             db,
+            prepared_event=prepared_event,
         )
 
     if event_type in PILOT_EVENT_TYPES:

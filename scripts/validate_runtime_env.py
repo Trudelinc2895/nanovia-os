@@ -4,10 +4,12 @@ import argparse
 import re
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit
 
 
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_PILOT_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
 _SENSITIVE_PATTERNS = (
     r"(sk|pk|whsec)_[A-Za-z0-9_\.\-]+",
     r"postgres(?:ql)?://[^:]+:[^@]+@",
@@ -36,11 +38,6 @@ _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
         "must use the plink_... format",
     ),
     (
-        "STRIPE_PILOT_PAYMENT_LINK_URL",
-        r"^https://buy\.stripe\.com/[A-Za-z0-9_-]+(?:\?[^\s#]*)?$",
-        "must use an https://buy.stripe.com/... URL",
-    ),
-    (
         "STRIPE_PILOT_PRICE_ID",
         r"^price_[A-Za-z0-9]+$",
         "must use the price_... format",
@@ -50,6 +47,9 @@ _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
         r"^prod_[A-Za-z0-9]+$",
         "must use the prod_... format",
     ),
+)
+_PILOT_REQUIRED_KEYS = tuple(rule[0] for rule in _PILOT_FORMAT_RULES) + (
+    "STRIPE_PILOT_PAYMENT_LINK_URL",
 )
 _KNOWN_ENV_KEYS = {
     "ACME_EMAIL",
@@ -232,6 +232,40 @@ def _validate_pilot_formats(values: dict[str, str]) -> list[str]:
     return errors
 
 
+def _validate_pilot_payment_link_url(
+    values: dict[str, str],
+    *,
+    target_env: str,
+) -> list[str]:
+    key = "STRIPE_PILOT_PAYMENT_LINK_URL"
+    raw_value = values.get(key, "")
+    value = raw_value.strip()
+    if not value or _looks_placeholder(value):
+        return []
+    message = f"{key} must use a canonical https://buy.stripe.com/... URL"
+    if raw_value != value:
+        return [message]
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return [message]
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "buy.stripe.com"
+        or parsed.netloc not in {"buy.stripe.com", "buy.stripe.com:443"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or _PILOT_PAYMENT_LINK_PATH.fullmatch(parsed.path) is None
+        or parsed.query
+        or parsed.fragment
+        or (target_env == "production" and parsed.path.lstrip("/").startswith("test_"))
+    ):
+        return [message]
+    return []
+
+
 def _validate_alias_conflicts(values: dict[str, str]) -> list[str]:
     errors: list[str] = []
     for aliases in _ALIAS_GROUPS:
@@ -326,6 +360,7 @@ def validate_runtime_env(
 
     errors.extend(_validate_known_keys(values))
     errors.extend(_validate_pilot_formats(values))
+    errors.extend(_validate_pilot_payment_link_url(values, target_env=target_env))
     errors.extend(_validate_alias_conflicts(values))
 
     app_env = values.get("APP_ENV", "").strip()
@@ -445,7 +480,7 @@ def validate_runtime_env(
         return errors
 
     if not allow_placeholders:
-        for key, _, _ in _PILOT_FORMAT_RULES:
+        for key in _PILOT_REQUIRED_KEYS:
             _require_value(
                 errors,
                 values,

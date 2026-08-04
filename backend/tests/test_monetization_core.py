@@ -226,9 +226,15 @@ def test_build_usage_event_normalizes_required_fields():
 async def test_handle_stripe_webhook_short_circuits_duplicates():
     from api.core.monetization.webhook_handler_service import handle_stripe_webhook
 
-    with patch(
-        "api.core.monetization.webhook_handler_service.claim_webhook_event",
-        new=AsyncMock(return_value="duplicate"),
+    with (
+        patch(
+            "api.core.monetization.webhook_handler_service.get_webhook_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.claim_webhook_event",
+            new=AsyncMock(return_value="duplicate"),
+        ),
     ):
         result = await handle_stripe_webhook("evt_1", "invoice.payment_failed", {}, AsyncMock())
 

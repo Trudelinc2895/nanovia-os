@@ -8,12 +8,13 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import stripe
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -907,6 +908,25 @@ def _reversal_object(
     return value
 
 
+def _reversal_session(
+    *,
+    payment_intent_id: str = "pi_reversal",
+    payment_link_id: str = PAYMENT_LINK_ID,
+    amount_total: int = 29_700,
+) -> dict:
+    return {
+        "id": "cs_reversal",
+        "payment_intent": payment_intent_id,
+        "payment_link": payment_link_id,
+        "mode": "payment",
+        "livemode": False,
+        "currency": "cad",
+        "amount_subtotal": amount_total,
+        "amount_total": amount_total,
+        "metadata": {"nanovia_contract": PILOT_CONTRACT_MARKER},
+    }
+
+
 def _install_reversal_verification(monkeypatch, provider_object: dict) -> AsyncMock:
     boundary = AsyncMock(
         return_value=(
@@ -918,6 +938,11 @@ def _install_reversal_verification(monkeypatch, provider_object: dict) -> AsyncM
         pilot_payment_service,
         "verify_pilot_reversal_event",
         boundary,
+    )
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "retrieve_pilot_reversal_sessions",
+        AsyncMock(return_value={"data": [_reversal_session()]}),
     )
     return boundary
 
@@ -1030,17 +1055,23 @@ async def test_refund_dispute_and_cancellation_never_leave_pilot_paid(
 
 
 @pytest.mark.asyncio
-async def test_unrelated_reversal_never_calls_provider_or_changes_pilot(
+async def test_unrelated_reversal_is_classified_once_without_retry_loop(
     monkeypatch,
     tmp_path,
 ):
-    verifier = AsyncMock(
-        side_effect=AssertionError("Unrelated reversals must not call Stripe")
+    provider_object = _reversal_object("charge.refunded")
+    verifier = _install_reversal_verification(monkeypatch, provider_object)
+    session_lookup = AsyncMock(
+        return_value={
+            "data": [
+                _reversal_session(payment_link_id="plink_foreign"),
+            ]
+        }
     )
     monkeypatch.setattr(
         pilot_payment_service,
-        "verify_pilot_reversal_event",
-        verifier,
+        "retrieve_pilot_reversal_sessions",
+        session_lookup,
     )
     async with _isolated_database(tmp_path, "unrelated_reversal") as sessions:
         async with sessions() as db:
@@ -1053,7 +1084,441 @@ async def test_unrelated_reversal_never_calls_provider_or_changes_pilot(
 
             assert result["status"] == "ignored"
             assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
-            verifier.assert_not_awaited()
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_unrelated_refund"
+                )
+            )
+            assert event is not None and event.status == "ignored"
+            verifier.assert_awaited_once()
+            session_lookup.assert_awaited_once_with("pi_reversal")
+
+
+@pytest.mark.asyncio
+async def test_adverse_event_before_checkout_commit_returns_503_then_replays_once(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("charge.refunded")
+    verifier = _install_reversal_verification(monkeypatch, provider_object)
+    event = {
+        "id": "evt_refund_race",
+        "type": "charge.refunded",
+        "data": {"object": provider_object},
+    }
+    monkeypatch.setattr(
+        billing_router.stripe.Webhook,
+        "construct_event",
+        lambda **_kwargs: event,
+    )
+
+    async with _isolated_database(tmp_path, "refund_before_checkout_commit") as sessions:
+        async with sessions() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await billing_router.stripe_webhook(
+                    _request(),
+                    db,
+                    stripe_signature="valid-local-signature",
+                )
+            assert exc_info.value.status_code == 503
+
+            retryable = (
+                await db.execute(
+                    select(WebhookEvent).where(
+                        WebhookEvent.stripe_event_id == "evt_refund_race"
+                    )
+                )
+            ).scalar_one()
+            assert retryable.status == "retryable_failure"
+            assert retryable.attempt_count == 1
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+
+            pilot_request = await _add_request(db, status="paid")
+            pilot_request_id = pilot_request.id
+            db.add(
+                _existing_payment(
+                    request=pilot_request,
+                    session_id="cs_reversal",
+                    payment_intent_id="pi_reversal",
+                )
+            )
+            await db.commit()
+
+            replay = await billing_router.stripe_webhook(
+                _request(),
+                db,
+                stripe_signature="valid-local-signature",
+            )
+            duplicate = await billing_router.stripe_webhook(
+                _request(),
+                db,
+                stripe_signature="valid-local-signature",
+            )
+            payment = (await db.execute(select(PilotPayment))).scalar_one()
+            persisted_request = (
+                await db.execute(select(PilotRequest))
+            ).scalar_one()
+            await db.refresh(retryable)
+
+            assert replay == {
+                "received": True,
+                "status": "failed",
+                "type": "charge.refunded",
+            }
+            assert duplicate["status"] == "duplicate"
+            assert retryable.status == "processed"
+            assert retryable.attempt_count == 2
+            assert payment.status == "failed"
+            assert persisted_request.status == "failed"
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 1
+            assert verifier.await_count == 2
+            assert pilot_payment_service.retrieve_pilot_reversal_sessions.await_count == 2
+
+            _install_line_items(monkeypatch)
+            late_success = await handle_stripe_webhook(
+                "evt_late_success_after_race",
+                "checkout.session.async_payment_succeeded",
+                _valid_session(
+                    session_id="cs_reversal",
+                    payment_intent_id="pi_reversal",
+                    request_id=pilot_request_id,
+                ),
+                db,
+            )
+            assert late_success["status"] == "failed"
+            assert payment.status == "failed"
+            assert persisted_request.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_adverse_state_rolls_back_before_retry_marker_and_503(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("charge.refunded")
+    _install_reversal_verification(monkeypatch, provider_object)
+    real_update = webhook_handler_service.update_webhook_status
+    update_attempts = 0
+
+    async def fail_first_final_status(*args, **kwargs):
+        nonlocal update_attempts
+        update_attempts += 1
+        if update_attempts == 1:
+            raise OperationalError(
+                "UPDATE webhook_events",
+                {},
+                RuntimeError("final status unavailable"),
+            )
+        return await real_update(*args, **kwargs)
+
+    monkeypatch.setattr(
+        webhook_handler_service,
+        "update_webhook_status",
+        fail_first_final_status,
+    )
+    async with _isolated_database(tmp_path, "adverse_atomic_rollback") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status="paid")
+            payment = _existing_payment(
+                request=pilot_request,
+                session_id="cs_reversal",
+                payment_intent_id="pi_reversal",
+            )
+            db.add(payment)
+            await db.commit()
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_adverse_rollback",
+                    "charge.refunded",
+                    provider_object,
+                    db,
+                )
+
+            await db.refresh(payment)
+            await db.refresh(pilot_request)
+            retryable = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_adverse_rollback"
+                )
+            )
+            assert payment.status == "paid"
+            assert pilot_request.status == "paid"
+            assert retryable is not None
+            assert retryable.status == "retryable_failure"
+
+            replay = await handle_stripe_webhook(
+                "evt_adverse_rollback",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_adverse_rollback",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+            await db.refresh(payment)
+            await db.refresh(pilot_request)
+            await db.refresh(retryable)
+
+            assert replay["status"] == "failed"
+            assert duplicate["status"] == "duplicate"
+            assert payment.status == "failed"
+            assert pilot_request.status == "failed"
+            assert retryable.status == "processed"
+            assert retryable.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_permanent_pilot_identity_mismatch_is_rejected_without_retry(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("charge.refunded")
+    _install_reversal_verification(monkeypatch, provider_object)
+    pilot_payment_service.retrieve_pilot_reversal_sessions.return_value = {
+        "data": [_reversal_session(amount_total=29_699)]
+    }
+    async with _isolated_database(tmp_path, "adverse_permanent_rejection") as sessions:
+        async with sessions() as db:
+            first = await handle_stripe_webhook(
+                "evt_adverse_rejected",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_adverse_rejected",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_adverse_rejected"
+                )
+            )
+
+            assert first["status"] == "rejected"
+            assert duplicate["status"] == "duplicate"
+            assert event is not None and event.status == "rejected"
+            assert event.attempt_count == 1
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_identity_checks_finish_before_postgres_row_lock(monkeypatch):
+    provider_object = _reversal_object("charge.refunded")
+    order: list[str] = []
+
+    async def verify(*_args):
+        order.append("verify")
+        return (
+            provider_object,
+            pilot_stripe_contract_service.load_pilot_stripe_config(),
+        )
+
+    async def retrieve_sessions(payment_intent_id):
+        assert payment_intent_id == "pi_reversal"
+        order.append("sessions")
+        return {"data": [_reversal_session()]}
+
+    async def execute(_statement):
+        order.append("db")
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "verify_pilot_reversal_event",
+        verify,
+    )
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "retrieve_pilot_reversal_sessions",
+        retrieve_sessions,
+    )
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=execute)
+
+    with pytest.raises(pilot_payment_service.PilotAdverseEventPendingCommit):
+        await pilot_payment_service.process_pilot_reversal_event(
+            "evt_order",
+            "charge.refunded",
+            provider_object,
+            db,
+        )
+
+    assert order == ["verify", "sessions", "db"]
+    sql = str(
+        pilot_payment_service._pilot_payment_for_update_statement(
+            "pi_reversal"
+        ).compile(dialect=postgresql.dialect())
+    )
+    assert "FOR UPDATE" in sql
+
+
+@pytest.mark.asyncio
+async def test_provider_preparation_has_no_open_transaction_before_claim(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("charge.refunded")
+    _install_reversal_verification(monkeypatch, provider_object)
+    pilot_payment_service.retrieve_pilot_reversal_sessions.return_value = {
+        "data": [_reversal_session(payment_link_id="plink_foreign")]
+    }
+    real_prepare = webhook_handler_service.prepare_stripe_event
+    real_claim = webhook_handler_service.claim_webhook_event
+    order: list[str] = []
+
+    async with _isolated_database(tmp_path, "provider_before_claim") as sessions:
+        async with sessions() as db:
+
+            async def prepare(*args, **kwargs):
+                assert db.in_transaction() is False
+                order.append("provider")
+                prepared = await real_prepare(*args, **kwargs)
+                assert db.in_transaction() is False
+                return prepared
+
+            async def claim(*args, **kwargs):
+                assert db.in_transaction() is False
+                order.append("claim")
+                return await real_claim(*args, **kwargs)
+
+            monkeypatch.setattr(
+                webhook_handler_service,
+                "prepare_stripe_event",
+                prepare,
+            )
+            monkeypatch.setattr(
+                webhook_handler_service,
+                "claim_webhook_event",
+                claim,
+            )
+
+            result = await handle_stripe_webhook(
+                "evt_provider_before_claim",
+                "charge.refunded",
+                provider_object,
+                db,
+            )
+
+            assert result["status"] == "ignored"
+            assert order == ["provider", "claim"]
+
+
+@pytest.mark.asyncio
+async def test_provider_preparation_failure_is_persisted_as_retryable(
+    monkeypatch,
+    tmp_path,
+):
+    async with _isolated_database(tmp_path, "provider_retryable_failure") as sessions:
+        async with sessions() as db:
+
+            async def unavailable(*_args, **_kwargs):
+                assert db.in_transaction() is False
+                raise pilot_stripe_contract_service.PilotStripeProviderUnavailable(
+                    "synthetic provider outage"
+                )
+
+            monkeypatch.setattr(
+                webhook_handler_service,
+                "prepare_stripe_event",
+                unavailable,
+            )
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_provider_retryable",
+                    "charge.refunded",
+                    _reversal_object("charge.refunded"),
+                    db,
+                )
+
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_provider_retryable"
+                )
+            )
+            assert event is not None
+            assert event.status == "retryable_failure"
+            assert event.attempt_count == 1
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+
+
+@pytest.mark.asyncio
+async def test_distinct_adverse_events_are_monotone_out_of_order(
+    monkeypatch,
+    tmp_path,
+):
+    async with _isolated_database(tmp_path, "adverse_out_of_order") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status="paid")
+            payment = _existing_payment(
+                request=pilot_request,
+                session_id="cs_reversal",
+                payment_intent_id="pi_reversal",
+            )
+            db.add(payment)
+            await db.commit()
+
+            full_refund = _reversal_object("charge.refunded")
+            _install_reversal_verification(monkeypatch, full_refund)
+            first = await handle_stripe_webhook(
+                "evt_full_refund_first",
+                "charge.refunded",
+                full_refund,
+                db,
+            )
+
+            partial_refund = _reversal_object("charge.refunded", amount=10_000)
+            _install_reversal_verification(monkeypatch, partial_refund)
+            second = await handle_stripe_webhook(
+                "evt_partial_refund_late",
+                "charge.refunded",
+                partial_refund,
+                db,
+            )
+
+            won_dispute = _reversal_object(
+                "charge.dispute.closed",
+                status="won",
+            )
+            _install_reversal_verification(monkeypatch, won_dispute)
+            third = await handle_stripe_webhook(
+                "evt_won_dispute_late",
+                "charge.dispute.closed",
+                won_dispute,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_won_dispute_late",
+                "charge.dispute.closed",
+                won_dispute,
+                db,
+            )
+            persisted_payment = (
+                await db.execute(select(PilotPayment))
+            ).scalar_one()
+            persisted_request = (
+                await db.execute(select(PilotRequest))
+            ).scalar_one()
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+
+            assert first["status"] == "failed"
+            assert second["status"] == "failed"
+            assert third["status"] == "failed"
+            assert duplicate["status"] == "duplicate"
+            assert persisted_payment.status == "failed"
+            assert persisted_payment.payment_status == "refunded"
+            assert persisted_request.status == "failed"
+            assert len(events) == 3
+            assert all(event.status == "processed" for event in events)
 
 
 @pytest.mark.asyncio
@@ -1093,9 +1558,9 @@ async def test_refunded_payment_cannot_be_reactivated_by_late_success(
             )
 
             assert refunded["status"] == "failed"
-            assert late_success["status"] == "manual_review"
-            assert payment.status == "manual_review"
-            assert pilot_request.status == "manual_review"
+            assert late_success["status"] == "failed"
+            assert payment.status == "failed"
+            assert pilot_request.status == "failed"
             assert payment.status != "paid"
 
 
