@@ -27,12 +27,12 @@ _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "STRIPE_ACCOUNT_ID",
-        r"^acct_[A-Za-z0-9_]+$",
+        r"^acct_[A-Za-z0-9]+$",
         "must use the acct_... format",
     ),
     (
         "STRIPE_PILOT_PAYMENT_LINK_ID",
-        r"^plink_[A-Za-z0-9_]+$",
+        r"^plink_[A-Za-z0-9]+$",
         "must use the plink_... format",
     ),
     (
@@ -42,12 +42,12 @@ _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "STRIPE_PILOT_PRICE_ID",
-        r"^price_[A-Za-z0-9_]+$",
+        r"^price_[A-Za-z0-9]+$",
         "must use the price_... format",
     ),
     (
         "STRIPE_PILOT_PRODUCT_ID",
-        r"^prod_[A-Za-z0-9_]+$",
+        r"^prod_[A-Za-z0-9]+$",
         "must use the prod_... format",
     ),
 )

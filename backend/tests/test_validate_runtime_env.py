@@ -65,6 +65,104 @@ def test_production_runtime_env_accepts_safe_values():
 
 
 @pytest.mark.parametrize(
+    ("key", "value", "error"),
+    (
+        (
+            "STRIPE_ACCOUNT_ID",
+            "acct_ABC123",
+            "STRIPE_ACCOUNT_ID must use the acct_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRODUCT_ID",
+            "prod_ABC123",
+            "STRIPE_PILOT_PRODUCT_ID must use the prod_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRICE_ID",
+            "price_ABC123",
+            "STRIPE_PILOT_PRICE_ID must use the price_... format",
+        ),
+        (
+            "STRIPE_PILOT_PAYMENT_LINK_ID",
+            "plink_ABC123",
+            "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format",
+        ),
+    ),
+)
+def test_pilot_stripe_ids_accept_canonical_alphanumeric_suffix(
+    key: str,
+    value: str,
+    error: str,
+):
+    values = _complete_production_values()
+    values[key] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert error not in errors
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "error"),
+    (
+        (
+            "STRIPE_ACCOUNT_ID",
+            "acct_bad_id",
+            "STRIPE_ACCOUNT_ID must use the acct_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRODUCT_ID",
+            "prod_bad_id",
+            "STRIPE_PILOT_PRODUCT_ID must use the prod_... format",
+        ),
+        (
+            "STRIPE_PILOT_PRICE_ID",
+            "price_bad_id",
+            "STRIPE_PILOT_PRICE_ID must use the price_... format",
+        ),
+        (
+            "STRIPE_PILOT_PAYMENT_LINK_ID",
+            "plink_bad_id",
+            "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format",
+        ),
+    ),
+)
+def test_pilot_stripe_ids_reject_second_underscore(
+    key: str,
+    value: str,
+    error: str,
+):
+    values = _complete_production_values()
+    values[key] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert error in errors
+    assert value not in "\n".join(errors)
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    (
+        "plink_bad_id",
+        "plink_test_123",
+        "plink_",
+        "plink_test 123",
+        "plink_test-123",
+        "payment_link_test123",
+    ),
+)
+def test_pilot_payment_link_id_rejects_noncanonical_formats(invalid_value: str):
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PAYMENT_LINK_ID"] = invalid_value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    expected_error = "STRIPE_PILOT_PAYMENT_LINK_ID must use the plink_... format"
+    assert errors.count(expected_error) == 1
+
+
+@pytest.mark.parametrize(
     "key",
     (
         "CONTACT_RECIPIENT_EMAIL",
