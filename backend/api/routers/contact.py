@@ -9,6 +9,7 @@ Pilot request endpoint.
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -19,9 +20,14 @@ from api.config import settings
 from api.core.deps import DB
 from api.models.pilot import PilotRequest
 from api.services.email_service import _send as send_email
+from api.services.pilot_stripe_contract_service import (
+    PilotStripeContractError,
+    load_pilot_stripe_config,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
 
 
 def _sanitize_log_value(value: str | None) -> str:
@@ -31,25 +37,29 @@ def _sanitize_log_value(value: str | None) -> str:
 
 def _configured_payment_link_url() -> str | None:
     """Return the configured public Payment Link only when it is safe to expose."""
-    value = settings.STRIPE_PILOT_PAYMENT_LINK_URL.strip()
-    if not value:
+    raw_value = settings.STRIPE_PILOT_PAYMENT_LINK_URL
+    value = raw_value.strip()
+    if not value or raw_value != value:
         return None
     try:
+        config = load_pilot_stripe_config(settings)
         parsed = urlsplit(value)
         port = parsed.port
-    except ValueError:
+    except (PilotStripeContractError, ValueError):
         return None
     if (
         parsed.scheme != "https"
         or parsed.hostname != "buy.stripe.com"
-        or parsed.username
-        or parsed.password
-        or port is not None
-        or not parsed.path.strip("/")
+        or parsed.netloc not in {"buy.stripe.com", "buy.stripe.com:443"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or _PAYMENT_LINK_PATH.fullmatch(parsed.path) is None
+        or parsed.query
         or parsed.fragment
     ):
         return None
-    return value
+    return config.payment_link_url
 
 
 SUBJECTS = {

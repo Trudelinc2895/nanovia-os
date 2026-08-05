@@ -10,6 +10,11 @@ from urllib.parse import urlsplit
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _PILOT_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
+_PRODUCTION_HTTPS_URL_KEYS = (
+    "API_BASE_URL",
+    "PUBLIC_WEB_URL",
+    "PRIVATE_ADMIN_URL",
+)
 _SENSITIVE_PATTERNS = (
     r"(sk|pk|whsec)_[A-Za-z0-9_\.\-]+",
     r"postgres(?:ql)?://[^:]+:[^@]+@",
@@ -514,8 +519,15 @@ def validate_runtime_env(
     if "localhost" in origins or "127.0.0.1" in origins:
         errors.append("Production ALLOWED_ORIGINS_RAW cannot include localhost/127.0.0.1")
 
-    for key in ("API_BASE_URL", "PUBLIC_WEB_URL", "PRIVATE_ADMIN_URL"):
-        value = values.get(key, "").strip()
+    for key in _PRODUCTION_HTTPS_URL_KEYS:
+        raw_value = values.get(key, "")
+        value = raw_value.strip()
+        if (
+            value
+            and not _looks_placeholder(value)
+            and (raw_value != value or not value.startswith("https://"))
+        ):
+            errors.append(f"Production {key} must use https://")
         if value and ("localhost" in value or "127.0.0.1" in value):
             errors.append(f"Production {key} cannot include localhost/127.0.0.1")
 

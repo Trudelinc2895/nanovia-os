@@ -13,6 +13,24 @@ from api.models.pilot import PilotRequest
 from api.routers import contact
 
 
+def _configure_pilot(
+    monkeypatch,
+    *,
+    payment_link_url: str,
+    payment_link_id: str = "plink_ABC123",
+) -> None:
+    values = {
+        "APP_ENV": "production",
+        "STRIPE_ACCOUNT_ID": "acct_ABC123",
+        "STRIPE_PILOT_PRODUCT_ID": "prod_ABC123",
+        "STRIPE_PILOT_PRICE_ID": "price_ABC123",
+        "STRIPE_PILOT_PAYMENT_LINK_ID": payment_link_id,
+        "STRIPE_PILOT_PAYMENT_LINK_URL": payment_link_url,
+    }
+    for key, value in values.items():
+        monkeypatch.setattr(contact.settings, key, value)
+
+
 def _request(client_host: str = "127.0.0.1") -> Request:
     return Request({"type": "http", "client": (client_host, 12345)})
 
@@ -42,18 +60,14 @@ def _body(**overrides: str) -> contact.ContactRequest:
 @pytest.mark.asyncio
 async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_path):
     sent: dict[str, str] = {}
-    configured_url = "https://buy.stripe.com/test_configured"
+    configured_url = "https://buy.stripe.com/ABC123"
 
     async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
         sent.update(to=to, subject=subject, html=html)
         return True
 
     monkeypatch.setattr(contact, "send_email", fake_send_email)
-    monkeypatch.setattr(
-        contact.settings,
-        "STRIPE_PILOT_PAYMENT_LINK_URL",
-        configured_url,
-    )
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
     db, engine = await _isolated_session(tmp_path)
     try:
         response = await contact.contact_form(
@@ -79,21 +93,51 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
 
 @pytest.mark.parametrize(
     "configured_url",
-    [
+    (
+        "https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com:443/ABC123",
+        "https://buy.stripe.com/ABC_123",
+    ),
+)
+def test_payment_link_configuration_accepts_canonical_urls(monkeypatch, configured_url):
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
+
+    assert contact._configured_payment_link_url() == configured_url
+
+
+@pytest.mark.parametrize(
+    "configured_url",
+    (
         "",
         "not-a-url",
-        "http://buy.stripe.com/test",
-        "https://buy.stripe.com.evil.example/test",
-        "https://user:password@buy.stripe.com/test",
-        "https://buy.stripe.com:444/test",
-        "https://buy.stripe.com/test#fragment",
-    ],
+        "http://buy.stripe.com/ABC123",
+        "https://buy.stripe.com.evil.example/ABC123",
+        "https://user:password@buy.stripe.com/ABC123",
+        "https://buy.stripe.com:444/ABC123",
+        "https://buy.stripe.com/ABC123?locale=fr",
+        "https://buy.stripe.com/ABC123#fragment",
+        "https://buy.stripe.com/",
+        "https://buy.stripe.com/test_ABC123",
+        " https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com/ABC123 ",
+        "https://buy.stripe.com/ABC%20123",
+        "https://buy.stripe.com/ABC-123",
+        "https://buy.stripe.com/ABC123/extra",
+        "https://BUY.stripe.com/ABC123",
+    ),
 )
 def test_payment_link_configuration_fails_closed(monkeypatch, configured_url):
-    monkeypatch.setattr(
-        contact.settings,
-        "STRIPE_PILOT_PAYMENT_LINK_URL",
-        configured_url,
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
+
+    assert contact._configured_payment_link_url() is None
+
+
+@pytest.mark.parametrize("payment_link_id", ("", "plink_bad_id", "payment_link_ABC123"))
+def test_payment_link_configuration_requires_canonical_id(monkeypatch, payment_link_id):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+        payment_link_id=payment_link_id,
     )
 
     assert contact._configured_payment_link_url() is None

@@ -70,6 +70,81 @@ def test_production_runtime_env_accepts_safe_values():
     assert errors == []
 
 
+@pytest.mark.parametrize(
+    "key",
+    ("API_BASE_URL", "PUBLIC_WEB_URL", "PRIVATE_ADMIN_URL"),
+)
+def test_production_external_urls_require_https(key: str):
+    values = _complete_production_values()
+    values[key] = "http://external.nanovia.invalid"
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert f"Production {key} must use https://" in errors
+
+
+@pytest.mark.parametrize(
+    "key",
+    ("API_BASE_URL", "PUBLIC_WEB_URL", "PRIVATE_ADMIN_URL"),
+)
+def test_production_external_urls_accept_https_without_normalization(key: str):
+    values = _complete_production_values()
+    values[key] = "https://external.nanovia.invalid:443/path?mode=kept#fragment"
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert f"Production {key} must use https://" not in errors
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        " http://external.nanovia.invalid",
+        "http://external.nanovia.invalid ",
+        " https://external.nanovia.invalid",
+        "https://external.nanovia.invalid ",
+    ),
+)
+def test_production_external_urls_reject_surrounding_whitespace(value: str):
+    values = _complete_production_values()
+    values["PUBLIC_WEB_URL"] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert "Production PUBLIC_WEB_URL must use https://" in errors
+
+
+def test_development_keeps_http_external_urls_supported():
+    values = {
+        "APP_ENV": "development",
+        "API_BASE_URL": "http://127.0.0.1:8010",
+        "PUBLIC_WEB_URL": "http://127.0.0.1:3000",
+        "PRIVATE_ADMIN_URL": "http://127.0.0.1:3020",
+    }
+
+    errors = validate_runtime_env(values, target_env="development")
+
+    assert not any("must use https://" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("PRIVATE_ORCHESTRATOR_UPSTREAM_URL", "http://ai-orchestrator:8020"),
+        ("OLLAMA_CLIENT_BASE_URL", "http://ollama:11434"),
+        ("OLLAMA_ADMIN_BASE_URL", "http://ollama:11435"),
+        ("VAULT_ADDR", "http://vault:8200"),
+    ),
+)
+def test_production_keeps_internal_http_service_urls_supported(key: str, value: str):
+    values = _complete_production_values()
+    values[key] = value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert not any(key in error and "must use https://" in error for error in errors)
+
+
 def _runtime_accepts_payment_link_url(value: str, *, app_env: str) -> bool:
     settings = SimpleNamespace(
         APP_ENV=app_env,
