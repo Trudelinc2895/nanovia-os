@@ -26,7 +26,6 @@ def mock_user():
 @pytest.mark.asyncio
 async def test_checkout_unknown_plan(mock_user):
     """Unknown plan returns 400."""
-    from fastapi import HTTPException
     from api.services.billing_service import PLANS_CONFIG
     # "enterprise" does not exist
     assert "enterprise" not in PLANS_CONFIG
@@ -60,6 +59,107 @@ async def test_catalog_module_inclusion_and_prices():
     assert "content" in PLANS_CONFIG["pro"]["included_modules"]
     assert "ghost" in PLANS_CONFIG["business"]["included_modules"]
 
+
+@pytest.mark.asyncio
+async def test_unsupported_module_purchase_is_hidden_and_blocked_before_stripe(
+    mock_user,
+):
+    from fastapi import HTTPException
+
+    from api.routers import billing as billing_router
+    from api.schemas.billing import ModuleCheckoutRequest
+
+    catalog = {
+        "modules": {
+            "operator": {
+                "slug": "operator",
+                "name": "AI Operator",
+                "price_usd": 19,
+                "description": "Operator module",
+                "stripe_price_id": "price_module_configured",
+                "included_in_plans": ["free", "pro", "business"],
+            }
+        }
+    }
+    customer = AsyncMock()
+    create_session = MagicMock()
+    with (
+        patch.object(billing_router, "get_pricing_catalog", return_value=catalog),
+        patch.object(
+            billing_router,
+            "MODULES_CONFIG",
+            {"operator": catalog["modules"]["operator"]},
+        ),
+        patch.object(
+            billing_router,
+            "get_or_create_stripe_customer",
+            customer,
+        ),
+        patch.object(
+            billing_router.stripe.checkout.Session,
+            "create",
+            create_session,
+        ),
+    ):
+        modules = await billing_router.list_modules()
+        with pytest.raises(HTTPException) as exc_info:
+            await billing_router.create_module_checkout_session(
+                ModuleCheckoutRequest(module="operator"),
+                mock_user,
+                AsyncMock(),
+            )
+
+    assert modules[0].available is False
+    assert exc_info.value.status_code == 503
+    customer.assert_not_awaited()
+    create_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_addon_purchase_is_hidden_and_blocked_before_stripe(
+    mock_user,
+):
+    from fastapi import HTTPException
+
+    from api.routers import billing as billing_router
+    from api.schemas.billing import AddonCheckoutRequest
+
+    addon = {
+        "name": "API calls",
+        "description": "Additional API calls",
+        "price_usd": 10,
+        "type": "api_calls",
+        "grants": {"api_calls": 500},
+        "stripe_price_id": "price_addon_configured",
+    }
+    customer = AsyncMock()
+    create_session = MagicMock()
+    with (
+        patch.object(billing_router, "ADDONS_CONFIG", {"api_calls_500": addon}),
+        patch.object(
+            billing_router,
+            "get_or_create_stripe_customer",
+            customer,
+        ),
+        patch.object(
+            billing_router.stripe.checkout.Session,
+            "create",
+            create_session,
+        ),
+    ):
+        addons = await billing_router.list_addons()
+        with pytest.raises(HTTPException) as exc_info:
+            await billing_router.addon_checkout(
+                AddonCheckoutRequest(addon="api_calls_500"),
+                mock_user,
+                AsyncMock(),
+            )
+
+    assert addons == []
+    assert exc_info.value.status_code == 503
+    customer.assert_not_awaited()
+    create_session.assert_not_called()
+
 @pytest.mark.asyncio
 async def test_feature_gates_by_plan():
     """Verify feature gates per plan."""
@@ -78,7 +178,7 @@ async def test_price_id_to_plan_unknown_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_module_subscription_sync_does_not_upgrade_user_plan():
+async def test_module_subscription_sync_is_rejected_without_db_writes():
     from api.services.billing_service import sync_subscription_from_stripe
 
     user = MagicMock()
@@ -87,13 +187,7 @@ async def test_module_subscription_sync_does_not_upgrade_user_plan():
     user.stripe_customer_id = "cus_test_module"
 
     db = AsyncMock()
-    db.execute = AsyncMock(
-        side_effect=[
-            _ScalarResult(user),   # initial customer lookup
-            _ScalarResult(user),   # module sync customer lookup
-            _ScalarResult(None),   # no existing UserModule row
-        ]
-    )
+    db.execute = AsyncMock()
     db.add = MagicMock()
     db.commit = AsyncMock()
 
@@ -120,10 +214,13 @@ async def test_module_subscription_sync_does_not_upgrade_user_plan():
 
     assert result is None
     assert user.plan == "free"
+    db.execute.assert_not_awaited()
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_module_subscription_sync_normalizes_legacy_module_metadata():
+async def test_module_subscription_sync_rejects_legacy_module_metadata():
     from api.services.billing_service import sync_subscription_from_stripe
 
     user = MagicMock()
@@ -132,7 +229,7 @@ async def test_module_subscription_sync_normalizes_legacy_module_metadata():
     user.stripe_customer_id = "cus_test_module"
 
     db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[_ScalarResult(user)])
+    db.execute = AsyncMock()
 
     with patch("api.services.billing_service.sync_module_subscription_from_stripe", new=AsyncMock()) as sync_mock:
         stripe_sub = {
@@ -157,8 +254,54 @@ async def test_module_subscription_sync_normalizes_legacy_module_metadata():
         result = await sync_subscription_from_stripe(stripe_sub, db)
 
     assert result is None
-    sync_mock.assert_awaited_once()
-    assert sync_mock.await_args.args[1] == "ghost"
+    sync_mock.assert_not_awaited()
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_module_subscription_event_is_rejected_before_fulfillment():
+    from api.services.billing_service import process_stripe_event
+
+    sync = AsyncMock(side_effect=AssertionError("Unsupported fulfillment ran"))
+    with patch(
+        "api.services.billing_service.sync_subscription_from_stripe",
+        sync,
+    ):
+        status = await process_stripe_event(
+            "customer.subscription.created",
+            {
+                "id": "sub_unsupported_module",
+                "customer": "cus_unsupported_module",
+                "status": "active",
+                "metadata": {"type": "module", "module": "operator"},
+                "items": {"data": []},
+            },
+            AsyncMock(),
+        )
+
+    assert status == "rejected"
+    sync.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_module_activation_helper_fails_closed():
+    from api.services.billing_service import (
+        UnsupportedFulfillmentError,
+        activate_user_module,
+    )
+
+    db = AsyncMock()
+    with pytest.raises(UnsupportedFulfillmentError):
+        await activate_user_module(
+            user_id=str(uuid.uuid4()),
+            module_slug="operator",
+            stripe_subscription_id="sub_unsupported",
+            stripe_customer_id="cus_unsupported",
+            db=db,
+        )
+
+    db.execute.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

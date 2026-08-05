@@ -87,6 +87,15 @@ def _build_addons() -> dict[str, dict]:
 
 ADDONS_CONFIG: dict[str, dict] = _build_addons()
 MAX_CREDIT_PACK_QUANTITY = 100
+SUPPORTED_AUTOMATED_FULFILLMENT_TYPES = frozenset({"credits"})
+
+
+class UnsupportedFulfillmentError(RuntimeError):
+    """A paid product has no production-safe automated fulfillment."""
+
+
+def is_automated_fulfillment_supported(fulfillment_type: str | None) -> bool:
+    return fulfillment_type in SUPPORTED_AUTOMATED_FULFILLMENT_TYPES
 
 # ─── Per-module à-la-carte pricing ────────────────────────────────────────────
 def _build_modules() -> dict[str, dict]:
@@ -151,6 +160,20 @@ def price_id_to_module(price_id: str | None) -> str | None:
     if not price_id:
         return None
     return _PRICE_TO_MODULE.get(price_id)
+
+
+def _stripe_subscription_price_id(stripe_sub: dict[str, Any]) -> str | None:
+    items = stripe_sub.get("items", {}).get("data", [])
+    if not items:
+        return None
+    return _stripe_object_id(items[0].get("price"))
+
+
+def _is_module_subscription(stripe_sub: dict[str, Any]) -> bool:
+    metadata = stripe_sub.get("metadata") or {}
+    return metadata.get("type") == "module" or bool(
+        price_id_to_module(_stripe_subscription_price_id(stripe_sub))
+    )
 
 
 # ─── Feature gating ───────────────────────────────────────────────────────────
@@ -257,6 +280,12 @@ async def sync_subscription_from_stripe(
     """
     stripe_sub_id = stripe_sub["id"]
     stripe_customer_id = stripe_sub["customer"]
+    if _is_module_subscription(stripe_sub):
+        logger.warning(
+            "[billing] Automatic module fulfillment rejected for subscription %s",
+            stripe_sub_id,
+        )
+        return None
 
     result = await db.execute(
         select(User).where(User.stripe_customer_id == stripe_customer_id)
@@ -267,24 +296,8 @@ async def sync_subscription_from_stripe(
         return None
 
     metadata = stripe_sub.get("metadata") or {}
-    price_id = None
     items = stripe_sub.get("items", {}).get("data", [])
-    if items:
-        price_id = items[0]["price"]["id"]
-
-    module_slug = (
-        canonicalize_module_slug(metadata.get("module"))
-        if metadata.get("type") == "module"
-        else price_id_to_module(price_id)
-    )
-    if module_slug:
-        await sync_module_subscription_from_stripe(
-            stripe_sub,
-            module_slug,
-            db,
-            commit=commit,
-        )
-        return None
+    price_id = _stripe_subscription_price_id(stripe_sub)
 
     plan = price_id_to_plan(price_id)
     if not plan:
@@ -382,6 +395,10 @@ async def sync_module_subscription_from_stripe(
     commit: bool = True,
 ) -> None:
     """Upsert module access from a Stripe subscription without mutating User.plan."""
+    if not is_automated_fulfillment_supported("module"):
+        raise UnsupportedFulfillmentError(
+            "Automatic module subscription fulfillment is disabled"
+        )
     from api.models.user_module import UserModule
 
     raw_module_identifier = module_slug
@@ -526,6 +543,11 @@ async def activate_user_module(
     Grant a user access to a specific module after successful payment.
     Uses upsert pattern — safe to call multiple times (idempotent).
     """
+    if not is_automated_fulfillment_supported("module"):
+        raise UnsupportedFulfillmentError(
+            "Automatic module activation is disabled"
+        )
+
     import uuid as _uuid
     from api.models.user_module import UserModule
     from sqlalchemy import select as _select
@@ -648,6 +670,15 @@ async def handle_checkout_completed(
     - Links Stripe customer to our user (first purchase)
     - If mode=payment + type=credits → increments user.credits immediately
     """
+    metadata = session.get("metadata") or {}
+    checkout_type = metadata.get("type")
+    if checkout_type and not is_automated_fulfillment_supported(checkout_type):
+        logger.warning(
+            "[billing] Unsupported checkout fulfillment rejected type=%s",
+            checkout_type,
+        )
+        return
+
     customer_id = session.get("customer")
     user_id_str = session.get("client_reference_id")
     if not customer_id or not user_id_str:
@@ -672,7 +703,6 @@ async def handle_checkout_completed(
         logger.info(f"[billing] Linked customer {customer_id} to user {user_id}")
 
     # Credit pack one-time purchase
-    metadata = session.get("metadata") or {}
     if session.get("mode") == "payment" and metadata.get("type") == "credits":
         session_id = session.get("id")
         if not session_id:
@@ -693,29 +723,6 @@ async def handle_checkout_completed(
             )
             logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
             await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
-
-    # Module à-la-carte purchase
-    checkout_type = metadata.get("type", "")
-    if checkout_type == "module":
-        module_slug = canonicalize_module_slug(metadata.get("module"))
-        if module_slug and user_id_str:
-            await activate_user_module(
-                user_id=user_id_str,
-                module_slug=module_slug,
-                stripe_subscription_id=session.get("subscription"),
-                stripe_customer_id=customer_id,
-                db=db,
-                commit=commit,
-            )
-            try:
-                from prometheus_client import Counter
-                Counter(
-                    "kt_module_purchases_total",
-                    "Module subscription purchases completed",
-                    ["module"],
-                ).labels(module=module_slug).inc()
-            except Exception:
-                pass
 
     if commit:
         await db.commit()
@@ -784,6 +791,14 @@ async def process_stripe_event(
             return "ignored"
 
     if event_type == "checkout.session.completed":
+        metadata = data.get("metadata") or {}
+        checkout_type = metadata.get("type")
+        if checkout_type and not is_automated_fulfillment_supported(checkout_type):
+            logger.warning(
+                "[billing] Unsupported checkout event rejected type=%s",
+                checkout_type,
+            )
+            return "rejected"
         await handle_checkout_completed(data, db, commit=False)
         return "processed"
 
@@ -792,6 +807,12 @@ async def process_stripe_event(
         "customer.subscription.updated",
         "customer.subscription.deleted",
     ):
+        if _is_module_subscription(data):
+            logger.warning(
+                "[billing] Unsupported module subscription event rejected type=%s",
+                event_type,
+            )
+            return "rejected"
         await sync_subscription_from_stripe(data, db, commit=False)
         user = await _get_user_by_stripe_customer_id(data.get("customer"), db)
         await _write_audit(

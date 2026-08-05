@@ -60,6 +60,7 @@ from api.services.billing_service import (
     get_active_subscription,
     get_or_create_stripe_customer,
     get_upsell_suggestion,
+    is_automated_fulfillment_supported,
 )
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
@@ -217,7 +218,10 @@ async def list_modules() -> list[ModulePublic]:
             name=cfg["name"],
             price_usd=cfg["price_usd"],
             description=cfg["description"],
-            available=bool(cfg.get("stripe_price_id")),
+            available=(
+                is_automated_fulfillment_supported("module")
+                and bool(cfg.get("stripe_price_id"))
+            ),
             included_in_plans=cfg["included_in_plans"],
         )
         for cfg in catalog["modules"].values()
@@ -269,7 +273,10 @@ async def get_my_modules(current_user: CurrentUser, db: DB):
             "description": cfg["description"],
             "access": access,
             "source": source,
-            "stripe_price_id_available": bool(cfg.get("stripe_price_id")),
+            "stripe_price_id_available": (
+                is_automated_fulfillment_supported("module")
+                and bool(cfg.get("stripe_price_id"))
+            ),
         })
 
     return {
@@ -409,6 +416,14 @@ async def create_module_checkout_session(
     if not mod_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown module: {body.module}")
 
+    if not is_automated_fulfillment_supported("module"):
+        if _HAS_PROM:
+            _payment_errors.labels(reason="unsupported_module_fulfillment").inc()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Individual module purchases are not currently available.",
+        )
+
     price_id: str | None = mod_cfg.get("stripe_price_id")
     if not price_id:
         if _HAS_PROM:
@@ -497,6 +512,8 @@ async def purchase_credits(
 @router.get("/addons", response_model=list[AddonPublic])
 async def list_addons():
     """Return all available add-on packs (API calls, storage, credits)."""
+    if not is_automated_fulfillment_supported("addon"):
+        return []
     return [
         AddonPublic(slug=slug, **{k: v for k, v in cfg.items() if k != "stripe_price_id"})
         for slug, cfg in ADDONS_CONFIG.items()
@@ -514,6 +531,12 @@ async def addon_checkout(body: AddonCheckoutRequest, current_user: CurrentUser, 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown add-on: {body.addon!r}",
+        )
+
+    if not is_automated_fulfillment_supported("addon"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Add-on purchases are not currently available.",
         )
 
     price_id = addon_cfg.get("stripe_price_id")

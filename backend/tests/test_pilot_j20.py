@@ -150,6 +150,7 @@ def _legacy_module_checkout(user_id: uuid.UUID, *, session_id: str) -> dict:
     return {
         "id": session_id,
         "mode": "subscription",
+        "payment_status": "paid",
         "customer": "cus_legacy_module",
         "subscription": "sub_legacy_module",
         "client_reference_id": str(user_id),
@@ -2035,7 +2036,7 @@ async def test_legacy_status_failure_rolls_back_then_retry_is_safe(
 
 
 @pytest.mark.asyncio
-async def test_legacy_module_retry_never_double_provisions(monkeypatch, tmp_path):
+async def test_unsupported_module_retry_never_provisions(monkeypatch, tmp_path):
     real_update = webhook_handler_service.update_webhook_status
     update_attempts = 0
 
@@ -2103,12 +2104,83 @@ async def test_legacy_module_retry_never_double_provisions(monkeypatch, tmp_path
                     WebhookEvent.stripe_event_id == "evt_legacy_module_retry"
                 )
             )
-            assert retry["status"] == "processed"
+            assert retry["status"] == "rejected"
             assert duplicate["status"] == "duplicate"
-            assert len(modules) == 1
-            assert modules[0].module_slug == "operator"
-            assert modules[0].status == "active"
-            assert event is not None and event.status == "processed"
+            assert modules == []
+            assert event is not None and event.status == "rejected"
+            assert event.attempt_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkout_type", ["module", "addon"])
+async def test_paid_unsupported_checkout_never_grants_value(
+    monkeypatch,
+    tmp_path,
+    checkout_type,
+):
+    processor = AsyncMock(side_effect=AssertionError("Unsupported fulfillment ran"))
+    monkeypatch.setattr(billing_service, "handle_checkout_completed", processor)
+
+    async with _isolated_legacy_database(
+        tmp_path,
+        f"unsupported_checkout_{checkout_type}",
+    ) as sessions:
+        async with sessions() as db:
+            user = User(
+                email=f"unsupported-{checkout_type}@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Unsupported Checkout",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = {
+                "id": f"cs_unsupported_{checkout_type}",
+                "mode": "payment",
+                "payment_status": "paid",
+                "customer": f"cus_unsupported_{checkout_type}",
+                "client_reference_id": str(user.id),
+                "metadata": {"type": checkout_type},
+            }
+
+            first = await handle_stripe_webhook(
+                f"evt_unsupported_{checkout_type}",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                f"evt_unsupported_{checkout_type}",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            second_event = await handle_stripe_webhook(
+                f"evt_unsupported_{checkout_type}_second",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            module_count = await db.scalar(
+                select(func.count()).select_from(UserModule)
+            )
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+
+            assert first["status"] == "rejected"
+            assert duplicate["status"] == "duplicate"
+            assert second_event["status"] == "rejected"
+            assert user.stripe_customer_id is None
+            assert user.credits == 0
+            assert module_count == 0
+            assert ledger_count == 0
+            assert len(events) == 2
+            assert all(event.status == "rejected" for event in events)
+            processor.assert_not_awaited()
 
 
 @pytest.mark.asyncio
