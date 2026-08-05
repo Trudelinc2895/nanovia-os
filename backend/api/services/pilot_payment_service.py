@@ -37,7 +37,13 @@ from api.services.pilot_stripe_contract_service import (
 
 PILOT_EVENT_TYPES = PILOT_CHECKOUT_EVENT_TYPES
 OPEN_REQUEST_STATES = ("pending", "processing")
-ADVERSE_STATE_PRIORITY = {"processing": 0, "paid": 0, "manual_review": 1, "failed": 2}
+ADVERSE_STATE_PRIORITY = {
+    "pending": 0,
+    "processing": 0,
+    "paid": 0,
+    "manual_review": 1,
+    "failed": 2,
+}
 
 
 class PilotAdverseEventPendingCommit(RuntimeError):
@@ -95,11 +101,11 @@ async def _find_payment_collisions(
     return session_payment, intent_payment
 
 
-async def _find_other_request_payment(
+async def _find_other_request_payments(
     request_id: uuid.UUID,
     session_id: str,
     db: AsyncSession,
-) -> PilotPayment | None:
+) -> list[PilotPayment]:
     result = await db.execute(
         select(PilotPayment)
         .where(
@@ -107,9 +113,13 @@ async def _find_other_request_payment(
             PilotPayment.stripe_checkout_session_id != session_id,
         )
         .with_for_update()
-        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return list(result.scalars().all())
+
+
+def _is_retryable_failed_checkout(payment: PilotPayment) -> bool:
+    """Allow only a new Session after a terminal, unpaid checkout failure."""
+    return payment.status == "failed" and payment.payment_status == "unpaid"
 
 
 def _same_payment(
@@ -144,16 +154,19 @@ async def _mark_collision_manual_review(
         if payment.pilot_request_id is not None
     }
     for payment in payments:
-        payment.status = "manual_review"
+        payment.status = _monotone_pilot_status(payment.status, "manual_review")
     if matched_request is not None:
-        matched_request.status = "manual_review"
+        matched_request.status = _monotone_pilot_status(
+            matched_request.status,
+            "manual_review",
+        )
         request_ids.discard(matched_request.id)
     if request_ids:
         requests_result = await db.execute(
             select(PilotRequest).where(PilotRequest.id.in_(request_ids))
         )
         for request in requests_result.scalars().all():
-            request.status = "manual_review"
+            request.status = _monotone_pilot_status(request.status, "manual_review")
     await db.flush()
     return "manual_review"
 
@@ -232,19 +245,6 @@ async def process_pilot_checkout_event(
             db,
         )
 
-    other_request_payment = await _find_other_request_payment(
-        request.id,
-        session_id,
-        db,
-    )
-    if other_request_payment is not None:
-        return await _mark_collision_manual_review(
-            session_payment,
-            other_request_payment,
-            request,
-            db,
-        )
-
     target_status = _target_checkout_status(event_type, verified)
     if session_payment is not None:
         if session_payment.status in {"manual_review", "failed"} and target_status in {
@@ -257,6 +257,8 @@ async def process_pilot_checkout_event(
             "processing",
         }:
             return "duplicate"
+        if session_payment.status == "failed" and target_status == "failed":
+            return "duplicate"
         if not _transition_is_safe(session_payment.status, target_status):
             return await _mark_collision_manual_review(
                 session_payment,
@@ -264,7 +266,35 @@ async def process_pilot_checkout_event(
                 request,
                 db,
             )
-    elif request.status not in OPEN_REQUEST_STATES:
+
+    other_request_payments = await _find_other_request_payments(
+        request.id,
+        session_id,
+        db,
+    )
+    blocking_payment = next(
+        (
+            payment
+            for payment in other_request_payments
+            if not _is_retryable_failed_checkout(payment)
+        ),
+        None,
+    )
+    if blocking_payment is not None:
+        return await _mark_collision_manual_review(
+            session_payment,
+            blocking_payment,
+            request,
+            db,
+        )
+
+    is_retry_after_failed_checkout = bool(other_request_payments) and all(
+        _is_retryable_failed_checkout(payment)
+        for payment in other_request_payments
+    )
+    if session_payment is None and request.status not in OPEN_REQUEST_STATES and not (
+        request.status == "failed" and is_retry_after_failed_checkout
+    ):
         request.status = "manual_review"
         await db.flush()
         return "manual_review"

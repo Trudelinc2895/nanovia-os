@@ -349,6 +349,7 @@ def _existing_payment(
     session_id: str,
     payment_intent_id: str,
     status: str = "paid",
+    payment_status: str = "paid",
 ) -> PilotPayment:
     return PilotPayment(
         pilot_request_id=request.id,
@@ -360,7 +361,7 @@ def _existing_payment(
         customer_email=request.email,
         currency="cad",
         amount_subtotal=29700,
-        payment_status="paid",
+        payment_status=payment_status,
         status=status,
         livemode=False,
     )
@@ -800,6 +801,153 @@ async def test_deferred_payment_transitions_processing_to_paid(monkeypatch, tmp_
             assert payments[0].status == "paid"
             assert payments[0].stripe_event_id == "evt_deferred_paid"
             assert pilot_request.status == "paid"
+
+
+@pytest.mark.asyncio
+async def test_paid_retry_after_failed_checkout_confirms_once(monkeypatch, tmp_path):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "failed_checkout_retry") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db)
+            failed_session = _valid_session(
+                session_id="cs_failed_attempt",
+                payment_intent_id="pi_failed_attempt",
+                request_id=pilot_request.id,
+                payment_status="unpaid",
+            )
+            paid_session = _valid_session(
+                session_id="cs_paid_retry",
+                payment_intent_id="pi_paid_retry",
+                request_id=pilot_request.id,
+            )
+
+            failed = await handle_stripe_webhook(
+                "evt_failed_attempt",
+                "checkout.session.async_payment_failed",
+                failed_session,
+                db,
+            )
+            paid = await handle_stripe_webhook(
+                "evt_paid_retry",
+                "checkout.session.completed",
+                paid_session,
+                db,
+            )
+            repeated_paid = await handle_stripe_webhook(
+                "evt_paid_retry",
+                "checkout.session.completed",
+                paid_session,
+                db,
+            )
+            late_failed = await handle_stripe_webhook(
+                "evt_failed_attempt_late",
+                "checkout.session.async_payment_failed",
+                failed_session,
+                db,
+            )
+
+            verified_paid = validate_pilot_checkout(
+                _provider_session(paid_session),
+                _line_items(),
+                pilot_stripe_contract_service.load_pilot_stripe_config(),
+                require_paid=True,
+            )
+            provider_lookup = AsyncMock(return_value=verified_paid)
+            monkeypatch.setattr(
+                billing_router,
+                "_retrieve_pilot_checkout_session",
+                provider_lookup,
+            )
+            confirmed = await billing_router.get_pilot_confirmation(
+                db,
+                session_id="cs_paid_retry",
+            )
+            repeated_confirmation = await billing_router.get_pilot_confirmation(
+                db,
+                session_id="cs_paid_retry",
+            )
+
+            payments = {
+                payment.stripe_checkout_session_id: payment
+                for payment in (await db.execute(select(PilotPayment))).scalars()
+            }
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+
+            assert failed["status"] == "failed"
+            assert paid["status"] == "paid"
+            assert repeated_paid["status"] == "duplicate"
+            assert late_failed["status"] == "duplicate"
+            assert confirmed.model_dump() == {"status": "confirmed"}
+            assert repeated_confirmation.model_dump() == {"status": "confirmed"}
+            assert set(payments) == {"cs_failed_attempt", "cs_paid_retry"}
+            assert payments["cs_failed_attempt"].status == "failed"
+            assert payments["cs_failed_attempt"].payment_status == "unpaid"
+            assert payments["cs_paid_retry"].status == "paid"
+            assert payments["cs_paid_retry"].payment_status == "paid"
+            assert sum(payment.status == "paid" for payment in payments.values()) == 1
+            assert pilot_request.status == "paid"
+            assert len(events) == 3
+            assert all(event.status == "processed" for event in events)
+            assert provider_lookup.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing_status", "existing_payment_status"),
+    [
+        pytest.param("paid", "paid", id="paid"),
+        pytest.param("processing", "unpaid", id="processing"),
+        pytest.param("manual_review", "unpaid", id="manual-review"),
+        pytest.param("failed", "", id="ambiguous-failure"),
+        pytest.param("failed", "refunded", id="refunded"),
+        pytest.param("failed", "dispute_lost", id="dispute-lost"),
+        pytest.param("failed", "canceled", id="canceled"),
+    ],
+)
+async def test_paid_retry_does_not_supersede_non_retryable_attempt(
+    monkeypatch,
+    tmp_path,
+    existing_status,
+    existing_payment_status,
+):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(
+        tmp_path,
+        f"blocked_retry_{existing_status}_{existing_payment_status or 'empty'}",
+    ) as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status=existing_status)
+            original_payment = _existing_payment(
+                request=pilot_request,
+                session_id="cs_existing_attempt",
+                payment_intent_id="pi_existing_attempt",
+                status=existing_status,
+                payment_status=existing_payment_status,
+            )
+            db.add(original_payment)
+            await db.commit()
+
+            result = await pilot_payment_service.process_pilot_checkout_event(
+                "evt_blocked_retry",
+                "checkout.session.completed",
+                _valid_session(
+                    session_id="cs_blocked_retry",
+                    payment_intent_id="pi_blocked_retry",
+                    request_id=pilot_request.id,
+                ),
+                db,
+            )
+            await db.commit()
+
+            payments = list((await db.execute(select(PilotPayment))).scalars())
+            expected_status = (
+                "failed" if existing_status == "failed" else "manual_review"
+            )
+            assert result == "manual_review"
+            assert len(payments) == 1
+            assert payments[0].stripe_checkout_session_id == "cs_existing_attempt"
+            assert original_payment.status == expected_status
+            assert pilot_request.status == expected_status
 
 
 @pytest.mark.asyncio
