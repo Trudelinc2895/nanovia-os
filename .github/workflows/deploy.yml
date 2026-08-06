@@ -584,6 +584,10 @@ jobs:
             | grep -Fq "${CURRENT_ALEMBIC}" \
             || fail "Current Alembic revision is absent from the target migration history"
 
+          # Validate the exact runtime Alertmanager template and Telegram inputs
+          # before stopping any writer or opening the migration window.
+          compose run --rm --no-deps -T alertmanager --check
+
           WRITERS_STOPPED=0
           resume_previous_writers() {
             if [ "${WRITERS_STOPPED}" -eq 1 ]; then
@@ -616,6 +620,12 @@ jobs:
           [ -n "${BACKUP_GATE}" ] && [ -f "${BACKUP_GATE}" ] \
             || fail "Verified backup gate is absent"
 
+          # Automatic rollback is safe only before a schema mutation begins.
+          # From this point, old writers remain stopped until compatibility is
+          # explicitly proven or an operator completes the documented recovery.
+          WRITERS_STOPPED=0
+          trap - EXIT
+
           compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"
           POST_MIGRATION_ALEMBIC="$(
             compose run --rm --no-deps -T api alembic current 2>/dev/null \
@@ -626,8 +636,6 @@ jobs:
 
           compose up -d --force-recreate --no-deps \
             api ai-orchestrator web admin caddy alertmanager
-          WRITERS_STOPPED=0
-          trap - EXIT
 
           wait_for_healthy postgres
           wait_for_healthy redis

@@ -18,6 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 RUNBOOK = REPO_ROOT / "docs" / "J21A_CANONICAL_DEPLOYMENT.md"
 POSTFLIGHT = REPO_ROOT / "infra" / "scripts" / "verify-caddy-postflight.sh"
+ALERTMANAGER_RENDERER = (
+    REPO_ROOT / "infra" / "monitoring" / "render-alertmanager-config.sh"
+)
+ALERTMANAGER_TEMPLATE = REPO_ROOT / "infra" / "monitoring" / "alertmanager.yml"
 TEST_PUBLIC_WEB_URL = "https://nanovia.invalid"
 
 
@@ -86,7 +90,6 @@ def _bash_path(path: Path) -> str:
 def _service_harness(tmp_path: Path, invocation: str, *, state: str, restart: str, ready: str):
     fake_bin = tmp_path / "service-bin"
     fake_bin.mkdir()
-    restart_file = tmp_path / "restart-count"
     _write_fake_command(
         fake_bin / "docker",
         """
@@ -295,6 +298,68 @@ def test_application_postflight_order_covers_admin_and_orchestrator():
     success = workflow.index("CANONICAL_DEPLOYMENT=verified")
 
     assert recreate < admin < orchestrator < caddy < success
+
+
+def test_alertmanager_contract_is_checked_before_writers_stop_and_migration():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    alertmanager_check = workflow.index(
+        "compose run --rm --no-deps -T alertmanager --check"
+    )
+    stop_writers = workflow.index("compose stop api ai-orchestrator")
+    migration = workflow.index(
+        'compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"'
+    )
+
+    assert alertmanager_check < stop_writers < migration
+
+
+def test_old_writer_recovery_is_disabled_before_alembic_begins():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    recovery_trap = workflow.index("trap resume_previous_writers EXIT")
+    stop_writers = workflow.index("compose stop api ai-orchestrator")
+    backup_gate = workflow.index('|| fail "Verified backup gate is absent"')
+    disable_recovery = workflow.index(
+        "WRITERS_STOPPED=0\n          trap - EXIT",
+        backup_gate,
+    )
+    migration = workflow.index(
+        'compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"'
+    )
+    recreate = workflow.index("compose up -d --force-recreate --no-deps")
+
+    assert recovery_trap < stop_writers < backup_gate < disable_recovery
+    assert disable_recovery < migration < recreate
+    assert workflow.count("trap - EXIT") == 1
+
+
+def test_alertmanager_renderer_self_test_covers_required_inputs():
+    completed = subprocess.run(
+        [
+            _bash_executable(),
+            ALERTMANAGER_RENDERER.as_posix(),
+            "--self-test",
+            ALERTMANAGER_TEMPLATE.as_posix(),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    for case_name in (
+        "positive",
+        "token-absent",
+        "token-empty",
+        "chat-id-absent",
+        "chat-id-text",
+        "chat-id-zero",
+        "residual-placeholder",
+        "cleanup",
+    ):
+        assert f"self-test {case_name}: PASS" in completed.stdout
+    assert "synthetic-nonsecret-value" not in completed.stdout
+    assert "synthetic-nonsecret-value" not in completed.stderr
 
 
 def test_orchestrator_stable_readiness_succeeds(tmp_path):
