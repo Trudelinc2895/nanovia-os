@@ -58,6 +58,7 @@ class PreparedPilotReversal:
     provider_object: Any | None
     config: PilotStripeConfig | None
     classification: str
+    provider_sessions: tuple[Any, ...] = ()
 
 
 async def _match_request(
@@ -317,7 +318,8 @@ async def process_pilot_checkout_event(
             status=target_status,
             livemode=config.livemode,
         )
-    assert payment is not None
+    if payment is None:
+        raise RuntimeError("Pilot payment initialization failed")
 
     for _ in range(2):
         savepoint = await db.begin_nested()
@@ -467,6 +469,7 @@ async def prepare_pilot_reversal_event(
         )
 
     session_response = await retrieve_pilot_reversal_sessions(signed_intent_id)
+    provider_sessions = tuple(stripe_list_data(session_response))
     classification = _classify_pilot_reversal_sessions(
         session_response,
         signed_intent_id,
@@ -477,6 +480,7 @@ async def prepare_pilot_reversal_event(
         provider_object,
         config,
         classification,
+        provider_sessions,
     )
 
 
@@ -485,13 +489,31 @@ def _validate_stored_payment_contract(
     config: PilotStripeConfig,
 ) -> None:
     if (
-        payment.stripe_payment_link_id != config.payment_link_id
-        or payment.stripe_price_id != config.price_id
+        not payment.stripe_payment_link_id
+        or not payment.stripe_price_id
         or payment.currency.lower() != PILOT_CURRENCY
         or payment.amount_subtotal != PILOT_AMOUNT_CENTS
         or payment.livemode != config.livemode
     ):
         raise PilotStripeContractError("Stored Pilot payment contract mismatch")
+
+
+def _stored_session_matches_payment(payment: PilotPayment, session: Any) -> bool:
+    metadata = stripe_field(session, "metadata", {}) or {}
+    return (
+        stripe_id(session) == payment.stripe_checkout_session_id
+        and stripe_id(stripe_field(session, "payment_intent"))
+        == payment.stripe_payment_intent_id
+        and stripe_id(stripe_field(session, "payment_link"))
+        == payment.stripe_payment_link_id
+        and stripe_field(session, "mode") == "payment"
+        and bool(stripe_field(session, "livemode")) == payment.livemode
+        and str(stripe_field(session, "currency") or "").lower()
+        == payment.currency.lower()
+        and stripe_field(session, "amount_subtotal") == payment.amount_subtotal
+        and stripe_field(session, "amount_total") == PILOT_AMOUNT_CENTS
+        and stripe_field(metadata, "nanovia_contract") == PILOT_CONTRACT_MARKER
+    )
 
 
 def _reversal_target_status(event_type: str, value: Any) -> tuple[str, str]:
@@ -545,11 +567,11 @@ async def process_pilot_reversal_event(
         return "ignored"
     result = await db.execute(_pilot_payment_for_update_statement(signed_intent_id))
     payment = result.scalar_one_or_none()
-    if prepared.classification == "foreign":
-        return "rejected" if payment is not None else "ignored"
     if prepared.classification == "rejected":
         return "rejected"
     if payment is None:
+        if prepared.classification == "foreign":
+            return "ignored"
         raise PilotAdverseEventPendingCommit(
             "Canonical Pilot payment is not committed yet"
         )
@@ -558,6 +580,11 @@ async def process_pilot_reversal_event(
     if provider_object is None or config is None:
         raise PilotStripeContractError("Prepared Pilot reversal is incomplete")
     _validate_stored_payment_contract(payment, config)
+    if (
+        len(prepared.provider_sessions) != 1
+        or not _stored_session_matches_payment(payment, prepared.provider_sessions[0])
+    ):
+        return "rejected"
 
     request = None
     if payment.pilot_request_id is not None:

@@ -10,6 +10,7 @@ from api.services.billing_service import (
     WEBHOOK_DUPLICATE,
     WEBHOOK_IN_PROGRESS,
     claim_webhook_event,
+    dispatch_post_commit_actions,
     get_webhook_event,
     mark_webhook_retryable_failure,
     prepare_stripe_event,
@@ -83,6 +84,7 @@ async def handle_stripe_webhook(
         raise WebhookProcessingUnavailable("Webhook claim returned an invalid state")
 
     try:
+        post_commit_actions = []
         if preparation_error is not None:
             raise preparation_error
         final_status = await process_stripe_event(
@@ -91,6 +93,7 @@ async def handle_stripe_webhook(
             db,
             event_id=event_id,
             prepared_event=prepared_event,
+            post_commit_actions=post_commit_actions,
         )
         webhook_status = (
             final_status if final_status in {"ignored", "rejected"} else "processed"
@@ -115,6 +118,8 @@ async def handle_stripe_webhook(
         raise WebhookProcessingUnavailable(
             "Webhook processing is temporarily unavailable"
         ) from exc
+
+    dispatch_post_commit_actions(post_commit_actions)
 
     return {
         "event_id": event_id,

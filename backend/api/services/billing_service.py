@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +37,7 @@ from api.services.pilot_payment_service import (
 )
 from api.services.pilot_stripe_contract_service import (
     PILOT_REVERSAL_EVENT_TYPES,
+    PilotStripeConfig,
     is_canonical_payment_link,
     load_pilot_stripe_config,
     stripe_field,
@@ -49,6 +51,38 @@ from api.services.module_registry import (
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+PostCommitAction = Callable[[], Awaitable[Any]]
+_PILOT_OPTIONAL_FIELDS = (
+    "STRIPE_PILOT_PRODUCT_ID",
+    "STRIPE_PILOT_PRICE_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_URL",
+)
+
+
+def _optional_pilot_stripe_config() -> PilotStripeConfig | None:
+    """Return no contract only when every Pilot-specific setting is blank."""
+    values = [getattr(settings, field_name, "") for field_name in _PILOT_OPTIONAL_FIELDS]
+    if all(not isinstance(value, str) or not value.strip() for value in values):
+        return None
+    return load_pilot_stripe_config()
+
+
+async def _run_post_commit_action(action: PostCommitAction) -> None:
+    try:
+        await action()
+    except Exception:
+        logger.exception("[webhook] Post-commit side effect failed")
+
+
+def dispatch_post_commit_actions(actions: list[PostCommitAction]) -> None:
+    """Schedule best-effort external effects only after the database commit."""
+    for action in actions:
+        try:
+            asyncio.create_task(_run_post_commit_action(action))
+        except Exception:
+            logger.exception("[webhook] Could not schedule post-commit side effect")
 
 # ─── Plan configuration — server-side ONLY, never from client ────────────────
 def _build_plans() -> dict[str, dict]:
@@ -751,6 +785,8 @@ async def prepare_stripe_event(
         return None
     if not event_id:
         raise RuntimeError("Stripe event id is required for Pilot processing")
+    if _optional_pilot_stripe_config() is None:
+        return PreparedPilotReversal(None, None, None, "ignored")
     return await prepare_pilot_reversal_event(event_id, event_type, data)
 
 
@@ -760,11 +796,14 @@ async def process_stripe_event(
     db: AsyncSession,
     event_id: str | None = None,
     prepared_event: PreparedPilotReversal | None = None,
+    post_commit_actions: list[PostCommitAction] | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
     if event_type in PILOT_REVERSAL_EVENT_TYPES:
         if not event_id:
             raise RuntimeError("Stripe event id is required for Pilot processing")
+        if prepared_event is None and _optional_pilot_stripe_config() is None:
+            return "ignored"
         return await process_pilot_reversal_event(
             event_id,
             event_type,
@@ -776,17 +815,18 @@ async def process_stripe_event(
     if event_type in PILOT_EVENT_TYPES:
         incoming_payment_link = stripe_field(data, "payment_link")
         if incoming_payment_link:
-            config = load_pilot_stripe_config()
-            if not is_canonical_payment_link(incoming_payment_link, config):
-                return "ignored"
-            if not event_id:
-                raise RuntimeError("Stripe event id is required for Pilot processing")
-            return await process_pilot_checkout_event(
-                event_id,
-                event_type,
-                data,
-                db,
-            )
+            config = _optional_pilot_stripe_config()
+            if config is not None:
+                if not is_canonical_payment_link(incoming_payment_link, config):
+                    return "ignored"
+                if not event_id:
+                    raise RuntimeError("Stripe event id is required for Pilot processing")
+                return await process_pilot_checkout_event(
+                    event_id,
+                    event_type,
+                    data,
+                    db,
+                )
         if event_type != "checkout.session.completed":
             return "ignored"
 
@@ -834,9 +874,12 @@ async def process_stripe_event(
                     plan = data.get("metadata", {}).get("plan", "Pro")
                     items = data.get("items", {}).get("data", [])
                     amount = items[0]["price"]["unit_amount"] / 100 if items else 0.0
-                    asyncio.create_task(
-                        send_billing_confirmation(user.email, plan, amount)
-                    )
+                    if post_commit_actions is not None:
+                        post_commit_actions.append(
+                            lambda email=user.email, plan=plan, amount=amount: (
+                                send_billing_confirmation(email, plan, amount)
+                            )
+                        )
             except Exception as exc:
                 logger.warning("[webhook] Could not queue billing email: %s", exc)
 
@@ -849,9 +892,16 @@ async def process_stripe_event(
                         data.get("metadata", {}).get("plan")
                         or (user.plan or "free").capitalize()
                     )
-                    asyncio.create_task(
-                        send_subscription_cancelled(user.email, user.full_name or "", plan_name)
-                    )
+                    if post_commit_actions is not None:
+                        post_commit_actions.append(
+                            lambda email=user.email,
+                            full_name=user.full_name or "",
+                            plan_name=plan_name: send_subscription_cancelled(
+                                email,
+                                full_name,
+                                plan_name,
+                            )
+                        )
             except Exception as exc:
                 logger.warning("[webhook] Could not queue cancellation email: %s", exc)
 

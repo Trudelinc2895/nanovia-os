@@ -413,3 +413,59 @@ async def test_process_stripe_event_handles_trial_will_end():
     assert trial_mock.await_args.args[1] == sub
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[2] == "customer_subscription_trial_will_end"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "email_function"),
+    [
+        ("customer.subscription.created", "send_billing_confirmation"),
+        ("customer.subscription.deleted", "send_subscription_cancelled"),
+    ],
+)
+async def test_subscription_email_is_deferred_until_after_commit(
+    event_type,
+    email_function,
+):
+    from api.services.billing_service import process_stripe_event
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.email = "customer@example.com"
+    user.full_name = "Customer"
+    user.plan = "pro"
+    email = AsyncMock()
+    post_commit_actions = []
+    data = {
+        "id": "sub_email",
+        "customer": "cus_email",
+        "status": "active" if event_type.endswith("created") else "canceled",
+        "metadata": {"plan": "pro"},
+        "items": {"data": [{"price": {"unit_amount": 7900}}]},
+    }
+
+    with (
+        patch(
+            "api.services.billing_service.sync_subscription_from_stripe",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.services.billing_service._get_user_by_stripe_customer_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch("api.services.billing_service._write_audit", new=AsyncMock()),
+        patch(f"api.services.email_service.{email_function}", new=email),
+    ):
+        status = await process_stripe_event(
+            event_type,
+            data,
+            AsyncMock(),
+            post_commit_actions=post_commit_actions,
+        )
+
+        assert status == "processed"
+        email.assert_not_awaited()
+        assert len(post_commit_actions) == 1
+        await post_commit_actions[0]()
+
+    email.assert_awaited_once()

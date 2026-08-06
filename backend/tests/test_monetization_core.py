@@ -246,6 +246,115 @@ async def test_handle_stripe_webhook_short_circuits_duplicates():
 
 
 @pytest.mark.asyncio
+async def test_handle_stripe_webhook_dispatches_external_effects_after_commit():
+    from api.core.monetization.webhook_handler_service import handle_stripe_webhook
+
+    order = []
+    action = MagicMock()
+
+    async def process(*_args, post_commit_actions, **_kwargs):
+        post_commit_actions.append(action)
+        return "processed"
+
+    db = AsyncMock()
+    db.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+    dispatch = MagicMock(side_effect=lambda _actions: order.append("dispatch"))
+    with (
+        patch(
+            "api.core.monetization.webhook_handler_service.get_webhook_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.prepare_stripe_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.claim_webhook_event",
+            new=AsyncMock(return_value="claimed"),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.process_stripe_event",
+            new=AsyncMock(side_effect=process),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.update_webhook_status",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.dispatch_post_commit_actions",
+            dispatch,
+        ),
+    ):
+        result = await handle_stripe_webhook(
+            "evt_post_commit",
+            "customer.subscription.created",
+            {},
+            db,
+        )
+
+    assert result["status"] == "processed"
+    assert order == ["commit", "dispatch"]
+    dispatch.assert_called_once_with([action])
+
+
+@pytest.mark.asyncio
+async def test_handle_stripe_webhook_never_dispatches_effects_after_rollback():
+    from api.core.monetization.webhook_handler_service import (
+        WebhookProcessingUnavailable,
+        handle_stripe_webhook,
+    )
+
+    action = MagicMock()
+
+    async def process(*_args, post_commit_actions, **_kwargs):
+        post_commit_actions.append(action)
+        return "processed"
+
+    db = AsyncMock()
+    db.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+    dispatch = MagicMock()
+    with (
+        patch(
+            "api.core.monetization.webhook_handler_service.get_webhook_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.prepare_stripe_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.claim_webhook_event",
+            new=AsyncMock(return_value="claimed"),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.process_stripe_event",
+            new=AsyncMock(side_effect=process),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.update_webhook_status",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.mark_webhook_retryable_failure",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.core.monetization.webhook_handler_service.dispatch_post_commit_actions",
+            dispatch,
+        ),
+    ):
+        with pytest.raises(WebhookProcessingUnavailable):
+            await handle_stripe_webhook(
+                "evt_post_commit_rollback",
+                "customer.subscription.created",
+                {},
+                db,
+            )
+
+    dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ensure_owner_workspace_creates_workspace_and_owner_member():
     from api.core.monetization._workspace import ensure_owner_workspace
     from api.models.workspace_billing import CreditBalance, Member, Workspace

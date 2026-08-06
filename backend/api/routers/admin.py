@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import stripe
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -35,6 +35,7 @@ from api.models.webhook_event import WebhookEvent
 from api.models.workspace_billing import CreditBalance, Invoice, Member, UsageEvent, Workspace
 from api.services.billing_service import (
     PLANS_CONFIG,
+    dispatch_post_commit_actions,
     get_webhook_event,
     mark_webhook_retryable_failure,
     process_stripe_event,
@@ -562,12 +563,14 @@ async def admin_reprocess_webhook(
 
     await update_webhook_status(stripe_event_id, "processing", None, db)
 
+    post_commit_actions = []
     try:
         final_status = await process_stripe_event(
             stripe_event["type"],
             stripe_event["data"]["object"],
             db,
             event_id=stripe_event_id,
+            post_commit_actions=post_commit_actions,
         )
     except Exception as exc:
         await db.rollback()
@@ -591,7 +594,9 @@ async def admin_reprocess_webhook(
         )
         raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
 
-    operational_status = "ignored" if final_status == "ignored" else "processed"
+    operational_status = (
+        final_status if final_status in {"ignored", "rejected"} else "processed"
+    )
     try:
         await update_webhook_status(stripe_event_id, operational_status, None, db)
         await db.commit()
@@ -612,6 +617,7 @@ async def admin_reprocess_webhook(
             )
         raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
 
+    dispatch_post_commit_actions(post_commit_actions)
     logger.info(
         "[admin] Webhook reprocessed event=%s by admin_id=%s status=%s force=%s",
         safe_event_id,
