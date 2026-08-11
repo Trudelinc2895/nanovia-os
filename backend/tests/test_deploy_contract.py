@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 RUNBOOK = REPO_ROOT / "docs" / "J21A_CANONICAL_DEPLOYMENT.md"
 POSTFLIGHT = REPO_ROOT / "infra" / "scripts" / "verify-caddy-postflight.sh"
+PRE_MIGRATION_BACKUP = REPO_ROOT / "infra" / "scripts" / "pre-migration-backup.sh"
 ALERTMANAGER_RENDERER = (
     REPO_ROOT / "infra" / "monitoring" / "render-alertmanager-config.sh"
 )
@@ -360,6 +361,20 @@ def test_validated_runtime_env_is_bound_to_both_application_services():
         < migration
     )
     assert compose_file.count("env_file: ${APP_RUNTIME_ENV_FILE:-../.env}") == 2
+
+
+def test_pre_migration_backup_binds_the_selected_runtime_env_to_compose():
+    script = PRE_MIGRATION_BACKUP.read_text(encoding="utf-8")
+    compose_function = script.split("compose() {\n", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
+
+    binding = compose_function.index('APP_RUNTIME_ENV_FILE="${RUNTIME_ENV_FILE}"')
+    compose = compose_function.index("docker compose")
+    env_file = compose_function.index('--env-file "${RUNTIME_ENV_FILE}"')
+
+    assert binding < compose < env_file
+    assert compose_function.count("${RUNTIME_ENV_FILE}") == 2
 
 
 def test_old_writer_recovery_is_disabled_before_alembic_begins():

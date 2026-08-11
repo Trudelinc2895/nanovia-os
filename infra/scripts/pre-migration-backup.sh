@@ -186,11 +186,12 @@ COMPOSE_FILES=(
   -f infra/docker-compose.canonical-prod.yml
 )
 compose() {
-  docker compose \
-    -p "${COMPOSE_PROJECT_NAME}" \
-    "${COMPOSE_FILES[@]}" \
-    --env-file "${RUNTIME_ENV_FILE}" \
-    "$@"
+  APP_RUNTIME_ENV_FILE="${RUNTIME_ENV_FILE}" \
+    docker compose \
+      -p "${COMPOSE_PROJECT_NAME}" \
+      "${COMPOSE_FILES[@]}" \
+      --env-file "${RUNTIME_ENV_FILE}" \
+      "$@"
 }
 
 compose config --quiet
