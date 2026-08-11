@@ -516,7 +516,10 @@ def _stored_session_matches_payment(payment: PilotPayment, session: Any) -> bool
     )
 
 
-def _reversal_target_status(event_type: str, value: Any) -> tuple[str, str]:
+def _reversal_target_status(
+    event_type: str,
+    value: Any,
+) -> tuple[str | None, str]:
     if event_type in {"charge.refunded", "refund.created", "refund.updated"}:
         if event_type == "charge.refunded":
             amount = stripe_field(value, "amount_refunded")
@@ -528,6 +531,8 @@ def _reversal_target_status(event_type: str, value: Any) -> tuple[str, str]:
             raise PilotStripeContractError("Pilot refund amount is invalid")
         if not 0 < amount <= PILOT_AMOUNT_CENTS:
             raise PilotStripeContractError("Pilot refund amount is outside the contract")
+        if event_type == "refund.updated" and refund_status in {"failed", "canceled"}:
+            return None, f"refund_{refund_status}"
         if refund_status not in {"pending", "requires_action", "succeeded"}:
             raise PilotStripeContractError("Pilot refund status is invalid")
         if amount == PILOT_AMOUNT_CENTS and refund_status == "succeeded":
@@ -598,6 +603,20 @@ async def process_pilot_reversal_event(
         event_type,
         provider_object,
     )
+    if target_status is None:
+        effective_status = _monotone_pilot_status(
+            payment.status,
+            request.status if request is not None else payment.status,
+        )
+        if effective_status in {"manual_review", "failed"}:
+            payment.status = effective_status
+            if request is not None:
+                request.status = effective_status
+        else:
+            payment.stripe_event_id = event_id
+            payment.payment_status = payment_status
+        await db.flush()
+        return effective_status
     effective_status = _monotone_pilot_status(
         payment.status,
         request.status if request is not None else payment.status,
