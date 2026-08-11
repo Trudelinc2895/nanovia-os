@@ -122,6 +122,9 @@ def _build_addons() -> dict[str, dict]:
 ADDONS_CONFIG: dict[str, dict] = _build_addons()
 MAX_CREDIT_PACK_QUANTITY = 100
 SUPPORTED_AUTOMATED_FULFILLMENT_TYPES = frozenset({"credits"})
+MODULE_FULFILLMENT_RETRYABLE_ERROR = (
+    "Module Checkout fulfillment is disabled pending strict server-side contract verification"
+)
 
 
 class UnsupportedFulfillmentError(RuntimeError):
@@ -706,6 +709,8 @@ async def handle_checkout_completed(
     """
     metadata = session.get("metadata") or {}
     checkout_type = metadata.get("type")
+    if checkout_type == "module":
+        raise UnsupportedFulfillmentError(MODULE_FULFILLMENT_RETRYABLE_ERROR)
     if checkout_type and not is_automated_fulfillment_supported(checkout_type):
         logger.warning(
             "[billing] Unsupported checkout fulfillment rejected type=%s",
@@ -833,6 +838,8 @@ async def process_stripe_event(
     if event_type == "checkout.session.completed":
         metadata = data.get("metadata") or {}
         checkout_type = metadata.get("type")
+        if checkout_type == "module":
+            raise UnsupportedFulfillmentError(MODULE_FULFILLMENT_RETRYABLE_ERROR)
         if checkout_type and not is_automated_fulfillment_supported(checkout_type):
             logger.warning(
                 "[billing] Unsupported checkout event rejected type=%s",

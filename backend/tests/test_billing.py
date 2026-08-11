@@ -305,6 +305,158 @@ async def test_module_activation_helper_fails_closed():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "payload"),
+    [
+        pytest.param(
+            "support-disabled",
+            {
+                "id": "cs_module_disabled",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_disabled",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {"type": "module", "module": "operator"},
+            },
+            id="support-disabled",
+        ),
+        pytest.param(
+            "payment-invalid",
+            {
+                "id": "cs_module_unpaid",
+                "mode": "subscription",
+                "payment_status": "unpaid",
+                "customer": "cus_module_unpaid",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {"type": "module", "module": "operator"},
+            },
+            id="payment-invalid",
+        ),
+        pytest.param(
+            "price-invalid",
+            {
+                "id": "cs_module_wrong_price",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_wrong_price",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {
+                    "type": "module",
+                    "module": "operator",
+                    "price_id": "price_untrusted",
+                    "quantity": "1",
+                },
+            },
+            id="price-invalid",
+        ),
+        pytest.param(
+            "configuration-partial",
+            {
+                "id": "cs_module_partial_config",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_partial_config",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {"type": "module", "module": "operator"},
+            },
+            id="configuration-partial",
+        ),
+        pytest.param(
+            "product-invalid",
+            {
+                "id": "cs_module_wrong_product",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_wrong_product",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {"type": "module", "module": "unknown"},
+            },
+            id="product-invalid",
+        ),
+        pytest.param(
+            "currency-invalid",
+            {
+                "id": "cs_module_wrong_currency",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "currency": "cad",
+                "customer": "cus_module_wrong_currency",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {"type": "module", "module": "operator"},
+            },
+            id="currency-invalid",
+        ),
+        pytest.param(
+            "quantity-invalid",
+            {
+                "id": "cs_module_wrong_quantity",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_wrong_quantity",
+                "client_reference_id": str(uuid.uuid4()),
+                "metadata": {
+                    "type": "module",
+                    "module": "operator",
+                    "quantity": "2",
+                },
+            },
+            id="quantity-invalid",
+        ),
+        pytest.param(
+            "owner-invalid",
+            {
+                "id": "cs_module_wrong_owner",
+                "mode": "subscription",
+                "payment_status": "paid",
+                "customer": "cus_module_wrong_owner",
+                "client_reference_id": "not-a-user-id",
+                "metadata": {"type": "module", "module": "operator"},
+            },
+            id="owner-invalid",
+        ),
+    ],
+)
+async def test_module_checkout_fails_closed_without_verified_fulfillment(
+    monkeypatch,
+    case,
+    payload,
+):
+    from api.services import billing_service
+
+    processor = AsyncMock(side_effect=AssertionError("Module fulfillment ran"))
+    monkeypatch.setattr(
+        billing_service,
+        "SUPPORTED_AUTOMATED_FULFILLMENT_TYPES",
+        frozenset({"credits", "module"}),
+    )
+    if case == "support-disabled":
+        monkeypatch.setattr(
+            billing_service,
+            "SUPPORTED_AUTOMATED_FULFILLMENT_TYPES",
+            frozenset({"credits"}),
+        )
+    if case == "configuration-partial":
+        monkeypatch.setitem(
+            billing_service.MODULES_CONFIG,
+            "operator",
+            {"stripe_price_id": None},
+        )
+    monkeypatch.setattr(billing_service, "handle_checkout_completed", processor)
+
+    with pytest.raises(
+        billing_service.UnsupportedFulfillmentError,
+        match="disabled pending strict server-side contract verification",
+    ):
+        await billing_service.process_stripe_event(
+            "checkout.session.completed",
+            payload,
+            AsyncMock(),
+        )
+
+    processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_stripe_event_audits_invoice_payment_succeeded():
     from api.services.billing_service import process_stripe_event
 

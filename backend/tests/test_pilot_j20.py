@@ -2423,27 +2423,7 @@ async def test_legacy_status_failure_rolls_back_then_retry_is_safe(
 
 
 @pytest.mark.asyncio
-async def test_unsupported_module_retry_never_provisions(monkeypatch, tmp_path):
-    real_update = webhook_handler_service.update_webhook_status
-    update_attempts = 0
-
-    async def fail_first_final_status(*args, **kwargs):
-        nonlocal update_attempts
-        update_attempts += 1
-        if update_attempts == 1:
-            raise OperationalError(
-                "UPDATE webhook_events",
-                {},
-                RuntimeError("final status unavailable"),
-            )
-        return await real_update(*args, **kwargs)
-
-    monkeypatch.setattr(
-        webhook_handler_service,
-        "update_webhook_status",
-        fail_first_final_status,
-    )
-
+async def test_unsupported_module_retry_never_provisions(tmp_path):
     async with _isolated_legacy_database(tmp_path, "legacy_module_retry") as sessions:
         async with sessions() as db:
             user = User(
@@ -2470,41 +2450,52 @@ async def test_unsupported_module_retry_never_provisions(monkeypatch, tmp_path):
             modules_after_failure = await db.scalar(
                 select(func.count()).select_from(UserModule)
             )
-            assert modules_after_failure == 0
-
-            retry = await handle_stripe_webhook(
-                "evt_legacy_module_retry",
-                "checkout.session.completed",
-                payload,
-                db,
+            ledger_after_failure = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
             )
-            duplicate = await handle_stripe_webhook(
-                "evt_legacy_module_retry",
-                "checkout.session.completed",
-                payload,
-                db,
-            )
-
-            modules = list((await db.execute(select(UserModule))).scalars())
             event = await db.scalar(
                 select(WebhookEvent).where(
                     WebhookEvent.stripe_event_id == "evt_legacy_module_retry"
                 )
             )
-            assert retry["status"] == "rejected"
-            assert duplicate["status"] == "duplicate"
+            await db.refresh(user)
+
+            assert modules_after_failure == 0
+            assert ledger_after_failure == 0
+            assert user.stripe_customer_id is None
+            assert event is not None and event.status == "retryable_failure"
+            assert event.attempt_count == 1
+            assert event.error == billing_service.MODULE_FULFILLMENT_RETRYABLE_ERROR
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_legacy_module_retry",
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            modules = list((await db.execute(select(UserModule))).scalars())
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            await db.refresh(event)
+            await db.refresh(user)
+
             assert modules == []
-            assert event is not None and event.status == "rejected"
+            assert ledger_count == 0
+            assert user.stripe_customer_id is None
+            assert event.status == "retryable_failure"
             assert event.attempt_count == 2
+            assert event.error == billing_service.MODULE_FULFILLMENT_RETRYABLE_ERROR
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("checkout_type", ["module", "addon"])
-async def test_paid_unsupported_checkout_never_grants_value(
+async def test_paid_unsupported_addon_never_grants_value(
     monkeypatch,
     tmp_path,
-    checkout_type,
 ):
+    checkout_type = "addon"
     processor = AsyncMock(side_effect=AssertionError("Unsupported fulfillment ran"))
     monkeypatch.setattr(billing_service, "handle_checkout_completed", processor)
 
@@ -2567,6 +2558,77 @@ async def test_paid_unsupported_checkout_never_grants_value(
             assert ledger_count == 0
             assert len(events) == 2
             assert all(event.status == "rejected" for event in events)
+            processor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distinct_paid_module_events_for_same_session_remain_retryable(
+    monkeypatch,
+    tmp_path,
+):
+    processor = AsyncMock(side_effect=AssertionError("Module fulfillment ran"))
+    monkeypatch.setattr(billing_service, "handle_checkout_completed", processor)
+
+    async with _isolated_legacy_database(
+        tmp_path,
+        "unsupported_module_same_session",
+    ) as sessions:
+        async with sessions() as db:
+            user = User(
+                email="unsupported-module@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Unsupported Module Checkout",
+                credits=0,
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_module_checkout(
+                user.id,
+                session_id="cs_unsupported_module_shared",
+            )
+
+            for event_id in (
+                "evt_unsupported_module_first",
+                "evt_unsupported_module_first",
+                "evt_unsupported_module_second",
+            ):
+                with pytest.raises(
+                    webhook_handler_service.WebhookProcessingUnavailable
+                ):
+                    await handle_stripe_webhook(
+                        event_id,
+                        "checkout.session.completed",
+                        payload,
+                        db,
+                    )
+
+            await db.refresh(user)
+            module_count = await db.scalar(
+                select(func.count()).select_from(UserModule)
+            )
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            events = list(
+                (
+                    await db.execute(
+                        select(WebhookEvent).order_by(WebhookEvent.stripe_event_id)
+                    )
+                ).scalars()
+            )
+
+            assert user.stripe_customer_id is None
+            assert user.credits == 0
+            assert module_count == 0
+            assert ledger_count == 0
+            assert [event.status for event in events] == [
+                "retryable_failure",
+                "retryable_failure",
+            ]
+            assert [event.attempt_count for event in events] == [2, 1]
+            assert {event.error for event in events} == {
+                billing_service.MODULE_FULFILLMENT_RETRYABLE_ERROR
+            }
             processor.assert_not_awaited()
 
 
