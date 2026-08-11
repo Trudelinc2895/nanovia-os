@@ -198,7 +198,16 @@ printf 'AVAILABLE_BYTES=%s\\n' "${{AVAILABLE_BYTES}}"
     return completed, df_log
 
 
-def _run_postflight(tmp_path: Path, *, docker_state: str, curl_mode: str):
+def _run_postflight(
+    tmp_path: Path,
+    *,
+    docker_state: str,
+    curl_mode: str,
+    public_web_url: str | None = TEST_PUBLIC_WEB_URL,
+    domain: str | None = "nanovia.invalid",
+    effective_url: str = "",
+    runtime_env_file: Path | None = None,
+):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     curl_log = tmp_path / "curl.log"
@@ -226,8 +235,12 @@ exit 2
         fake_bin / "curl",
         """
 printf '%s\\n' "$*" >> "${FAKE_CURL_LOG}"
+target="${@: -1}"
 case "${FAKE_CURL_MODE}" in
-  success) exit 0 ;;
+  success)
+    printf '%s' "${FAKE_CURL_EFFECTIVE_URL:-${target}}"
+    exit 0
+    ;;
   timeout) exit 28 ;;
   http_failure) exit 22 ;;
   *) exit 2 ;;
@@ -237,11 +250,12 @@ esac
 
     python_bin = Path(sys.executable).as_posix()
     env = os.environ.copy()
+    env.pop("PUBLIC_WEB_URL", None)
+    env.pop("DOMAIN", None)
     env.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
             "COMPOSE_PROJECT_NAME": "nanovia-test",
-            "PUBLIC_WEB_URL": TEST_PUBLIC_WEB_URL,
             "PYTHON_BIN": python_bin,
             "DOCKER_BIN": (fake_bin / "docker").as_posix(),
             "CURL_BIN": (fake_bin / "curl").as_posix(),
@@ -253,9 +267,16 @@ esac
             "PUBLIC_MAX_TIME_SECONDS": "1",
             "FAKE_DOCKER_STATE": docker_state,
             "FAKE_CURL_MODE": curl_mode,
+            "FAKE_CURL_EFFECTIVE_URL": effective_url,
             "FAKE_CURL_LOG": str(curl_log),
         }
     )
+    if public_web_url is not None:
+        env["PUBLIC_WEB_URL"] = public_web_url
+    if domain is not None:
+        env["DOMAIN"] = domain
+    if runtime_env_file is not None:
+        env["RUNTIME_ENV_FILE"] = str(runtime_env_file)
     completed = subprocess.run(
         [_bash_executable(), POSTFLIGHT.as_posix()],
         cwd=REPO_ROOT,
@@ -311,6 +332,34 @@ def test_alertmanager_contract_is_checked_before_writers_stop_and_migration():
     )
 
     assert alertmanager_check < stop_writers < migration
+
+
+def test_validated_runtime_env_is_bound_to_both_application_services():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    compose_file = (REPO_ROOT / "infra" / "docker-compose.prod.yml").read_text(
+        encoding="utf-8"
+    )
+    canonical_env = workflow.index('ENV_FILE="$(realpath -- "${ENV_FILE}")"')
+    validation = workflow.index(
+        'python3 "${RUNTIME_ENV_VALIDATOR}" \\\n'
+        '            --env-file "${ENV_FILE}"'
+    )
+    binding = workflow.index('APP_RUNTIME_ENV_FILE="${ENV_FILE}"')
+    compose_config = workflow.index("compose config --quiet")
+    stop_writers = workflow.index("compose stop api ai-orchestrator")
+    migration = workflow.index(
+        'compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"'
+    )
+
+    assert (
+        canonical_env
+        < validation
+        < binding
+        < compose_config
+        < stop_writers
+        < migration
+    )
+    assert compose_file.count("env_file: ${APP_RUNTIME_ENV_FILE:-../.env}") == 2
 
 
 def test_old_writer_recovery_is_disabled_before_alembic_begins():
@@ -535,7 +584,79 @@ def test_caddy_postflight_succeeds_with_healthy_service_and_https(tmp_path):
     }
     assert expected_urls.issubset(set(curl_arguments))
     assert "--proto =https" in curl_calls
+    assert "--write-out %{url_effective}" in curl_calls
     assert " -k " not in f" {curl_calls} "
+
+
+def test_caddy_postflight_reads_public_host_pair_from_runtime_env(tmp_path):
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "PUBLIC_WEB_URL=https://nanovia.invalid\nDOMAIN=nanovia.invalid\n",
+        encoding="utf-8",
+    )
+
+    completed, _ = _run_postflight(
+        tmp_path,
+        docker_state="healthy",
+        curl_mode="success",
+        public_web_url=None,
+        domain=None,
+        runtime_env_file=runtime_env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "CADDY_POSTFLIGHT=verified" in completed.stdout
+
+
+def test_caddy_postflight_rejects_public_url_domain_mismatch_before_probe(tmp_path):
+    completed, curl_log = _run_postflight(
+        tmp_path,
+        docker_state="healthy",
+        curl_mode="success",
+        public_web_url="https://unrelated.invalid",
+    )
+
+    assert completed.returncode != 0
+    assert "same canonical HTTPS host" in completed.stderr
+    assert "CADDY_POSTFLIGHT=verified" not in completed.stdout
+    assert not curl_log.exists()
+
+
+@pytest.mark.parametrize(
+    "effective_url",
+    [
+        pytest.param("https://unrelated.invalid/ready", id="external-host"),
+        pytest.param("http://nanovia.invalid/ready", id="http-downgrade"),
+        pytest.param("https://nanovia.invalid:444/ready", id="unexpected-port"),
+    ],
+)
+def test_caddy_postflight_rejects_noncanonical_final_redirect_host(
+    tmp_path,
+    effective_url,
+):
+    completed, _ = _run_postflight(
+        tmp_path,
+        docker_state="healthy",
+        curl_mode="success",
+        effective_url=effective_url,
+    )
+
+    assert completed.returncode != 0
+    assert "Public API readiness probe failed" in completed.stderr
+    assert "CADDY_POSTFLIGHT=verified" not in completed.stdout
+
+
+def test_caddy_postflight_accepts_same_host_redirect_and_explicit_https_port(tmp_path):
+    completed, _ = _run_postflight(
+        tmp_path,
+        docker_state="healthy",
+        curl_mode="success",
+        public_web_url="https://nanovia.invalid:443",
+        effective_url="https://nanovia.invalid:443/final",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "CADDY_POSTFLIGHT=verified" in completed.stdout
 
 
 @pytest.mark.parametrize(

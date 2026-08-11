@@ -534,6 +534,7 @@ jobs:
             ENV_FILE="${DEPLOY_PATH}/${RUNTIME_ENV_FILE}"
           fi
           [ -f "${ENV_FILE}" ] || fail "Configured runtime environment file is absent"
+          ENV_FILE="$(realpath -- "${ENV_FILE}")"
           command -v python3 >/dev/null || fail "python3 is required for runtime environment validation"
           RUNTIME_ENV_VALIDATOR="${DEPLOY_PATH}/scripts/validate_runtime_env.py"
           [ -f "${RUNTIME_ENV_VALIDATOR}" ] || fail "Canonical runtime environment validator is absent"
@@ -548,7 +549,8 @@ jobs:
           compose() {
             (
               cd "${REAL_COMPOSE_WORKING_DIR}"
-              docker compose \
+              APP_RUNTIME_ENV_FILE="${ENV_FILE}" \
+                docker compose \
                 -p "${COMPOSE_PROJECT_NAME}" \
                 "${COMPOSE_FILES[@]}" \
                 --env-file "${ENV_FILE}" \
