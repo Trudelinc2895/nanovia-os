@@ -895,6 +895,62 @@ async def test_paid_retry_after_failed_checkout_confirms_once(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_terminal_event_for_obsolete_failed_attempt_preserves_paid_retry(
+    monkeypatch,
+    tmp_path,
+):
+    provider_object = _reversal_object("payment_intent.canceled")
+    verifier = _install_reversal_verification(monkeypatch, provider_object)
+    async with _isolated_database(tmp_path, "obsolete_failed_attempt") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, status="paid")
+            failed_attempt = _existing_payment(
+                request=pilot_request,
+                session_id="cs_reversal",
+                payment_intent_id="pi_reversal",
+                status="failed",
+                payment_status="unpaid",
+            )
+            paid_retry = _existing_payment(
+                request=pilot_request,
+                session_id="cs_paid_retry",
+                payment_intent_id="pi_paid_retry",
+            )
+            db.add_all([failed_attempt, paid_retry])
+            await db.commit()
+
+            first = await handle_stripe_webhook(
+                "evt_obsolete_attempt_canceled",
+                "payment_intent.canceled",
+                provider_object,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_obsolete_attempt_canceled",
+                "payment_intent.canceled",
+                provider_object,
+                db,
+            )
+            await db.refresh(failed_attempt)
+            await db.refresh(paid_retry)
+            await db.refresh(pilot_request)
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+
+            assert first["status"] == "failed"
+            assert duplicate["status"] == "duplicate"
+            assert failed_attempt.status == "failed"
+            assert failed_attempt.payment_status == "canceled"
+            assert failed_attempt.stripe_event_id == "evt_obsolete_attempt_canceled"
+            assert paid_retry.status == "paid"
+            assert paid_retry.payment_status == "paid"
+            assert pilot_request.status == "paid"
+            assert len(events) == 1
+            assert events[0].status == "processed"
+            assert events[0].attempt_count == 1
+            verifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("existing_status", "existing_payment_status"),
     [

@@ -195,6 +195,28 @@ def _monotone_pilot_status(*statuses: str) -> str:
     return max(statuses, key=lambda value: ADVERSE_STATE_PRIORITY.get(value, 1))
 
 
+async def _apply_reversal_request_status(
+    db: AsyncSession,
+    *,
+    payment: PilotPayment,
+    request: PilotRequest,
+    effective_status: str,
+) -> None:
+    if request.status == "paid" and effective_status in {"manual_review", "failed"}:
+        other_paid_payment = await db.scalar(
+            select(PilotPayment.id)
+            .where(
+                PilotPayment.pilot_request_id == request.id,
+                PilotPayment.id != payment.id,
+                PilotPayment.status == "paid",
+            )
+            .limit(1)
+        )
+        if other_paid_payment is not None:
+            return
+    request.status = effective_status
+
+
 async def process_pilot_checkout_event(
     event_id: str,
     event_type: str,
@@ -611,7 +633,12 @@ async def process_pilot_reversal_event(
         if effective_status in {"manual_review", "failed"}:
             payment.status = effective_status
             if request is not None:
-                request.status = effective_status
+                await _apply_reversal_request_status(
+                    db,
+                    payment=payment,
+                    request=request,
+                    effective_status=effective_status,
+                )
         else:
             payment.stripe_event_id = event_id
             payment.payment_status = payment_status
@@ -627,6 +654,11 @@ async def process_pilot_reversal_event(
         payment.payment_status = payment_status
     payment.status = effective_status
     if request is not None:
-        request.status = effective_status
+        await _apply_reversal_request_status(
+            db,
+            payment=payment,
+            request=request,
+            effective_status=effective_status,
+        )
     await db.flush()
     return effective_status
