@@ -9,6 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,6 +32,7 @@ from api.models.pilot import PilotPayment, PilotRequest
 from api.models.user import User
 from api.models.user_module import UserModule
 from api.models.webhook_event import WebhookEvent
+from api.routers import admin as admin_router
 from api.routers import billing as billing_router
 from api.services import (
     billing_service,
@@ -2487,6 +2489,111 @@ async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_onc
             assert all(event.status == "processed" for event in events)
             assert boundaries["event"].await_count == 2
             assert boundaries["session"].await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_credit_reprocess_prepares_before_mutation_and_retries_once(
+    tmp_path,
+    monkeypatch,
+):
+    operation_order = []
+
+    async def prepare_event(*args, **kwargs):
+        operation_order.append("prepare")
+        return await billing_service.prepare_stripe_event(*args, **kwargs)
+
+    async def update_status(event_id, status, error, db):
+        operation_order.append(status)
+        return await billing_service.update_webhook_status(
+            event_id,
+            status,
+            error,
+            db,
+        )
+
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(admin_router, "prepare_stripe_event", prepare_event)
+    monkeypatch.setattr(admin_router, "update_webhook_status", update_status)
+    async with _isolated_legacy_database(tmp_path, "admin_credit_reprocess") as sessions:
+        user_id = uuid.uuid4()
+        event_id = "evt_admin_credit_reprocess"
+        payload = _legacy_credit_checkout(
+            user_id,
+            session_id="cs_admin_credit_reprocess",
+        )
+        monkeypatch.setattr(
+            admin_router.stripe.Event,
+            "retrieve",
+            lambda requested_id: _credit_event(requested_id, payload),
+        )
+
+        async with sessions() as db:
+            db.add(
+                User(
+                    id=user_id,
+                    email="admin-credit-reprocess@example.com",
+                    password_hash="unused",
+                    full_name="Admin Credit Reprocess",
+                    stripe_customer_id="cus_legacy",
+                    credits=0,
+                )
+            )
+            db.add(
+                WebhookEvent(
+                    stripe_event_id=event_id,
+                    event_type="checkout.session.completed",
+                    status="retryable_failure",
+                    attempt_count=1,
+                    error="prior provider outage",
+                )
+            )
+            await db.commit()
+
+            first = await admin_router.admin_reprocess_webhook(
+                event_id,
+                SimpleNamespace(id=uuid.uuid4()),
+                db,
+            )
+            second = await admin_router.admin_reprocess_webhook(
+                event_id,
+                SimpleNamespace(id=uuid.uuid4()),
+                db,
+                SimpleNamespace(force=True),
+            )
+
+            user = await db.get(User, user_id)
+            assert user is not None
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            stored_event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == event_id
+                )
+            )
+
+            assert first["status"] == "processed"
+            assert first["forced"] is False
+            assert second["status"] == "processed"
+            assert second["forced"] is True
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
+            assert stored_event is not None
+            assert stored_event.status == "processed"
+            assert stored_event.error is None
+            assert operation_order == [
+                "prepare",
+                "processing",
+                "processed",
+                "prepare",
+                "processing",
+                "processed",
+            ]
 
 
 @pytest.mark.asyncio

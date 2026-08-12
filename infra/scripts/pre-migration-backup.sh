@@ -29,6 +29,52 @@ validate_checksum() {
   )
 }
 
+resolve_backup_root() {
+  local requested_root="$1"
+  local real_deploy_path="$2"
+  local normalized_root
+  local existing_ancestor
+  local stripped_root
+
+  case "${requested_root}" in
+    /*) ;;
+    *) fail "BACKUP_ROOT must be an absolute path" ;;
+  esac
+
+  stripped_root="$(realpath -m -s -- "${requested_root}")" \
+    || fail "Unable to normalize BACKUP_ROOT"
+  normalized_root="$(realpath -m -- "${requested_root}")" \
+    || fail "Unable to normalize BACKUP_ROOT"
+  [ -n "${stripped_root}" ] && [ -n "${normalized_root}" ] \
+    || fail "Normalized BACKUP_ROOT is empty"
+  [ "${stripped_root}" = "${normalized_root}" ] \
+    || fail "BACKUP_ROOT must not traverse symbolic links"
+  case "${normalized_root}" in
+    "${real_deploy_path}"|"${real_deploy_path}"/*)
+      fail "BACKUP_ROOT must be outside the Git checkout"
+      ;;
+  esac
+
+  if [ -e "${normalized_root}" ] || [ -L "${normalized_root}" ]; then
+    [ -d "${normalized_root}" ] && [ ! -L "${normalized_root}" ] \
+      || fail "Existing BACKUP_ROOT must be a real directory"
+    existing_ancestor="${normalized_root}"
+  else
+    existing_ancestor="${normalized_root}"
+    while [ ! -e "${existing_ancestor}" ] && [ ! -L "${existing_ancestor}" ]; do
+      [ "${existing_ancestor}" != "/" ] \
+        || fail "Unable to find an existing BACKUP_ROOT ancestor"
+      existing_ancestor="$(dirname -- "${existing_ancestor}")"
+    done
+    [ -d "${existing_ancestor}" ] && [ ! -L "${existing_ancestor}" ] \
+      || fail "Existing BACKUP_ROOT ancestor must be a real directory"
+  fi
+  [ -w "${existing_ancestor}" ] && [ -x "${existing_ancestor}" ] \
+    || fail "BACKUP_ROOT ancestor is not writable and searchable"
+
+  printf '%s' "${normalized_root}"
+}
+
 run_pg_restore_list() {
   local dump_path="$1"
   compose exec -T postgres pg_restore --list < "${dump_path}" >/dev/null
@@ -167,13 +213,12 @@ esac
 [ -f "${DEPLOY_PATH}/infra/docker/Caddyfile" ] || fail "Canonical Caddyfile is absent"
 
 REAL_DEPLOY_PATH="$(realpath "${DEPLOY_PATH}")"
-install -d -m 700 "${BACKUP_ROOT}"
-REAL_BACKUP_ROOT="$(realpath "${BACKUP_ROOT}")"
-case "${REAL_BACKUP_ROOT}" in
-  "${REAL_DEPLOY_PATH}"|"${REAL_DEPLOY_PATH}"/*)
-    fail "BACKUP_ROOT must be outside the Git checkout"
-    ;;
-esac
+REAL_BACKUP_ROOT="$(resolve_backup_root "${BACKUP_ROOT}" "${REAL_DEPLOY_PATH}")"
+install -d -m 700 -- "${REAL_BACKUP_ROOT}"
+[ -d "${REAL_BACKUP_ROOT}" ] && [ ! -L "${REAL_BACKUP_ROOT}" ] \
+  || fail "Created BACKUP_ROOT is not a real directory"
+[ "$(realpath -- "${REAL_BACKUP_ROOT}")" = "${REAL_BACKUP_ROOT}" ] \
+  || fail "BACKUP_ROOT changed while it was being created"
 
 cd "${REAL_DEPLOY_PATH}"
 [ -z "$(git status --porcelain --untracked-files=all)" ] \

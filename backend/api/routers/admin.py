@@ -38,6 +38,7 @@ from api.services.billing_service import (
     dispatch_post_commit_actions,
     get_webhook_event,
     mark_webhook_retryable_failure,
+    prepare_stripe_event,
     process_stripe_event,
     update_webhook_status,
 )
@@ -547,6 +548,7 @@ async def admin_reprocess_webhook(
             status_code=409,
             detail="Webhook event already processed; retry with force=true to replay",
         )
+    await db.rollback()
 
     try:
         stripe_event = stripe.Event.retrieve(stripe_event_id)
@@ -561,15 +563,21 @@ async def admin_reprocess_webhook(
             detail="Stored webhook event type does not match Stripe event type",
         )
 
-    await update_webhook_status(stripe_event_id, "processing", None, db)
-
     post_commit_actions = []
     try:
+        event_payload = stripe_event["data"]["object"]
+        prepared_event = await prepare_stripe_event(
+            stripe_event["type"],
+            event_payload,
+            event_id=stripe_event_id,
+        )
+        await update_webhook_status(stripe_event_id, "processing", None, db)
         final_status = await process_stripe_event(
             stripe_event["type"],
-            stripe_event["data"]["object"],
+            event_payload,
             db,
             event_id=stripe_event_id,
+            prepared_event=prepared_event,
             post_commit_actions=post_commit_actions,
         )
     except Exception as exc:

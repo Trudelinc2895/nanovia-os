@@ -68,6 +68,16 @@ def _shell_function(name: str) -> str:
     return match.group(0)
 
 
+def _pre_migration_function(name: str) -> str:
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$",
+        PRE_MIGRATION_BACKUP.read_text(encoding="utf-8"),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"Unable to extract pre-migration function {name}"
+    return match.group(0)
+
+
 def _run_bash(script: str, *, env: dict[str, str] | None = None, cwd=REPO_ROOT):
     process_env = os.environ.copy()
     if env:
@@ -375,6 +385,100 @@ def test_pre_migration_backup_binds_the_selected_runtime_env_to_compose():
 
     assert binding < compose < env_file
     assert compose_function.count("${RUNTIME_ENV_FILE}") == 2
+
+
+def test_pre_migration_backup_validates_location_before_creating_it():
+    script = PRE_MIGRATION_BACKUP.read_text(encoding="utf-8")
+    validation = script.index(
+        'REAL_BACKUP_ROOT="$(resolve_backup_root "${BACKUP_ROOT}" "${REAL_DEPLOY_PATH}")"'
+    )
+    creation = script.index('install -d -m 700 -- "${REAL_BACKUP_ROOT}"')
+
+    assert validation < creation
+    assert 'install -d -m 700 "${BACKUP_ROOT}"' not in script
+    assert 'realpath -m -- "${requested_root}"' in script
+    assert 'realpath -m -s -- "${requested_root}"' in script
+    assert 'BACKUP_ROOT must not traverse symbolic links' in script
+
+
+@pytest.mark.parametrize("relative_target", ["new-backups", "nested/../new-backups"])
+def test_pre_migration_backup_rejects_checkout_destination_without_creation(
+    tmp_path,
+    relative_target,
+):
+    deploy_path = tmp_path / "deploy"
+    deploy_path.mkdir()
+    requested_root = f"{_bash_path(deploy_path)}/{relative_target}"
+    functions = "\n\n".join(
+        _pre_migration_function(name) for name in ("fail", "resolve_backup_root")
+    )
+    completed = subprocess.run(
+        [
+            _bash_executable(),
+            "-c",
+            (
+                'export PATH="/usr/bin:${PATH}"\n'
+                f"set -Eeuo pipefail\n{functions}\n"
+                'resolve_backup_root "$1" "$2"'
+            ),
+            "backup-location-test",
+            requested_root,
+            _bash_path(deploy_path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "outside the Git checkout" in completed.stderr
+    assert not (deploy_path / "new-backups").exists()
+
+
+def test_pre_migration_backup_rejects_symlinked_destination_without_creation(tmp_path):
+    functions = "\n\n".join(
+        _pre_migration_function(name) for name in ("fail", "resolve_backup_root")
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin / "realpath",
+        """
+case "${1:-}" in
+  -m)
+    if [ "${2:-}" = "-s" ]; then
+      printf '/srv/backups-link/new-backups\n'
+    else
+      printf '/srv/backups/new-backups\n'
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+""",
+    )
+    completed = subprocess.run(
+        [
+            _bash_executable(),
+            "-c",
+            (
+                'export PATH="$3:/usr/bin:${PATH}"\n'
+                f"set -Eeuo pipefail\n{functions}\n"
+                'resolve_backup_root "$1" "$2"'
+            ),
+            "backup-symlink-test",
+            "/srv/backups-link/new-backups",
+            "/opt/nanovia",
+            _bash_path(fake_bin),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "symbolic links" in completed.stderr
 
 
 def test_pre_migration_failure_restores_checkout_before_restarting_old_writers():
