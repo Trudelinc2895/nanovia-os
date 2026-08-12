@@ -204,6 +204,26 @@ def test_complete_canonical_contract_is_valid_and_margin_is_observable():
 
 
 @pytest.mark.parametrize(
+    ("configured_url", "provider_url"),
+    [
+        (PAYMENT_LINK_URL, "https://buy.stripe.com:443/test_pilot"),
+        ("https://buy.stripe.com:443/test_pilot", PAYMENT_LINK_URL),
+    ],
+)
+def test_payment_link_urls_accept_equivalent_implicit_https_port(
+    configured_url,
+    provider_url,
+):
+    config = contract.load_pilot_stripe_config(
+        _config_namespace(STRIPE_PILOT_PAYMENT_LINK_URL=configured_url)
+    )
+    payment_link = _payment_link()
+    payment_link["url"] = provider_url
+
+    contract.validate_pilot_provider_contract(_account(), payment_link, config)
+
+
+@pytest.mark.parametrize(
     "field_name",
     [
         "STRIPE_ACCOUNT_ID",
@@ -360,6 +380,7 @@ def test_unpaid_checkout_is_valid_identity_but_never_paid_fulfillment():
 async def test_authenticated_event_and_provider_objects_form_one_contract(monkeypatch):
     session = _session()
     event = _event(session)
+    event["api_version"] = "2023-10-16"
     boundaries = {
         "retrieve_pilot_event": AsyncMock(return_value=event),
         "retrieve_pilot_account": AsyncMock(return_value=_account()),
@@ -389,12 +410,11 @@ async def test_authenticated_event_and_provider_objects_form_one_contract(monkey
     [
         ("id", "evt_wrong"),
         ("type", "checkout.session.async_payment_failed"),
-        ("api_version", "2023-10-16"),
         ("livemode", True),
         ("account", "acct_wrong"),
     ],
 )
-async def test_wrong_event_identity_account_mode_or_version_fails_closed(
+async def test_wrong_event_identity_account_or_mode_fails_closed(
     monkeypatch,
     field_name,
     value,

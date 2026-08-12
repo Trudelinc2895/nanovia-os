@@ -120,6 +120,32 @@ def _required_text(settings_obj: Any, field_name: str) -> str:
     return value.strip()
 
 
+def _canonical_payment_link_url(
+    value: Any,
+    *,
+    error_message: str,
+) -> tuple[str, str, int, str]:
+    if not isinstance(value, str):
+        raise _contract_error(error_message)
+    try:
+        parsed_url = urlsplit(value)
+        port = parsed_url.port
+    except ValueError as exc:
+        raise _contract_error(error_message) from exc
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.hostname != "buy.stripe.com"
+        or port not in (None, 443)
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or not parsed_url.path.strip("/")
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise _contract_error(error_message)
+    return parsed_url.scheme, parsed_url.hostname, 443, parsed_url.path
+
+
 def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
     """Load all five canonical identifiers atomically or fail closed."""
     values = {
@@ -136,25 +162,13 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
         if pattern.fullmatch(values[field_name]) is None:
             raise _contract_error(f"{field_name} has an invalid format")
 
-    try:
-        parsed_url = urlsplit(values["STRIPE_PILOT_PAYMENT_LINK_URL"])
-        port = parsed_url.port
-    except ValueError as exc:
-        raise _contract_error("STRIPE_PILOT_PAYMENT_LINK_URL is invalid") from exc
-    if (
-        parsed_url.scheme != "https"
-        or parsed_url.hostname != "buy.stripe.com"
-        or port not in (None, 443)
-        or parsed_url.username is not None
-        or parsed_url.password is not None
-        or not parsed_url.path.strip("/")
-        or parsed_url.query
-        or parsed_url.fragment
-    ):
-        raise _contract_error("STRIPE_PILOT_PAYMENT_LINK_URL is invalid")
+    canonical_payment_link_url = _canonical_payment_link_url(
+        values["STRIPE_PILOT_PAYMENT_LINK_URL"],
+        error_message="STRIPE_PILOT_PAYMENT_LINK_URL is invalid",
+    )
 
     livemode = getattr(settings_obj, "APP_ENV", "") == "production"
-    if livemode and parsed_url.path.lstrip("/").startswith("test_"):
+    if livemode and canonical_payment_link_url[3].lstrip("/").startswith("test_"):
         raise _contract_error("Pilot Payment Link mixes test and live modes")
 
     return PilotStripeConfig(
@@ -268,7 +282,14 @@ def validate_pilot_provider_contract(
         "Pilot Payment Link livemode mismatch",
     )
     _require(
-        stripe_field(payment_link, "url") == config.payment_link_url,
+        _canonical_payment_link_url(
+            stripe_field(payment_link, "url"),
+            error_message="Pilot Payment Link URL mismatch",
+        )
+        == _canonical_payment_link_url(
+            config.payment_link_url,
+            error_message="Pilot Payment Link URL mismatch",
+        ),
         "Pilot Payment Link URL mismatch",
     )
     _require(
@@ -475,10 +496,6 @@ def _validate_event(
 ) -> Any:
     _require(stripe_id(event) == event_id, "Stripe Event id mismatch")
     _require(stripe_field(event, "type") == event_type, "Stripe Event type mismatch")
-    _require(
-        stripe_field(event, "api_version") == PILOT_STRIPE_API_VERSION,
-        "Stripe Event API version mismatch",
-    )
     _require(bool(stripe_field(event, "livemode")) == config.livemode, "Stripe Event livemode mismatch")
     event_account = stripe_id(stripe_field(event, "account"))
     _require(event_account in (None, config.account_id), "Stripe Event account mismatch")
