@@ -377,13 +377,38 @@ def test_pre_migration_backup_binds_the_selected_runtime_env_to_compose():
     assert compose_function.count("${RUNTIME_ENV_FILE}") == 2
 
 
+def test_pre_migration_failure_restores_checkout_before_restarting_old_writers():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    previous_commit = workflow.index('PREVIOUS_COMMIT="$(git rev-parse HEAD)"')
+    recovery = workflow.index("restore_pre_migration_state()")
+    recovery_checkout = workflow.index(
+        'git switch --detach "${PREVIOUS_COMMIT}"',
+        recovery,
+    )
+    recovery_verification = workflow.index(
+        '[ "$(git rev-parse HEAD)" = "${PREVIOUS_COMMIT}" ]',
+        recovery_checkout,
+    )
+    restart_writers = workflow.index(
+        "compose start api ai-orchestrator",
+        recovery_verification,
+    )
+    recovery_trap = workflow.index("trap restore_pre_migration_state EXIT")
+    target_checkout = workflow.index('git switch --detach "${DEPLOY_SHA}"')
+    stop_writers = workflow.index("compose stop api ai-orchestrator")
+
+    assert previous_commit < recovery < recovery_trap < target_checkout < stop_writers
+    assert recovery_checkout < recovery_verification < restart_writers
+    assert "|| true" not in workflow[recovery:recovery_trap]
+
+
 def test_old_writer_recovery_is_disabled_before_alembic_begins():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    recovery_trap = workflow.index("trap resume_previous_writers EXIT")
+    recovery_trap = workflow.index("trap restore_pre_migration_state EXIT")
     stop_writers = workflow.index("compose stop api ai-orchestrator")
     backup_gate = workflow.index('|| fail "Verified backup gate is absent"')
     disable_recovery = workflow.index(
-        "WRITERS_STOPPED=0\n          trap - EXIT",
+        "MIGRATION_STARTED=1\n          WRITERS_STOPPED=0\n          trap - EXIT",
         backup_gate,
     )
     migration = workflow.index(
@@ -393,7 +418,7 @@ def test_old_writer_recovery_is_disabled_before_alembic_begins():
 
     assert recovery_trap < stop_writers < backup_gate < disable_recovery
     assert disable_recovery < migration < recreate
-    assert workflow.count("trap - EXIT") == 1
+    assert workflow.count("trap - EXIT") == 2
 
 
 def test_alertmanager_renderer_self_test_covers_required_inputs():

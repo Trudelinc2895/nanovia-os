@@ -507,6 +507,25 @@ jobs:
             || fail "Insufficient free space for build and verified database backup"
 
           PREVIOUS_COMMIT="$(git rev-parse HEAD)"
+          WRITERS_STOPPED=0
+          MIGRATION_STARTED=0
+          restore_pre_migration_state() {
+            exit_status=$?
+            trap - EXIT
+            if [ "${MIGRATION_STARTED}" -eq 0 ]; then
+              git switch --detach "${PREVIOUS_COMMIT}" \
+                || fail "Unable to restore the previous Git checkout"
+              [ "$(git rev-parse HEAD)" = "${PREVIOUS_COMMIT}" ] \
+                || fail "Previous Git checkout was not restored"
+              if [ "${WRITERS_STOPPED}" -eq 1 ]; then
+                compose start api ai-orchestrator \
+                  || fail "Unable to restart the previous application writers"
+              fi
+            fi
+            exit "${exit_status}"
+          }
+          trap restore_pre_migration_state EXIT
+
           CURRENT_ALEMBIC="$(
             docker exec "${API_CONTAINER}" alembic current 2>/dev/null \
               | awk 'NF {print $1; exit}'
@@ -590,14 +609,6 @@ jobs:
           # before stopping any writer or opening the migration window.
           compose run --rm --no-deps -T alertmanager --check
 
-          WRITERS_STOPPED=0
-          resume_previous_writers() {
-            if [ "${WRITERS_STOPPED}" -eq 1 ]; then
-              compose start api ai-orchestrator >/dev/null 2>&1 || true
-            fi
-          }
-          trap resume_previous_writers EXIT
-
           compose stop api ai-orchestrator
           WRITERS_STOPPED=1
 
@@ -625,6 +636,7 @@ jobs:
           # Automatic rollback is safe only before a schema mutation begins.
           # From this point, old writers remain stopped until compatibility is
           # explicitly proven or an operator completes the documented recovery.
+          MIGRATION_STARTED=1
           WRITERS_STOPPED=0
           trap - EXIT
 
