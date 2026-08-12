@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -55,7 +56,14 @@ PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
 PRICE_ID = "price_pilot297cad"
 PRODUCT_ID = "prod_pilot"
 CREDIT_PRICE_ID = "price_credit_pack"
+CREDIT_OLD_PRICE_ID = "price_credit_pack_previous"
+CREDIT_PRODUCT_ID = "prod_credit_pack"
 CREDIT_PACK_SIZE = 25
+CREDIT_UNIT_AMOUNT = 400
+CREDIT_OLD_PRICE_CREATED = 1_700_000_000
+CREDIT_CURRENT_PRICE_CREATED = 1_700_001_000
+
+_REAL_VERIFY_CREDIT_CHECKOUT = billing_service.verify_credit_checkout_session
 
 
 @pytest.fixture(autouse=True)
@@ -76,11 +84,27 @@ def _pilot_settings(monkeypatch):
     monkeypatch.setattr(
         billing_service,
         "retrieve_credit_line_items",
-        AsyncMock(
-            return_value={
-                "data": [{"price": {"id": CREDIT_PRICE_ID}, "quantity": 1}]
-            }
-        ),
+        AsyncMock(return_value=_credit_line_items()),
+    )
+
+    async def verify_credit(event_id, signed_session):
+        return billing_service.validate_credit_checkout_contract(
+            signed_session,
+            event_id=event_id,
+            provider_event=_credit_event(event_id, signed_session),
+            provider_session=_credit_provider_session(signed_session),
+            account=_credit_account(),
+            customer=_credit_customer(signed_session),
+            line_items_response=await billing_service.retrieve_credit_line_items(
+                signed_session["id"]
+            ),
+            current_price=_credit_price(),
+        )
+
+    monkeypatch.setattr(
+        billing_service,
+        "verify_credit_checkout_session",
+        AsyncMock(side_effect=verify_credit),
     )
     _install_line_items(monkeypatch)
 
@@ -133,17 +157,199 @@ def _legacy_credit_checkout(
     session_id: str,
     payment_status: str = "paid",
     credits: object = CREDIT_PACK_SIZE,
-    amount_total: object = 400,
+    amount_total: object = CREDIT_UNIT_AMOUNT,
+    created: int = CREDIT_CURRENT_PRICE_CREATED + 100,
 ) -> dict:
     return {
         "id": session_id,
         "mode": "payment",
+        "status": "complete" if payment_status == "paid" else "open",
         "payment_status": payment_status,
+        "payment_intent": f"pi_{session_id.removeprefix('cs_')}",
+        "livemode": False,
+        "currency": "usd",
+        "created": created,
+        "amount_subtotal": amount_total,
         "amount_total": amount_total,
+        "total_details": {
+            "amount_discount": 0,
+            "amount_tax": 0,
+            "amount_shipping": 0,
+        },
         "customer": "cus_legacy",
         "client_reference_id": str(user_id),
-        "metadata": {"type": "credits", "credits": str(credits)},
+        "metadata": {
+            "type": "credits",
+            "user_id": str(user_id),
+            "credits": str(credits),
+        },
     }
+
+
+def _credit_product(*, product_id: str = CREDIT_PRODUCT_ID) -> dict:
+    return {
+        "id": product_id,
+        "active": True,
+        "livemode": False,
+        "metadata": {
+            "product_key": "credit_pack",
+            "credits": str(CREDIT_PACK_SIZE),
+        },
+    }
+
+
+def _credit_price(
+    *,
+    price_id: str = CREDIT_PRICE_ID,
+    created: int = CREDIT_CURRENT_PRICE_CREATED,
+    active: bool = True,
+    currency: str = "usd",
+    unit_amount: int = CREDIT_UNIT_AMOUNT,
+    product_id: str = CREDIT_PRODUCT_ID,
+) -> dict:
+    return {
+        "id": price_id,
+        "active": active,
+        "livemode": False,
+        "created": created,
+        "unit_amount": unit_amount,
+        "currency": currency,
+        "type": "one_time",
+        "recurring": None,
+        "metadata": {
+            "product_key": "credit_pack",
+            "credits": str(CREDIT_PACK_SIZE),
+        },
+        "product": _credit_product(product_id=product_id),
+    }
+
+
+def _credit_line_items(
+    *,
+    price_id: str = CREDIT_PRICE_ID,
+    price_created: int = CREDIT_CURRENT_PRICE_CREATED,
+    price_active: bool = True,
+    currency: str = "usd",
+    unit_amount: int = CREDIT_UNIT_AMOUNT,
+    quantity: int = 1,
+    product_id: str = CREDIT_PRODUCT_ID,
+) -> dict:
+    amount = unit_amount * quantity
+    return {
+        "data": [
+            {
+                "quantity": quantity,
+                "amount_subtotal": amount,
+                "amount_total": amount,
+                "price": _credit_price(
+                    price_id=price_id,
+                    created=price_created,
+                    active=price_active,
+                    currency=currency,
+                    unit_amount=unit_amount,
+                    product_id=product_id,
+                ),
+            }
+        ]
+    }
+
+
+def _credit_account(*, account_id: str = ACCOUNT_ID) -> dict:
+    return {
+        "id": account_id,
+        "charges_enabled": True,
+        "details_submitted": True,
+    }
+
+
+def _credit_event(event_id: str, signed_session: dict) -> dict:
+    return {
+        "id": event_id,
+        "type": "checkout.session.completed",
+        "livemode": False,
+        "account": ACCOUNT_ID,
+        "data": {"object": deepcopy(signed_session)},
+    }
+
+
+def _credit_customer(signed_session: dict, *, user_id: object | None = None) -> dict:
+    owner_id = user_id or signed_session.get("client_reference_id")
+    return {
+        "id": signed_session.get("customer"),
+        "livemode": False,
+        "metadata": {
+            "user_id": str(owner_id),
+            "app": settings.APP_NAME,
+        },
+    }
+
+
+def _credit_provider_session(signed_session: dict) -> dict:
+    provider = deepcopy(signed_session)
+    paid = provider.get("payment_status") == "paid"
+    provider["payment_intent"] = {
+        "id": signed_session.get("payment_intent"),
+        "livemode": False,
+        "status": "succeeded" if paid else "processing",
+        "currency": provider.get("currency"),
+        "amount": provider.get("amount_total"),
+        "amount_received": provider.get("amount_total") if paid else 0,
+        "customer": provider.get("customer"),
+    }
+    return provider
+
+
+def _install_credit_provider_contract(
+    monkeypatch,
+    signed_session: dict,
+    *,
+    event_id: str,
+    provider_event: dict | None = None,
+    provider_session: dict | None = None,
+    account: dict | None = None,
+    customer: dict | None = None,
+    line_items: dict | None = None,
+    current_price: dict | None = None,
+) -> dict[str, AsyncMock]:
+    async def retrieve_event(requested_event_id):
+        if provider_event is not None:
+            return provider_event
+        return _credit_event(requested_event_id, signed_session)
+
+    boundaries = {
+        "event": AsyncMock(side_effect=retrieve_event),
+        "session": AsyncMock(
+            return_value=provider_session or _credit_provider_session(signed_session)
+        ),
+        "account": AsyncMock(return_value=account or _credit_account()),
+        "customer": AsyncMock(return_value=customer or _credit_customer(signed_session)),
+        "line_items": AsyncMock(return_value=line_items or _credit_line_items()),
+        "price": AsyncMock(return_value=current_price or _credit_price()),
+    }
+    monkeypatch.setattr(
+        billing_service,
+        "verify_credit_checkout_session",
+        _REAL_VERIFY_CREDIT_CHECKOUT,
+    )
+    monkeypatch.setattr(billing_service, "retrieve_credit_event", boundaries["event"])
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_checkout_session",
+        boundaries["session"],
+    )
+    monkeypatch.setattr(billing_service, "retrieve_credit_account", boundaries["account"])
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_customer",
+        boundaries["customer"],
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_line_items",
+        boundaries["line_items"],
+    )
+    monkeypatch.setattr(billing_service, "retrieve_credit_price", boundaries["price"])
+    return boundaries
 
 
 def _legacy_module_checkout(user_id: uuid.UUID, *, session_id: str) -> dict:
@@ -2173,6 +2379,7 @@ async def test_legacy_checkout_and_final_status_commit_atomically(
                 password_hash="not-a-real-password-hash",
                 full_name="Legacy Success",
                 credits=0,
+                stripe_customer_id="cus_legacy",
             )
             db.add(user)
             await db.commit()
@@ -2209,6 +2416,437 @@ async def test_legacy_checkout_and_final_status_commit_atomically(
 
 
 @pytest.mark.asyncio
+async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_once(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    event_id = "evt_credit_created_before_rotation"
+    async with _isolated_legacy_database(tmp_path, "credit_before_rotation") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="credit-before-rotation@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Credit Before Rotation",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_credit_before_rotation",
+                created=CREDIT_OLD_PRICE_CREATED + 100,
+            )
+            boundaries = _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                line_items=_credit_line_items(
+                    price_id=CREDIT_OLD_PRICE_ID,
+                    price_created=CREDIT_OLD_PRICE_CREATED,
+                    price_active=False,
+                ),
+            )
+
+            first = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            second_event = await handle_stripe_webhook(
+                "evt_credit_before_rotation_distinct",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+
+            assert first["status"] == "processed"
+            assert duplicate["status"] == "duplicate"
+            assert second_event["status"] == "processed"
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
+            assert len(events) == 2
+            assert all(event.status == "processed" for event in events)
+            assert boundaries["event"].await_count == 2
+            assert boundaries["session"].await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_old_credit_price_cannot_fulfill_session_created_after_rotation(
+    monkeypatch,
+    tmp_path,
+):
+    event_id = "evt_old_price_new_session"
+    async with _isolated_legacy_database(tmp_path, "old_price_new_session") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="old-price-new-session@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Old Price New Session",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_old_price_created_too_late",
+                created=CREDIT_CURRENT_PRICE_CREATED + 1,
+            )
+            _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                line_items=_credit_line_items(
+                    price_id=CREDIT_OLD_PRICE_ID,
+                    price_created=CREDIT_OLD_PRICE_CREATED,
+                    price_active=False,
+                ),
+            )
+
+            result = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+            assert result["status"] == "rejected"
+            assert user.credits == 0
+            assert ledger_count == 0
+            assert event is not None and event.status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_pre_rotation_timestamp_cannot_authorize_unrelated_old_price(
+    monkeypatch,
+    tmp_path,
+):
+    event_id = "evt_unrelated_old_credit_price"
+    async with _isolated_legacy_database(tmp_path, "unrelated_old_price") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="unrelated-old-price@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Unrelated Old Price",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_unrelated_old_price",
+                created=CREDIT_OLD_PRICE_CREATED + 100,
+            )
+            _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                line_items=_credit_line_items(
+                    price_id="price_unrelated_old",
+                    price_created=CREDIT_OLD_PRICE_CREATED,
+                    price_active=False,
+                    product_id="prod_unrelated",
+                ),
+            )
+
+            result = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert result["status"] == "rejected"
+            assert user.credits == 0
+            assert ledger_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_contract",
+    [
+        "event_account",
+        "account_resource",
+        "foreign_session",
+        "mode",
+        "expired",
+        "livemode",
+        "currency",
+        "amount",
+        "owner",
+        "foreign_customer",
+        "unpaid",
+    ],
+)
+async def test_credit_provider_or_owner_mismatch_never_grants_value(
+    monkeypatch,
+    tmp_path,
+    invalid_contract,
+):
+    event_id = f"evt_credit_mismatch_{invalid_contract}"
+    async with _isolated_legacy_database(
+        tmp_path,
+        f"credit_mismatch_{invalid_contract}",
+    ) as sessions:
+        async with sessions() as db:
+            user = User(
+                email=f"credit-{invalid_contract}@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Credit Contract Mismatch",
+                credits=0,
+                stripe_customer_id=(
+                    "cus_other" if invalid_contract == "foreign_customer" else "cus_legacy"
+                ),
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id=f"cs_credit_mismatch_{invalid_contract}",
+                payment_status="unpaid" if invalid_contract == "unpaid" else "paid",
+            )
+            if invalid_contract == "mode":
+                payload["mode"] = "subscription"
+            elif invalid_contract == "expired":
+                payload["status"] = "expired"
+            provider_event = _credit_event(event_id, payload)
+            provider_session = _credit_provider_session(payload)
+            account = _credit_account()
+            line_items = _credit_line_items()
+            customer = _credit_customer(payload)
+            if invalid_contract == "event_account":
+                provider_event["account"] = "acct_foreign"
+            elif invalid_contract == "account_resource":
+                account = _credit_account(account_id="acct_foreign")
+            elif invalid_contract == "foreign_session":
+                provider_event["data"]["object"]["id"] = "cs_foreign"
+            elif invalid_contract == "livemode":
+                provider_session["livemode"] = True
+            elif invalid_contract == "currency":
+                line_items = _credit_line_items(currency="cad")
+            elif invalid_contract == "amount":
+                provider_session["payment_intent"]["amount_received"] -= 1
+            elif invalid_contract == "owner":
+                customer = _credit_customer(payload, user_id=uuid.uuid4())
+            _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                provider_event=provider_event,
+                provider_session=provider_session,
+                account=account,
+                customer=customer,
+                line_items=line_items,
+            )
+
+            result = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert result["status"] == "rejected"
+            assert user.credits == 0
+            assert ledger_count == 0
+
+
+@pytest.mark.asyncio
+async def test_credit_provider_failure_rolls_back_and_replay_is_atomic(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    event_id = "evt_credit_provider_retry"
+    async with _isolated_legacy_database(tmp_path, "credit_provider_retry") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="credit-provider-retry@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Credit Provider Retry",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_credit_provider_retry",
+            )
+            boundaries = _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+            )
+            boundaries["session"].side_effect = [
+                stripe.error.APIConnectionError("local provider outage"),
+                _credit_provider_session(payload),
+            ]
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    event_id,
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            await db.refresh(user)
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+            ledger_after_failure = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert user.credits == 0
+            assert ledger_after_failure == 0
+            assert event is not None and event.status == "retryable_failure"
+
+            retry = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            await db.refresh(event)
+            ledger_after_retry = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert retry["status"] == "processed"
+            assert duplicate["status"] == "duplicate"
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_after_retry == 1
+            assert event.status == "processed"
+            assert event.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_new_credit_checkout_creation_uses_only_current_price(monkeypatch):
+    from api.schemas.billing import CreditPurchaseRequest
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    customer = AsyncMock(return_value="cus_current_credit_price")
+    checkout_create = MagicMock(
+        return_value=MagicMock(url="https://checkout.stripe.test/current")
+    )
+    monkeypatch.setattr(billing_router, "get_or_create_stripe_customer", customer)
+    monkeypatch.setattr(
+        billing_router.stripe.checkout.Session,
+        "create",
+        checkout_create,
+    )
+
+    response = await billing_router.purchase_credits(
+        CreditPurchaseRequest(quantity=2),
+        user,
+        AsyncMock(),
+    )
+
+    assert response.credits_to_add == 2 * CREDIT_PACK_SIZE
+    assert checkout_create.call_args.kwargs["line_items"] == [
+        {"price": CREDIT_PRICE_ID, "quantity": 2}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_partial_credit_configuration_stays_retryable_without_value(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_PRICE_ID", "")
+    monkeypatch.setattr(
+        billing_service,
+        "verify_credit_checkout_session",
+        _REAL_VERIFY_CREDIT_CHECKOUT,
+    )
+    event_id = "evt_partial_credit_configuration"
+    async with _isolated_legacy_database(tmp_path, "partial_credit_config") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="partial-credit-config@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Partial Credit Config",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_partial_credit_configuration",
+            )
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    event_id,
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+            assert user.credits == 0
+            assert ledger_count == 0
+            assert event is not None
+            assert event.status == "retryable_failure"
+            assert event.error == billing_service.CREDIT_FULFILLMENT_RETRYABLE_ERROR
+
+
+@pytest.mark.asyncio
 async def test_same_stripe_payment_never_grants_credits_twice(monkeypatch, tmp_path):
     monkeypatch.setattr(
         credit_service,
@@ -2222,6 +2860,7 @@ async def test_same_stripe_payment_never_grants_credits_twice(monkeypatch, tmp_p
                 password_hash="not-a-real-password-hash",
                 full_name="Legacy Idempotent",
                 credits=0,
+                stripe_customer_id="cus_legacy",
             )
             db.add(user)
             await db.commit()
@@ -2272,6 +2911,7 @@ async def test_unconfirmed_payment_never_grants_credits(monkeypatch, tmp_path):
                 password_hash="not-a-real-password-hash",
                 full_name="Legacy Unconfirmed",
                 credits=0,
+                stripe_customer_id="cus_legacy",
             )
             db.add(user)
             await db.commit()
@@ -2292,10 +2932,10 @@ async def test_unconfirmed_payment_never_grants_credits(monkeypatch, tmp_path):
             ledger_count = await db.scalar(
                 select(func.count()).select_from(CreditLedger)
             )
-            assert result["status"] == "processed"
+            assert result["status"] == "rejected"
             assert user.credits == 0
             assert ledger_count == 0
-            line_items.assert_not_awaited()
+            line_items.assert_awaited_once_with("cs_unconfirmed_payment")
 
 
 @pytest.mark.asyncio
@@ -2362,6 +3002,7 @@ async def test_invalid_credit_contract_fails_closed(
                 password_hash="not-a-real-password-hash",
                 full_name="Legacy Invalid Credit",
                 credits=0,
+                stripe_customer_id="cus_legacy",
             )
             db.add(user)
             await db.commit()
@@ -2382,7 +3023,7 @@ async def test_invalid_credit_contract_fails_closed(
             ledger_count = await db.scalar(
                 select(func.count()).select_from(CreditLedger)
             )
-            assert result["status"] == "processed"
+            assert result["status"] == "rejected"
             assert user.credits == 0
             assert ledger_count == 0
 
@@ -2424,6 +3065,7 @@ async def test_legacy_status_failure_rolls_back_then_retry_is_safe(
                 password_hash="not-a-real-password-hash",
                 full_name="Legacy Retry",
                 credits=0,
+                stripe_customer_id="cus_legacy",
             )
             db.add(user)
             await db.commit()

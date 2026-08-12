@@ -16,6 +16,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -125,10 +126,30 @@ SUPPORTED_AUTOMATED_FULFILLMENT_TYPES = frozenset({"credits"})
 MODULE_FULFILLMENT_RETRYABLE_ERROR = (
     "Module Checkout fulfillment is disabled pending strict server-side contract verification"
 )
+CREDIT_FULFILLMENT_RETRYABLE_ERROR = (
+    "Credit Checkout fulfillment requires verified server-side Stripe resources"
+)
 
 
 class UnsupportedFulfillmentError(RuntimeError):
     """A paid product has no production-safe automated fulfillment."""
+
+
+class CreditFulfillmentUnavailable(RuntimeError):
+    """A credit Checkout cannot be verified safely enough to finalize yet."""
+
+
+class CreditFulfillmentRejected(RuntimeError):
+    """A verified credit Checkout does not match its durable local owner."""
+
+
+@dataclass(frozen=True)
+class PreparedCreditCheckout:
+    classification: str
+    session_id: str | None = None
+    user_id: uuid.UUID | None = None
+    customer_id: str | None = None
+    credits: int | None = None
 
 
 def is_automated_fulfillment_supported(fulfillment_type: str | None) -> bool:
@@ -634,7 +655,40 @@ async def retrieve_credit_line_items(session_id: str) -> Any:
         stripe.checkout.Session.list_line_items,
         session_id,
         limit=10,
-        expand=["data.price"],
+        expand=["data.price.product"],
+    )
+
+
+async def retrieve_credit_checkout_session(session_id: str) -> Any:
+    """Retrieve the canonical Checkout Session and its PaymentIntent."""
+    return await asyncio.to_thread(
+        stripe.checkout.Session.retrieve,
+        session_id,
+        expand=["payment_intent"],
+    )
+
+
+async def retrieve_credit_event(event_id: str) -> Any:
+    """Retrieve the canonical Stripe Event without pinning a fragile API version."""
+    return await asyncio.to_thread(stripe.Event.retrieve, event_id)
+
+
+async def retrieve_credit_account() -> Any:
+    """Retrieve the Stripe account serving the credit Checkout contract."""
+    return await asyncio.to_thread(stripe.Account.retrieve)
+
+
+async def retrieve_credit_customer(customer_id: str) -> Any:
+    """Retrieve the Stripe Customer bound to the authenticated Nanovia user."""
+    return await asyncio.to_thread(stripe.Customer.retrieve, customer_id)
+
+
+async def retrieve_credit_price(price_id: str) -> Any:
+    """Retrieve the configured current credit Price and its Product contract."""
+    return await asyncio.to_thread(
+        stripe.Price.retrieve,
+        price_id,
+        expand=["product"],
     )
 
 
@@ -654,52 +708,292 @@ def _stripe_line_item_data(response: Any) -> list[Any]:
     return list(getattr(response, "data", []) or [])
 
 
-async def _validated_credit_grant(
-    session_id: str,
-    session: dict[str, Any],
-) -> int | None:
-    """Return the server-authorized credit amount for a confirmed Stripe payment."""
-    if session.get("payment_status") != "paid":
-        return None
-    amount_total = session.get("amount_total")
-    if isinstance(amount_total, bool) or not isinstance(amount_total, int) or amount_total <= 0:
-        return None
-    if not settings.STRIPE_CREDIT_PRICE_ID or settings.STRIPE_CREDIT_PACK_SIZE <= 0:
-        return None
+def _credit_rejected() -> PreparedCreditCheckout:
+    return PreparedCreditCheckout("rejected")
 
-    line_items = _stripe_line_item_data(await retrieve_credit_line_items(session_id))
+
+def _stripe_metadata(value: Any) -> dict[str, Any]:
+    metadata = stripe_field(value, "metadata", {}) or {}
+    return dict(metadata) if not isinstance(metadata, dict) else metadata
+
+
+def _exact_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _credit_resource_metadata_matches(value: Any) -> bool:
+    metadata = _stripe_metadata(value)
+    return (
+        metadata.get("product_key") == "credit_pack"
+        and metadata.get("credits") == str(settings.STRIPE_CREDIT_PACK_SIZE)
+    )
+
+
+def _credit_checkout_identity_matches(signed: Any, provider: Any) -> bool:
+    for field_name in (
+        "id",
+        "customer",
+        "payment_intent",
+        "client_reference_id",
+        "mode",
+        "status",
+        "payment_status",
+        "livemode",
+        "currency",
+        "amount_subtotal",
+        "amount_total",
+        "created",
+    ):
+        signed_value = stripe_field(signed, field_name)
+        provider_value = stripe_field(provider, field_name)
+        if field_name in {"id", "customer", "payment_intent"}:
+            signed_value = _stripe_object_id(signed_value)
+            provider_value = _stripe_object_id(provider_value)
+        if signed_value != provider_value:
+            return False
+    return _stripe_metadata(signed) == _stripe_metadata(provider)
+
+
+def _validated_credit_price(
+    value: Any,
+    *,
+    expected_livemode: bool,
+    require_active: bool,
+) -> tuple[str, str, int, int, str] | None:
+    price_id = _stripe_object_id(value)
+    created = _exact_positive_int(stripe_field(value, "created"))
+    unit_amount = _exact_positive_int(stripe_field(value, "unit_amount"))
+    currency = stripe_field(value, "currency")
+    livemode = stripe_field(value, "livemode")
+    active = stripe_field(value, "active")
+    product = stripe_field(value, "product")
+    product_id = _stripe_object_id(product)
+    if (
+        not price_id
+        or not price_id.startswith("price_")
+        or created is None
+        or unit_amount is None
+        or not isinstance(currency, str)
+        or currency != currency.lower()
+        or not isinstance(livemode, bool)
+        or livemode != expected_livemode
+        or not isinstance(active, bool)
+        or (require_active and not active)
+        or stripe_field(value, "type") != "one_time"
+        or stripe_field(value, "recurring") is not None
+        or not product_id
+        or not product_id.startswith("prod_")
+        or stripe_field(product, "active") is not True
+        or stripe_field(product, "livemode") != expected_livemode
+        or not _credit_resource_metadata_matches(value)
+        or not _credit_resource_metadata_matches(product)
+    ):
+        return None
+    return price_id, currency, unit_amount, created, product_id
+
+
+def validate_credit_checkout_contract(
+    signed_session: dict[str, Any],
+    *,
+    event_id: str,
+    provider_event: Any,
+    provider_session: Any,
+    account: Any,
+    customer: Any,
+    line_items_response: Any,
+    current_price: Any,
+) -> PreparedCreditCheckout:
+    """Validate a paid credit Checkout from authenticated Stripe resources."""
+    event_account_id = _stripe_object_id(stripe_field(provider_event, "account"))
+    event_data = stripe_field(provider_event, "data", {}) or {}
+    event_object = stripe_field(event_data, "object")
+    if (
+        _stripe_object_id(provider_event) != event_id
+        or stripe_field(provider_event, "type") != "checkout.session.completed"
+        or stripe_field(provider_event, "livemode")
+        != (settings.APP_ENV == "production")
+        or event_account_id not in (None, settings.STRIPE_ACCOUNT_ID)
+        or _stripe_object_id(event_object) != _stripe_object_id(signed_session)
+    ):
+        return _credit_rejected()
+    if not _credit_checkout_identity_matches(signed_session, provider_session):
+        return _credit_rejected()
+
+    expected_livemode = settings.APP_ENV == "production"
+    session_id = _stripe_object_id(provider_session)
+    customer_id = _stripe_object_id(stripe_field(provider_session, "customer"))
+    payment_intent = stripe_field(provider_session, "payment_intent")
+    payment_intent_id = _stripe_object_id(payment_intent)
+    metadata = _stripe_metadata(provider_session)
+    created = _exact_positive_int(stripe_field(provider_session, "created"))
+    amount_subtotal = _exact_positive_int(
+        stripe_field(provider_session, "amount_subtotal")
+    )
+    amount_total = _exact_positive_int(stripe_field(provider_session, "amount_total"))
+    livemode = stripe_field(provider_session, "livemode")
+    total_details = stripe_field(provider_session, "total_details", {}) or {}
+    try:
+        user_id = uuid.UUID(
+            str(stripe_field(provider_session, "client_reference_id") or "")
+        )
+    except ValueError:
+        return _credit_rejected()
+
+    if (
+        not session_id
+        or not session_id.startswith("cs_")
+        or not customer_id
+        or not customer_id.startswith("cus_")
+        or not payment_intent_id
+        or not payment_intent_id.startswith("pi_")
+        or created is None
+        or amount_subtotal is None
+        or amount_total is None
+        or isinstance(payment_intent, str)
+        or stripe_field(provider_session, "mode") != "payment"
+        or stripe_field(provider_session, "status") != "complete"
+        or stripe_field(provider_session, "payment_status") != "paid"
+        or not isinstance(livemode, bool)
+        or livemode != expected_livemode
+        or metadata.get("type") != "credits"
+        or metadata.get("user_id") != str(user_id)
+        or any(
+            stripe_field(total_details, field_name) != 0
+            for field_name in ("amount_discount", "amount_tax", "amount_shipping")
+        )
+    ):
+        return _credit_rejected()
+
+    if (
+        _stripe_object_id(account) != settings.STRIPE_ACCOUNT_ID
+        or stripe_field(account, "charges_enabled") is not True
+        or stripe_field(account, "details_submitted") is not True
+        or _stripe_object_id(customer) != customer_id
+        or stripe_field(customer, "livemode") != expected_livemode
+    ):
+        return _credit_rejected()
+    customer_metadata = _stripe_metadata(customer)
+    if (
+        customer_metadata.get("user_id") != str(user_id)
+        or customer_metadata.get("app") != settings.APP_NAME
+    ):
+        return _credit_rejected()
+
+    current_contract = _validated_credit_price(
+        current_price,
+        expected_livemode=expected_livemode,
+        require_active=True,
+    )
+    if current_contract is None or current_contract[0] != settings.STRIPE_CREDIT_PRICE_ID:
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+
+    line_items = _stripe_line_item_data(line_items_response)
     if len(line_items) != 1:
-        return None
+        return _credit_rejected()
     line_item = line_items[0]
-    if isinstance(line_item, dict):
-        price = line_item.get("price")
-        raw_quantity = line_item.get("quantity")
-    else:
-        price = getattr(line_item, "price", None)
-        raw_quantity = getattr(line_item, "quantity", None)
-    if _stripe_object_id(price) != settings.STRIPE_CREDIT_PRICE_ID:
-        return None
-    if isinstance(raw_quantity, bool) or not isinstance(raw_quantity, int):
-        return None
-    quantity = raw_quantity
-    if not 1 <= quantity <= MAX_CREDIT_PACK_QUANTITY:
-        return None
+    price = stripe_field(line_item, "price")
+    quantity = _exact_positive_int(stripe_field(line_item, "quantity"))
+    line_subtotal = _exact_positive_int(stripe_field(line_item, "amount_subtotal"))
+    line_total = _exact_positive_int(stripe_field(line_item, "amount_total"))
+    price_contract = _validated_credit_price(
+        price,
+        expected_livemode=expected_livemode,
+        require_active=False,
+    )
+    if (
+        price_contract is None
+        or quantity is None
+        or not 1 <= quantity <= MAX_CREDIT_PACK_QUANTITY
+    ):
+        return _credit_rejected()
 
-    metadata = session.get("metadata") or {}
-    raw_declared_credits = metadata.get("credits")
-    if not isinstance(raw_declared_credits, str) or not raw_declared_credits.isdecimal():
-        return None
-    declared_credits = int(raw_declared_credits)
-    expected_credits = quantity * settings.STRIPE_CREDIT_PACK_SIZE
-    if declared_credits != expected_credits or expected_credits <= 0:
-        return None
-    return expected_credits
+    price_id, currency, unit_amount, price_created, product_id = price_contract
+    current_price_id, current_currency, _, current_created, current_product_id = (
+        current_contract
+    )
+    expected_amount = unit_amount * quantity
+    expected_credits = settings.STRIPE_CREDIT_PACK_SIZE * quantity
+    declared_credits = metadata.get("credits")
+    if (
+        stripe_field(provider_session, "currency") != currency
+        or currency != current_currency
+        or amount_subtotal != expected_amount
+        or amount_total != expected_amount
+        or line_subtotal != expected_amount
+        or line_total != expected_amount
+        or declared_credits != str(expected_credits)
+        or product_id != current_product_id
+        or price_created > created
+        or (price_id != current_price_id and created >= current_created)
+    ):
+        return _credit_rejected()
+
+    if (
+        stripe_field(payment_intent, "livemode") != expected_livemode
+        or stripe_field(payment_intent, "status") != "succeeded"
+        or stripe_field(payment_intent, "currency") != currency
+        or stripe_field(payment_intent, "amount") != expected_amount
+        or stripe_field(payment_intent, "amount_received") != expected_amount
+        or _stripe_object_id(stripe_field(payment_intent, "customer")) != customer_id
+    ):
+        return _credit_rejected()
+
+    return PreparedCreditCheckout(
+        "verified",
+        session_id=session_id,
+        user_id=user_id,
+        customer_id=customer_id,
+        credits=expected_credits,
+    )
+
+
+async def verify_credit_checkout_session(
+    event_id: str,
+    signed_session: dict[str, Any],
+) -> PreparedCreditCheckout:
+    """Retrieve and verify the complete credit contract before the DB transaction."""
+    current_price_id = (settings.STRIPE_CREDIT_PRICE_ID or "").strip()
+    account_id = (settings.STRIPE_ACCOUNT_ID or "").strip()
+    customer_id = _stripe_object_id(signed_session.get("customer"))
+    session_id = _stripe_object_id(signed_session)
+    if (
+        not current_price_id.startswith("price_")
+        or not account_id.startswith("acct_")
+        or settings.STRIPE_CREDIT_PACK_SIZE <= 0
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+    if not session_id or not customer_id:
+        return _credit_rejected()
+
+    provider_event, provider_session, account, customer, line_items, current_price = (
+        await asyncio.gather(
+            retrieve_credit_event(event_id),
+            retrieve_credit_checkout_session(session_id),
+            retrieve_credit_account(),
+            retrieve_credit_customer(customer_id),
+            retrieve_credit_line_items(session_id),
+            retrieve_credit_price(current_price_id),
+        )
+    )
+    return validate_credit_checkout_contract(
+        signed_session,
+        event_id=event_id,
+        provider_event=provider_event,
+        provider_session=provider_session,
+        account=account,
+        customer=customer,
+        line_items_response=line_items,
+        current_price=current_price,
+    )
 
 
 async def handle_checkout_completed(
     session: dict[str, Any],
     db: AsyncSession,
     *,
+    prepared_credit: PreparedCreditCheckout | None = None,
     commit: bool = True,
 ) -> None:
     """
@@ -718,50 +1012,70 @@ async def handle_checkout_completed(
         )
         return
 
-    customer_id = session.get("customer")
-    user_id_str = session.get("client_reference_id")
+    credit_checkout = session.get("mode") == "payment" and checkout_type == "credits"
+    if credit_checkout:
+        if (
+            prepared_credit is None
+            or prepared_credit.classification != "verified"
+            or prepared_credit.session_id is None
+            or prepared_credit.user_id is None
+            or prepared_credit.customer_id is None
+            or prepared_credit.credits is None
+        ):
+            raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+        customer_id = prepared_credit.customer_id
+        user_id = prepared_credit.user_id
+        user_id_str = str(user_id)
+    else:
+        customer_id = session.get("customer")
+        user_id_str = session.get("client_reference_id")
     if not customer_id or not user_id_str:
         logger.warning("[billing] checkout.session.completed missing customer or client_reference_id")
         return
 
-    try:
-        user_id = uuid.UUID(user_id_str)
-    except ValueError:
-        logger.error(f"[billing] Invalid client_reference_id: {user_id_str}")
-        return
+    if not credit_checkout:
+        try:
+            user_id = uuid.UUID(user_id_str)
+        except ValueError:
+            logger.error(f"[billing] Invalid client_reference_id: {user_id_str}")
+            return
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
+        if credit_checkout:
+            raise CreditFulfillmentRejected(
+                "Credit Checkout durable local owner does not exist"
+            )
         logger.error(f"[billing] No user for id={user_id_str}")
         return
 
+    if credit_checkout and user.stripe_customer_id != customer_id:
+        raise CreditFulfillmentRejected(
+            "Credit Checkout customer does not match its durable local owner"
+        )
     if not user.stripe_customer_id:
         user.stripe_customer_id = customer_id
         db.add(user)
         logger.info(f"[billing] Linked customer {customer_id} to user {user_id}")
 
     # Credit pack one-time purchase
-    if session.get("mode") == "payment" and metadata.get("type") == "credits":
-        session_id = session.get("id")
-        if not session_id:
-            logger.error("[billing] checkout.session.completed missing session id — cannot safely credit")
-            return
-        credits_to_add = await _validated_credit_grant(session_id, session)
-        if credits_to_add is not None:
-            from api.services.credit_service import add_credits
-            idempotency_key = f"stripe_checkout_{session_id}_{credits_to_add}"
-            await add_credits(
-                user_id=user_id,
-                amount=credits_to_add,
-                source="stripe_checkout",
-                db=db,
-                idempotency_key=idempotency_key,
-                note=f"Credit pack purchased via Stripe checkout {session.get('id', '')}",
-                commit=commit,
-            )
-            logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
-            await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
+    if credit_checkout:
+        session_id = prepared_credit.session_id
+        credits_to_add = prepared_credit.credits
+        from api.services.credit_service import add_credits
+        idempotency_key = f"stripe_checkout_{session_id}_{credits_to_add}"
+        await add_credits(
+            user_id=user_id,
+            amount=credits_to_add,
+            source="stripe_checkout",
+            db=db,
+            idempotency_key=idempotency_key,
+            note=f"Credit pack purchased via Stripe checkout {session_id}",
+            commit=commit,
+        )
+        logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
+        await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
 
     if commit:
         await db.commit()
@@ -784,8 +1098,17 @@ async def prepare_stripe_event(
     data: dict[str, Any],
     *,
     event_id: str | None = None,
-) -> PreparedPilotReversal | None:
-    """Complete Pilot provider reads before the webhook database transaction."""
+) -> PreparedPilotReversal | PreparedCreditCheckout | None:
+    """Complete Stripe provider reads before the webhook database transaction."""
+    if event_type == "checkout.session.completed":
+        metadata = data.get("metadata") or {}
+        if metadata.get("type") == "credits" and not stripe_field(
+            data,
+            "payment_link",
+        ):
+            if not event_id:
+                raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+            return await verify_credit_checkout_session(event_id, data)
     if event_type not in PILOT_REVERSAL_EVENT_TYPES:
         return None
     if not event_id:
@@ -800,7 +1123,7 @@ async def process_stripe_event(
     data: dict[str, Any],
     db: AsyncSession,
     event_id: str | None = None,
-    prepared_event: PreparedPilotReversal | None = None,
+    prepared_event: PreparedPilotReversal | PreparedCreditCheckout | None = None,
     post_commit_actions: list[PostCommitAction] | None = None,
 ) -> str:
     """Apply a Stripe event to local billing state and return the resulting status."""
@@ -846,7 +1169,22 @@ async def process_stripe_event(
                 checkout_type,
             )
             return "rejected"
-        await handle_checkout_completed(data, db, commit=False)
+        prepared_credit = None
+        if checkout_type == "credits":
+            if not isinstance(prepared_event, PreparedCreditCheckout):
+                raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+            if prepared_event.classification != "verified":
+                return "rejected"
+            prepared_credit = prepared_event
+        try:
+            await handle_checkout_completed(
+                data,
+                db,
+                prepared_credit=prepared_credit,
+                commit=False,
+            )
+        except CreditFulfillmentRejected:
+            return "rejected"
         return "processed"
 
     if event_type in (
