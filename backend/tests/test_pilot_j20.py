@@ -5,6 +5,7 @@ local deterministic data. No provider network call is permitted from this file.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -64,8 +65,31 @@ CREDIT_PACK_SIZE = 25
 CREDIT_UNIT_AMOUNT = 400
 CREDIT_OLD_PRICE_CREATED = 1_700_000_000
 CREDIT_CURRENT_PRICE_CREATED = 1_700_001_000
+PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
+PREVIOUS_PAYMENT_LINK_URL = "https://buy.stripe.com/previousPilot"
+PREVIOUS_PRICE_ID = "price_previousPilot"
+PREVIOUS_PRODUCT_ID = "prod_previousPilot"
 
 _REAL_VERIFY_CREDIT_CHECKOUT = billing_service.verify_credit_checkout_session
+
+
+def _previous_pilot_contract_json(
+    *,
+    product_id: str = PREVIOUS_PRODUCT_ID,
+    price_id: str = PREVIOUS_PRICE_ID,
+    payment_link_id: str = PREVIOUS_PAYMENT_LINK_ID,
+    payment_link_url: str = PREVIOUS_PAYMENT_LINK_URL,
+) -> str:
+    return json.dumps(
+        [
+            {
+                "product_id": product_id,
+                "price_id": price_id,
+                "payment_link_id": payment_link_id,
+                "payment_link_url": payment_link_url,
+            }
+        ]
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +107,9 @@ def _pilot_settings(monkeypatch):
     monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_local_test")
     monkeypatch.setattr(settings, "STRIPE_CREDIT_PRICE_ID", CREDIT_PRICE_ID)
     monkeypatch.setattr(settings, "STRIPE_CREDIT_PACK_SIZE", CREDIT_PACK_SIZE)
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_UNIT_AMOUNT", CREDIT_UNIT_AMOUNT)
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_CURRENCY", "usd")
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
     monkeypatch.setattr(
         billing_service,
         "retrieve_credit_line_items",
@@ -876,6 +903,135 @@ async def test_valid_link_price_and_request_id_persist_paid_payment(
             assert payment.currency == "cad"
             assert payment.amount_subtotal == 29700
             assert pilot_request.status == "paid"
+
+
+@pytest.mark.asyncio
+async def test_paid_checkout_from_explicit_previous_contract_replays_once(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_pilot_contract_json(),
+    )
+
+    async def verify(event_id, event_type, signed_session):
+        del event_id
+        provider_session = _provider_session(signed_session)
+        config = pilot_stripe_contract_service.find_authorized_pilot_stripe_config(
+            signed_session["payment_link"]
+        )
+        assert config is not None
+        require_paid = event_type == "checkout.session.async_payment_succeeded" or (
+            event_type == "checkout.session.completed"
+            and provider_session.get("payment_status") == "paid"
+        )
+        return validate_pilot_checkout(
+            provider_session,
+            _line_items(
+                price_id=PREVIOUS_PRICE_ID,
+                product_id=PREVIOUS_PRODUCT_ID,
+                price_active=False,
+                product_active=False,
+            ),
+            config,
+            require_paid=require_paid,
+        )
+
+    verifier = AsyncMock(side_effect=verify)
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "verify_pilot_checkout_event",
+        verifier,
+    )
+    async with _isolated_database(tmp_path, "previous_pilot_payment") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db)
+            payload = _valid_session(
+                request_id=pilot_request.id,
+                session_id="cs_previous_pilot",
+                payment_intent_id="pi_previous_pilot",
+            )
+            payload["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+
+            first = await handle_stripe_webhook(
+                "evt_previous_pilot",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            duplicate = await handle_stripe_webhook(
+                "evt_previous_pilot",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            distinct = await handle_stripe_webhook(
+                "evt_previous_pilot_distinct",
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            payment = (await db.execute(select(PilotPayment))).scalar_one()
+            events = list((await db.execute(select(WebhookEvent))).scalars())
+            assert first["status"] == "paid"
+            assert duplicate["status"] == "duplicate"
+            assert distinct["status"] == "duplicate"
+            assert payment.stripe_payment_link_id == PREVIOUS_PAYMENT_LINK_ID
+            assert payment.stripe_price_id == PREVIOUS_PRICE_ID
+            assert payment.status == "paid"
+            assert pilot_request.status == "paid"
+            assert len(events) == 2
+            assert all(event.status == "processed" for event in events)
+            assert verifier.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_previous_contract_stays_retryable_without_effect(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_pilot_contract_json(),
+    )
+    verifier = AsyncMock(
+        side_effect=pilot_stripe_contract_service.PilotStripeProviderUnavailable(
+            "local provider outage"
+        )
+    )
+    monkeypatch.setattr(
+        pilot_payment_service,
+        "verify_pilot_checkout_event",
+        verifier,
+    )
+    async with _isolated_database(tmp_path, "previous_pilot_retryable") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db)
+            pilot_request_id = pilot_request.id
+            payload = _valid_session(request_id=pilot_request.id)
+            payload["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+
+            with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+                await handle_stripe_webhook(
+                    "evt_previous_retryable",
+                    "checkout.session.completed",
+                    payload,
+                    db,
+                )
+
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_previous_retryable"
+                )
+            )
+            assert event is not None and event.status == "retryable_failure"
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 0
+            persisted_request = await db.get(PilotRequest, pilot_request_id)
+            assert persisted_request is not None and persisted_request.status == "pending"
 
 
 @pytest.mark.asyncio
@@ -1718,6 +1874,7 @@ async def test_unconfigured_pilot_reversal_is_ignored_without_retry_loop(
 ):
     for field_name in billing_service._PILOT_OPTIONAL_FIELDS:
         monkeypatch.setattr(settings, field_name, "")
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
     verifier = AsyncMock(side_effect=AssertionError("Disabled Pilot reached Stripe"))
     monkeypatch.setattr(
         pilot_payment_service,
@@ -1808,6 +1965,16 @@ async def test_reversal_after_payment_link_rotation_uses_stored_contract(
         settings,
         "STRIPE_PILOT_PAYMENT_LINK_URL",
         "https://buy.stripe.com/rotatedPilot",
+    )
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_pilot_contract_json(
+            product_id=PRODUCT_ID,
+            price_id=PRICE_ID,
+            payment_link_id=PAYMENT_LINK_ID,
+            payment_link_url=PAYMENT_LINK_URL,
+        ),
     )
     provider_object = _reversal_object(event_type)
     _install_reversal_verification(monkeypatch, provider_object)
@@ -2884,6 +3051,8 @@ async def test_new_credit_checkout_creation_uses_only_current_price(monkeypatch)
     checkout_create = MagicMock(
         return_value=MagicMock(url="https://checkout.stripe.test/current")
     )
+    retrieve_price = AsyncMock(return_value=_credit_price())
+    monkeypatch.setattr(billing_service, "retrieve_credit_price", retrieve_price)
     monkeypatch.setattr(billing_router, "get_or_create_stripe_customer", customer)
     monkeypatch.setattr(
         billing_router.stripe.checkout.Session,
@@ -2898,9 +3067,95 @@ async def test_new_credit_checkout_creation_uses_only_current_price(monkeypatch)
     )
 
     assert response.credits_to_add == 2 * CREDIT_PACK_SIZE
+    retrieve_price.assert_awaited_once_with(CREDIT_PRICE_ID)
     assert checkout_create.call_args.kwargs["line_items"] == [
         {"price": CREDIT_PRICE_ID, "quantity": 2}
     ]
+    assert "payment_method_types" not in checkout_create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_contract",
+    [
+        "price_metadata_missing",
+        "product_metadata_missing",
+        "product_metadata_contradictory",
+        "credits_zero",
+        "credits_negative",
+        "credits_non_numeric",
+        "price_inactive",
+        "product_inactive",
+        "product_unexpanded",
+        "amount",
+        "currency",
+        "recurring",
+        "provider_outage",
+        "provider_timeout",
+    ],
+)
+async def test_invalid_credit_catalog_never_creates_customer_or_checkout(
+    monkeypatch,
+    invalid_contract,
+):
+    from api.schemas.billing import CreditPurchaseRequest
+
+    price = _credit_price()
+    if invalid_contract == "price_metadata_missing":
+        price["metadata"] = {}
+    elif invalid_contract == "product_metadata_missing":
+        price["product"]["metadata"] = {}
+    elif invalid_contract == "product_metadata_contradictory":
+        price["product"]["metadata"]["credits"] = str(CREDIT_PACK_SIZE + 1)
+    elif invalid_contract == "credits_zero":
+        price["metadata"]["credits"] = "0"
+    elif invalid_contract == "credits_negative":
+        price["metadata"]["credits"] = "-1"
+    elif invalid_contract == "credits_non_numeric":
+        price["metadata"]["credits"] = "twenty-five"
+    elif invalid_contract == "price_inactive":
+        price["active"] = False
+    elif invalid_contract == "product_inactive":
+        price["product"]["active"] = False
+    elif invalid_contract == "product_unexpanded":
+        price["product"] = CREDIT_PRODUCT_ID
+    elif invalid_contract == "amount":
+        price["unit_amount"] = CREDIT_UNIT_AMOUNT + 1
+    elif invalid_contract == "currency":
+        price["currency"] = "cad"
+    elif invalid_contract == "recurring":
+        price["type"] = "recurring"
+        price["recurring"] = {"interval": "month"}
+
+    provider_error = {
+        "provider_outage": stripe.error.APIConnectionError("local outage"),
+        "provider_timeout": TimeoutError("local timeout"),
+    }.get(invalid_contract)
+    retrieve_price = AsyncMock(
+        side_effect=provider_error,
+        return_value=None if provider_error else price,
+    )
+    customer = AsyncMock()
+    checkout_create = MagicMock()
+    monkeypatch.setattr(billing_service, "retrieve_credit_price", retrieve_price)
+    monkeypatch.setattr(billing_router, "get_or_create_stripe_customer", customer)
+    monkeypatch.setattr(
+        billing_router.stripe.checkout.Session,
+        "create",
+        checkout_create,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_router.purchase_credits(
+            CreditPurchaseRequest(quantity=1),
+            MagicMock(id=uuid.uuid4()),
+            AsyncMock(),
+        )
+
+    assert exc_info.value.status_code == 503
+    retrieve_price.assert_awaited_once_with(CREDIT_PRICE_ID)
+    customer.assert_not_awaited()
+    checkout_create.assert_not_called()
 
 
 @pytest.mark.asyncio

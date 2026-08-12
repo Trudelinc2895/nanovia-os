@@ -25,8 +25,7 @@ from api.services.pilot_stripe_contract_service import (
     PilotStripeContractError,
     PilotStripeProviderUnavailable,
     VerifiedPilotCheckout,
-    is_canonical_payment_link,
-    load_pilot_stripe_config,
+    find_authorized_pilot_stripe_config,
     stripe_field,
     stripe_id,
     stripe_list_data,
@@ -226,11 +225,12 @@ async def process_pilot_checkout_event(
     """Verify the provider contract and persist one atomic Pilot fulfillment."""
     if event_type not in PILOT_CHECKOUT_EVENT_TYPES:
         return "ignored"
-    config = load_pilot_stripe_config()
-    if not is_canonical_payment_link(stripe_field(session, "payment_link"), config):
+    config = find_authorized_pilot_stripe_config(stripe_field(session, "payment_link"))
+    if config is None:
         return "ignored"
 
     verified = await verify_pilot_checkout_event(event_id, event_type, session)
+    config = verified.config
     request = await _match_request(verified, db)
     if request is None:
         raise PilotStripeContractError(
@@ -426,19 +426,24 @@ async def retrieve_pilot_reversal_sessions(payment_intent_id: str) -> Any:
 def _classify_pilot_reversal_sessions(
     response: Any,
     payment_intent_id: str,
-    config: PilotStripeConfig,
-) -> str:
+    default_config: PilotStripeConfig,
+) -> tuple[str, PilotStripeConfig]:
     sessions = stripe_list_data(response)
-    pilot_sessions = [
-        session
+    authorized_sessions = [
+        (session, config)
         for session in sessions
-        if is_canonical_payment_link(stripe_field(session, "payment_link"), config)
+        if (
+            config := find_authorized_pilot_stripe_config(
+                stripe_field(session, "payment_link")
+            )
+        )
+        is not None
     ]
-    if not pilot_sessions:
-        return "foreign"
-    if len(sessions) != 1 or len(pilot_sessions) != 1:
-        return "rejected"
-    session = pilot_sessions[0]
+    if not authorized_sessions:
+        return "foreign", default_config
+    if len(sessions) != 1 or len(authorized_sessions) != 1:
+        return "rejected", default_config
+    session, config = authorized_sessions[0]
     metadata = stripe_field(session, "metadata", {}) or {}
     if (
         stripe_id(stripe_field(session, "payment_intent")) != payment_intent_id
@@ -449,8 +454,8 @@ def _classify_pilot_reversal_sessions(
         or stripe_field(session, "amount_total") != PILOT_AMOUNT_CENTS
         or stripe_field(metadata, "nanovia_contract") != PILOT_CONTRACT_MARKER
     ):
-        return "rejected"
-    return "pilot"
+        return "rejected", config
+    return "pilot", config
 
 
 def _pilot_payment_for_update_statement(payment_intent_id: str):
@@ -492,7 +497,7 @@ async def prepare_pilot_reversal_event(
 
     session_response = await retrieve_pilot_reversal_sessions(signed_intent_id)
     provider_sessions = tuple(stripe_list_data(session_response))
-    classification = _classify_pilot_reversal_sessions(
+    classification, config = _classify_pilot_reversal_sessions(
         session_response,
         signed_intent_id,
         config,
@@ -511,8 +516,8 @@ def _validate_stored_payment_contract(
     config: PilotStripeConfig,
 ) -> None:
     if (
-        not payment.stripe_payment_link_id
-        or not payment.stripe_price_id
+        payment.stripe_payment_link_id != config.payment_link_id
+        or payment.stripe_price_id != config.price_id
         or payment.currency.lower() != PILOT_CURRENCY
         or payment.amount_subtotal != PILOT_AMOUNT_CENTS
         or payment.livemode != config.livemode
@@ -602,6 +607,8 @@ async def process_pilot_reversal_event(
         raise PilotAdverseEventPendingCommit(
             "Canonical Pilot payment is not committed yet"
         )
+    if prepared.classification == "foreign":
+        return "rejected"
     provider_object = prepared.provider_object
     config = prepared.config
     if provider_object is None or config is None:

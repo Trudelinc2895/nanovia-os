@@ -1,6 +1,7 @@
 """Public Pilot confirmation state derived only from persisted payments."""
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,10 @@ PAYMENT_LINK_ID = "plink_pilot"
 PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
 PRICE_ID = "price_pilot"
 PRODUCT_ID = "prod_pilot"
+PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
+PREVIOUS_PAYMENT_LINK_URL = "https://buy.stripe.com/previousPilot"
+PREVIOUS_PRICE_ID = "price_previousPilot"
+PREVIOUS_PRODUCT_ID = "prod_previousPilot"
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +58,11 @@ def _pilot_settings(monkeypatch):
         billing_router.settings,
         "STRIPE_PILOT_PAYMENT_LINK_URL",
         PAYMENT_LINK_URL,
+    )
+    monkeypatch.setattr(
+        billing_router.settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        "[]",
     )
 
 
@@ -271,6 +281,77 @@ async def test_redirect_before_webhook_retries_then_confirms_without_provisionin
             assert repeated.model_dump() == {"status": "confirmed"}
             assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 1
             assert retrieve.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_previous_authorized_contract_confirmation_remains_available(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        billing_router.settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        json.dumps(
+            [
+                {
+                    "product_id": PREVIOUS_PRODUCT_ID,
+                    "price_id": PREVIOUS_PRICE_ID,
+                    "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
+                    "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                }
+            ]
+        ),
+    )
+    session_id = "cs_previous_confirmed"
+    async with _isolated_database(tmp_path, "previous_confirmation") as sessions:
+        async with sessions() as db:
+            request = _request()
+            payment = _payment(request=request, session_id=session_id, status="paid")
+            payment.stripe_payment_link_id = PREVIOUS_PAYMENT_LINK_ID
+            payment.stripe_price_id = PREVIOUS_PRICE_ID
+            db.add_all([request, payment])
+            await db.commit()
+            provider_session = _stripe_session(
+                session_id=session_id,
+                request_id=request.id,
+                payment_link=PREVIOUS_PAYMENT_LINK_ID,
+            )
+            previous_config = billing_router.find_authorized_pilot_stripe_config(
+                PREVIOUS_PAYMENT_LINK_ID
+            )
+            assert previous_config is not None
+            monkeypatch.setattr(
+                billing_router,
+                "_retrieve_pilot_checkout_session",
+                AsyncMock(
+                    return_value=VerifiedPilotCheckout(
+                        session=provider_session,
+                        line_item={},
+                        config=previous_config,
+                        request_id=request.id,
+                        customer_id="cus_pilot",
+                        customer_email="client@example.com",
+                        payment_intent_id=f"pi_{session_id}",
+                        paid=True,
+                        gross_amount=29_700,
+                        stripe_fee_amount=1_174,
+                        tax_amount=0,
+                    )
+                ),
+            )
+
+            first = await billing_router.get_pilot_confirmation(
+                db,
+                session_id=session_id,
+            )
+            second = await billing_router.get_pilot_confirmation(
+                db,
+                session_id=session_id,
+            )
+
+            assert first.model_dump() == {"status": "confirmed"}
+            assert second.model_dump() == {"status": "confirmed"}
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 1
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,19 @@ Product, Payment Link, Checkout Session, and PaymentIntent carry the
 server-verified marker `nanovia_pro_pilot_v1`. The supported Stripe API version
 is explicitly `2024-12-18.acacia` for the currently pinned SDK.
 
+Retired Payment Links remain unauthorized by default. Outstanding Sessions may
+be completed only when their former Product, Price, Payment Link ID, and Payment
+Link URL are listed together in the non-secret
+`STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON` registry and the complete provider-side
+contract is verified. Real historical production identifiers remain **NOT
+VERIFIED** and require a separately authorized read-only preflight.
+
+Credit purchases remain disabled unless `STRIPE_CREDIT_PRICE_ID`,
+`STRIPE_CREDIT_PACK_SIZE`, `STRIPE_CREDIT_UNIT_AMOUNT`, and
+`STRIPE_CREDIT_CURRENCY` agree exactly with an active provider Price/Product
+carrying `product_key=credit_pack` and the configured credit count on both
+resources. This validation completes before Customer or Checkout creation.
+
 The browser redirect never confirms payment or grants value. A webhook signature
 is verified with a 300-second tolerance, then the event is retrieved from the
 configured Stripe account and checked against the canonical Checkout Session,

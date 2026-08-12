@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -617,3 +618,73 @@ def test_committed_env_examples_only_use_supported_keys():
         values = _MODULE.load_env_file(root / relative_path)
         errors = _MODULE._validate_known_keys(values)
         assert errors == [], f"{relative_path}: {errors}"
+
+
+def test_runtime_env_accepts_explicit_previous_pilot_contract_registry():
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"] = json.dumps(
+        [
+            {
+                "product_id": "prod_Previous123",
+                "price_id": "price_Previous123",
+                "payment_link_id": "plink_Previous123",
+                "payment_link_url": "https://buy.stripe.com/Previous123",
+            }
+        ]
+    )
+
+    assert validate_runtime_env(values, target_env="production") == []
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    (
+        "not-json",
+        "{}",
+        '[{"payment_link_id":"plink_Previous123"}]',
+        json.dumps(
+            [
+                {
+                    "product_id": "prod_Previous123",
+                    "price_id": "price_Previous123",
+                    "payment_link_id": "plink_test123",
+                    "payment_link_url": "https://buy.stripe.com/Previous123",
+                }
+            ]
+        ),
+    ),
+)
+def test_runtime_env_rejects_invalid_previous_pilot_contract_registry(raw_value):
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"] = raw_value
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert any("STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_key"),
+    (
+        ({"STRIPE_CREDIT_PRICE_ID": "price_Valid123"}, "STRIPE_CREDIT_PACK_SIZE"),
+        (
+            {
+                "STRIPE_CREDIT_PRICE_ID": "price_Valid123",
+                "STRIPE_CREDIT_PACK_SIZE": "25",
+                "STRIPE_CREDIT_UNIT_AMOUNT": "400",
+                "STRIPE_CREDIT_CURRENCY": "USD",
+            },
+            "STRIPE_CREDIT_CURRENCY",
+        ),
+    ),
+)
+def test_runtime_env_rejects_partial_or_invalid_credit_contract(
+    overrides,
+    expected_key,
+):
+    values = _complete_production_values()
+    values.update(overrides)
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert any(expected_key in error for error in errors)

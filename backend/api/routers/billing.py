@@ -55,12 +55,14 @@ from api.schemas.billing import (
 from api.models.pilot import PilotPayment, PilotRequest
 from api.services.billing_service import (
     ADDONS_CONFIG,
+    CreditFulfillmentUnavailable,
     MODULES_CONFIG,
     PLANS_CONFIG,
     get_active_subscription,
     get_or_create_stripe_customer,
     get_upsell_suggestion,
     is_automated_fulfillment_supported,
+    prepare_credit_purchase_contract,
 )
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
@@ -71,7 +73,7 @@ from api.services.pilot_stripe_contract_service import (
     PilotStripeContractError,
     PilotStripeProviderUnavailable,
     VerifiedPilotCheckout,
-    load_pilot_stripe_config,
+    find_authorized_pilot_stripe_config,
     verify_pilot_checkout_session,
 )
 from api.services.usage_service import get_monthly_usage
@@ -166,12 +168,12 @@ async def get_pilot_confirmation(
         return PilotConfirmationResponse(status="processing")
 
     try:
-        config = load_pilot_stripe_config()
+        config = find_authorized_pilot_stripe_config(payment.stripe_payment_link_id)
     except PilotStripeContractError:
         return PilotConfirmationResponse(status="manual_review")
     if (
-        payment.pilot_request_id is None
-        or payment.stripe_payment_link_id != config.payment_link_id
+        config is None
+        or payment.pilot_request_id is None
         or payment.stripe_price_id != config.price_id
         or payment.currency.lower() != PILOT_CURRENCY
         or payment.amount_subtotal != PILOT_AMOUNT_CENTS
@@ -202,6 +204,7 @@ async def get_pilot_confirmation(
     if (
         verified.request_id != payment.pilot_request_id
         or verified.payment_intent_id != payment.stripe_payment_intent_id
+        or verified.config != config
         or not verified.paid
     ):
         return PilotConfirmationResponse(status="manual_review")
@@ -488,8 +491,13 @@ async def purchase_credits(
     Create a one-time Stripe Checkout session to purchase credit packs.
     Each pack = STRIPE_CREDIT_PACK_SIZE credits.
     """
-    if not settings.STRIPE_CREDIT_PRICE_ID:
-        raise HTTPException(status_code=503, detail="Credit purchases not configured.")
+    try:
+        credit_contract = await prepare_credit_purchase_contract()
+    except (CreditFulfillmentUnavailable, stripe.error.StripeError, TimeoutError):
+        raise HTTPException(
+            status_code=503,
+            detail="Credit purchases are temporarily unavailable.",
+        ) from None
 
     customer_id = await get_or_create_stripe_customer(current_user, db)
     credits_to_add = body.quantity * settings.STRIPE_CREDIT_PACK_SIZE
@@ -497,8 +505,7 @@ async def purchase_credits(
     session = stripe.checkout.Session.create(
         customer=customer_id,
         client_reference_id=str(current_user.id),
-        payment_method_types=["card"],
-        line_items=[{"price": settings.STRIPE_CREDIT_PRICE_ID, "quantity": body.quantity}],
+        line_items=[{"price": credit_contract.price_id, "quantity": body.quantity}],
         mode="payment",
         success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL + f"&credits={credits_to_add}",
         cancel_url=settings.STRIPE_CHECKOUT_CANCEL_URL,

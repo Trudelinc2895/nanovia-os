@@ -141,3 +141,13 @@ def test_scraping_timeout_ms_rejects_fractional_values(monkeypatch):
 
     with pytest.raises(ValueError, match="SCRAPE_TIMEOUT_MS must be a positive integer"):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", ("USD", "us", "usd1", " usd "))
+def test_credit_currency_rejects_noncanonical_values(monkeypatch, value):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_credit_currency.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-credit")
+    monkeypatch.setenv("STRIPE_CREDIT_CURRENCY", value)
+
+    with pytest.raises(ValueError, match="STRIPE_CREDIT_CURRENCY"):
+        Settings(_env_file=None)

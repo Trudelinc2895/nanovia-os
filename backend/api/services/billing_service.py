@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -39,8 +40,8 @@ from api.services.pilot_payment_service import (
 from api.services.pilot_stripe_contract_service import (
     PILOT_REVERSAL_EVENT_TYPES,
     PilotStripeConfig,
-    is_canonical_payment_link,
-    load_pilot_stripe_config,
+    find_authorized_pilot_stripe_config,
+    load_authorized_pilot_stripe_configs,
     stripe_field,
 )
 from api.services.module_registry import (
@@ -65,9 +66,12 @@ _PILOT_OPTIONAL_FIELDS = (
 def _optional_pilot_stripe_config() -> PilotStripeConfig | None:
     """Return no contract only when every Pilot-specific setting is blank."""
     values = [getattr(settings, field_name, "") for field_name in _PILOT_OPTIONAL_FIELDS]
-    if all(not isinstance(value, str) or not value.strip() for value in values):
+    previous = getattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
+    if all(not isinstance(value, str) or not value.strip() for value in values) and (
+        not isinstance(previous, str) or previous.strip() in {"", "[]"}
+    ):
         return None
-    return load_pilot_stripe_config()
+    return load_authorized_pilot_stripe_configs()[0]
 
 
 async def _run_post_commit_action(action: PostCommitAction) -> None:
@@ -150,6 +154,15 @@ class PreparedCreditCheckout:
     user_id: uuid.UUID | None = None
     customer_id: str | None = None
     credits: int | None = None
+
+
+@dataclass(frozen=True)
+class CreditCatalogContract:
+    price_id: str
+    currency: str
+    unit_amount: int
+    created: int
+    product_id: str
 
 
 def is_automated_fulfillment_supported(fulfillment_type: str | None) -> bool:
@@ -685,11 +698,19 @@ async def retrieve_credit_customer(customer_id: str) -> Any:
 
 async def retrieve_credit_price(price_id: str) -> Any:
     """Retrieve the configured current credit Price and its Product contract."""
-    return await asyncio.to_thread(
-        stripe.Price.retrieve,
-        price_id,
-        expand=["product"],
-    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                stripe.Price.retrieve,
+                price_id,
+                expand=["product"],
+            ),
+            timeout=8.0,
+        )
+    except (stripe.error.StripeError, TimeoutError) as exc:
+        raise CreditFulfillmentUnavailable(
+            CREDIT_FULFILLMENT_RETRYABLE_ERROR
+        ) from exc
 
 
 def _stripe_object_id(value: Any) -> str | None:
@@ -756,12 +777,14 @@ def _credit_checkout_identity_matches(signed: Any, provider: Any) -> bool:
     return _stripe_metadata(signed) == _stripe_metadata(provider)
 
 
-def _validated_credit_price(
+def validate_credit_catalog_contract(
     value: Any,
     *,
     expected_livemode: bool,
     require_active: bool,
-) -> tuple[str, str, int, int, str] | None:
+    expected_unit_amount: int | None = None,
+    expected_currency: str | None = None,
+) -> CreditCatalogContract | None:
     price_id = _stripe_object_id(value)
     created = _exact_positive_int(stripe_field(value, "created"))
     unit_amount = _exact_positive_int(stripe_field(value, "unit_amount"))
@@ -776,7 +799,7 @@ def _validated_credit_price(
         or created is None
         or unit_amount is None
         or not isinstance(currency, str)
-        or currency != currency.lower()
+        or re.fullmatch(r"[a-z]{3}", currency) is None
         or not isinstance(livemode, bool)
         or livemode != expected_livemode
         or not isinstance(active, bool)
@@ -789,9 +812,44 @@ def _validated_credit_price(
         or stripe_field(product, "livemode") != expected_livemode
         or not _credit_resource_metadata_matches(value)
         or not _credit_resource_metadata_matches(product)
+        or (
+            expected_unit_amount is not None
+            and unit_amount != expected_unit_amount
+        )
+        or (expected_currency is not None and currency != expected_currency)
     ):
         return None
-    return price_id, currency, unit_amount, created, product_id
+    return CreditCatalogContract(
+        price_id=price_id,
+        currency=currency,
+        unit_amount=unit_amount,
+        created=created,
+        product_id=product_id,
+    )
+
+
+async def prepare_credit_purchase_contract() -> CreditCatalogContract:
+    """Authenticate the configured Price/Product before creating a Checkout."""
+    price_id = (settings.STRIPE_CREDIT_PRICE_ID or "").strip()
+    currency = (settings.STRIPE_CREDIT_CURRENCY or "").strip()
+    if (
+        not price_id.startswith("price_")
+        or settings.STRIPE_CREDIT_PACK_SIZE <= 0
+        or settings.STRIPE_CREDIT_UNIT_AMOUNT <= 0
+        or re.fullmatch(r"[a-z]{3}", currency) is None
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+    price = await retrieve_credit_price(price_id)
+    contract = validate_credit_catalog_contract(
+        price,
+        expected_livemode=settings.APP_ENV == "production",
+        require_active=True,
+        expected_unit_amount=settings.STRIPE_CREDIT_UNIT_AMOUNT,
+        expected_currency=currency,
+    )
+    if contract is None or contract.price_id != price_id:
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+    return contract
 
 
 def validate_credit_checkout_contract(
@@ -881,12 +939,17 @@ def validate_credit_checkout_contract(
     ):
         return _credit_rejected()
 
-    current_contract = _validated_credit_price(
+    current_contract = validate_credit_catalog_contract(
         current_price,
         expected_livemode=expected_livemode,
         require_active=True,
+        expected_unit_amount=settings.STRIPE_CREDIT_UNIT_AMOUNT,
+        expected_currency=(settings.STRIPE_CREDIT_CURRENCY or "").strip(),
     )
-    if current_contract is None or current_contract[0] != settings.STRIPE_CREDIT_PRICE_ID:
+    if (
+        current_contract is None
+        or current_contract.price_id != settings.STRIPE_CREDIT_PRICE_ID
+    ):
         raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
 
     line_items = _stripe_line_item_data(line_items_response)
@@ -897,7 +960,7 @@ def validate_credit_checkout_contract(
     quantity = _exact_positive_int(stripe_field(line_item, "quantity"))
     line_subtotal = _exact_positive_int(stripe_field(line_item, "amount_subtotal"))
     line_total = _exact_positive_int(stripe_field(line_item, "amount_total"))
-    price_contract = _validated_credit_price(
+    price_contract = validate_credit_catalog_contract(
         price,
         expected_livemode=expected_livemode,
         require_active=False,
@@ -909,10 +972,16 @@ def validate_credit_checkout_contract(
     ):
         return _credit_rejected()
 
-    price_id, currency, unit_amount, price_created, product_id = price_contract
-    current_price_id, current_currency, _, current_created, current_product_id = (
-        current_contract
-    )
+    price_id = price_contract.price_id
+    currency = price_contract.currency
+    unit_amount = price_contract.unit_amount
+    price_created = price_contract.created
+    product_id = price_contract.product_id
+    current_price_id = current_contract.price_id
+    current_currency = current_contract.currency
+    current_unit_amount = current_contract.unit_amount
+    current_created = current_contract.created
+    current_product_id = current_contract.product_id
     expected_amount = unit_amount * quantity
     expected_credits = settings.STRIPE_CREDIT_PACK_SIZE * quantity
     declared_credits = metadata.get("credits")
@@ -925,6 +994,7 @@ def validate_credit_checkout_contract(
         or line_total != expected_amount
         or declared_credits != str(expected_credits)
         or product_id != current_product_id
+        or (price_id == current_price_id and unit_amount != current_unit_amount)
         or price_created > created
         or (price_id != current_price_id and created >= current_created)
     ):
@@ -1143,9 +1213,10 @@ async def process_stripe_event(
     if event_type in PILOT_EVENT_TYPES:
         incoming_payment_link = stripe_field(data, "payment_link")
         if incoming_payment_link:
-            config = _optional_pilot_stripe_config()
-            if config is not None:
-                if not is_canonical_payment_link(incoming_payment_link, config):
+            current_config = _optional_pilot_stripe_config()
+            if current_config is not None:
+                config = find_authorized_pilot_stripe_config(incoming_payment_link)
+                if config is None:
                     return "ignored"
                 if not event_id:
                     raise RuntimeError("Stripe event id is required for Pilot processing")

@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     STRIPE_PRICE_BUSINESS_YEARLY_ID: str = ""
     STRIPE_CREDIT_PRICE_ID: str = ""
     STRIPE_CREDIT_PACK_SIZE: int = Field(default=100, ge=1)
+    STRIPE_CREDIT_UNIT_AMOUNT: int = Field(default=0, ge=0)
+    STRIPE_CREDIT_CURRENCY: str = ""
     STRIPE_PRICE_ADDON_API_PACK: str = ""
     STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""
     STRIPE_PRICE_CREDITS_PACK: str = ""
@@ -122,6 +124,7 @@ class Settings(BaseSettings):
     STRIPE_PILOT_PRICE_ID: str = ""
     STRIPE_PILOT_PAYMENT_LINK_ID: str = ""
     STRIPE_PILOT_PAYMENT_LINK_URL: str = ""
+    STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON: str = "[]"
 
     # Per-module à-la-carte prices (optional — set in Stripe dashboard)
     STRIPE_PRICE_MODULE_OPERATOR: str = ""
@@ -412,6 +415,19 @@ class Settings(BaseSettings):
             return ""
         ipaddress.ip_address(v.strip())
         return v.strip()
+
+    @field_validator("STRIPE_CREDIT_CURRENCY")
+    @classmethod
+    def validate_stripe_credit_currency(cls, v: str) -> str:
+        value = v.strip()
+        if value and (
+            v != value
+            or len(value) != 3
+            or not value.isalpha()
+            or value != value.lower()
+        ):
+            raise ValueError("STRIPE_CREDIT_CURRENCY must be a lowercase ISO currency code")
+        return value
 
     @field_validator("ADMIN_ALLOWED_IPS_RAW")
     @classmethod

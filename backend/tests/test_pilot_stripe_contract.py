@@ -1,6 +1,7 @@
 """Synthetic tests for the canonical Nanovia Pro Pilot Stripe contract."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,10 @@ PRODUCT_ID = "prod_pilot"
 PRICE_ID = "price_pilot"
 PAYMENT_LINK_ID = "plink_pilot"
 PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
+PREVIOUS_PRODUCT_ID = "prod_previousPilot"
+PREVIOUS_PRICE_ID = "price_previousPilot"
+PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
+PREVIOUS_PAYMENT_LINK_URL = "https://buy.stripe.com/previousPilot"
 REQUEST_ID = "95d9327d-4580-4569-8c0f-5d2a0946a1be"
 
 
@@ -30,6 +35,7 @@ def _settings(monkeypatch):
         "STRIPE_PILOT_PAYMENT_LINK_URL",
         PAYMENT_LINK_URL,
     )
+    monkeypatch.setattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
 
 
 def _config_namespace(**overrides):
@@ -40,6 +46,7 @@ def _config_namespace(**overrides):
         "STRIPE_PILOT_PRICE_ID": PRICE_ID,
         "STRIPE_PILOT_PAYMENT_LINK_ID": PAYMENT_LINK_ID,
         "STRIPE_PILOT_PAYMENT_LINK_URL": PAYMENT_LINK_URL,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON": "[]",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -186,6 +193,19 @@ def _set_path(target: dict, path: str, value) -> None:
         current[final] = value
 
 
+def _previous_contract_json() -> str:
+    return json.dumps(
+        [
+            {
+                "product_id": PREVIOUS_PRODUCT_ID,
+                "price_id": PREVIOUS_PRICE_ID,
+                "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
+                "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+            }
+        ]
+    )
+
+
 def test_complete_canonical_contract_is_valid_and_margin_is_observable():
     config = contract.load_pilot_stripe_config()
     contract.validate_pilot_provider_contract(_account(), _payment_link(), config)
@@ -266,6 +286,155 @@ def test_production_rejects_obvious_test_payment_link():
         contract.load_pilot_stripe_config(_config_namespace(APP_ENV="production"))
 
 
+def test_authorized_previous_contracts_are_explicit_complete_and_distinct():
+    configs = contract.load_authorized_pilot_stripe_configs(
+        _config_namespace(
+            STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON=_previous_contract_json()
+        )
+    )
+
+    assert len(configs) == 2
+    assert configs[0].is_current is True
+    assert configs[1] == contract.PilotStripeConfig(
+        account_id=ACCOUNT_ID,
+        product_id=PREVIOUS_PRODUCT_ID,
+        price_id=PREVIOUS_PRICE_ID,
+        payment_link_id=PREVIOUS_PAYMENT_LINK_ID,
+        payment_link_url=PREVIOUS_PAYMENT_LINK_URL,
+        livemode=False,
+        is_current=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("not-json", id="invalid-json"),
+        pytest.param("{}", id="not-list"),
+        pytest.param('[{"payment_link_id":"plink_previousPilot"}]', id="partial"),
+        pytest.param(
+            json.dumps(
+                [
+                    {
+                        "product_id": PREVIOUS_PRODUCT_ID,
+                        "price_id": PREVIOUS_PRICE_ID,
+                        "payment_link_id": PAYMENT_LINK_ID,
+                        "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                    }
+                ]
+            ),
+            id="duplicate-link-id",
+        ),
+        pytest.param(
+            json.dumps(
+                [
+                    {
+                        "product_id": PREVIOUS_PRODUCT_ID,
+                        "price_id": PREVIOUS_PRICE_ID,
+                        "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
+                        "payment_link_url": PAYMENT_LINK_URL,
+                    }
+                ]
+            ),
+            id="duplicate-link-url",
+        ),
+    ],
+)
+def test_invalid_previous_pilot_contract_registry_fails_closed(raw_value):
+    with pytest.raises(contract.PilotStripeContractError):
+        contract.load_authorized_pilot_stripe_configs(
+            _config_namespace(STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON=raw_value)
+        )
+
+
+@pytest.mark.asyncio
+async def test_previous_contract_session_is_fully_verified_after_rotation(monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_contract_json(),
+    )
+    session = _session()
+    session["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+    price = _price()
+    price["id"] = PREVIOUS_PRICE_ID
+    price["active"] = False
+    price["product"]["id"] = PREVIOUS_PRODUCT_ID
+    price["product"]["active"] = False
+    checkout_line = _checkout_line_item()
+    checkout_line["price"] = price
+    catalog_line = _catalog_line_item()
+    catalog_line["price"] = price
+    payment_link = _payment_link()
+    payment_link.update(
+        {
+            "id": PREVIOUS_PAYMENT_LINK_ID,
+            "url": PREVIOUS_PAYMENT_LINK_URL,
+            "active": False,
+            "line_items": {"data": [catalog_line]},
+        }
+    )
+    boundaries = {
+        "retrieve_pilot_event": AsyncMock(return_value=_event(session)),
+        "retrieve_pilot_account": AsyncMock(return_value=_account()),
+        "retrieve_pilot_payment_link": AsyncMock(return_value=payment_link),
+        "retrieve_pilot_checkout_session": AsyncMock(return_value=session),
+        "retrieve_pilot_line_items": AsyncMock(
+            return_value={"data": [checkout_line]}
+        ),
+    }
+    for name, boundary in boundaries.items():
+        monkeypatch.setattr(contract, name, boundary)
+
+    verified = await contract.verify_pilot_checkout_event(
+        "evt_pilot",
+        "checkout.session.completed",
+        session,
+    )
+
+    assert verified.paid is True
+    assert verified.config.payment_link_id == PREVIOUS_PAYMENT_LINK_ID
+    assert verified.config.price_id == PREVIOUS_PRICE_ID
+    assert verified.config.product_id == PREVIOUS_PRODUCT_ID
+    boundaries["retrieve_pilot_payment_link"].assert_awaited_once_with(
+        PREVIOUS_PAYMENT_LINK_ID
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_or_temporarily_unverifiable_historical_contract_fails_closed(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_contract_json(),
+    )
+    foreign = _session()
+    foreign["payment_link"] = "plink_foreign"
+    provider_call = AsyncMock(side_effect=contract.PilotStripeProviderUnavailable())
+    monkeypatch.setattr(contract, "retrieve_pilot_event", provider_call)
+
+    with pytest.raises(contract.PilotStripeContractError, match="not authorized"):
+        await contract.verify_pilot_checkout_event(
+            "evt_pilot",
+            "checkout.session.completed",
+            foreign,
+        )
+    provider_call.assert_not_awaited()
+
+    authorized = _session()
+    authorized["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+    with pytest.raises(contract.PilotStripeProviderUnavailable):
+        await contract.verify_pilot_checkout_event(
+            "evt_pilot",
+            "checkout.session.completed",
+            authorized,
+        )
+    provider_call.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     ("target_name", "path", "value"),
     [
@@ -311,6 +480,7 @@ def test_provider_catalog_mismatches_fail_closed(target_name, path, value):
     [
         ("session", "payment_link", "plink_wrong"),
         ("session", "mode", "subscription"),
+        ("session", "status", "expired"),
         ("session", "livemode", True),
         ("session", "currency", "usd"),
         ("session", "amount_subtotal", 29_699),

@@ -7,6 +7,7 @@ included in validation errors.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -69,6 +70,7 @@ class PilotStripeConfig:
     payment_link_id: str
     payment_link_url: str
     livemode: bool
+    is_current: bool = True
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,100 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
     )
 
 
+_PREVIOUS_CONTRACT_KEYS = frozenset(
+    {"product_id", "price_id", "payment_link_id", "payment_link_url"}
+)
+
+
+def load_authorized_pilot_stripe_configs(
+    settings_obj: Any = settings,
+) -> tuple[PilotStripeConfig, ...]:
+    """Load the current contract and every explicitly authorized retired contract."""
+    current = load_pilot_stripe_config(settings_obj)
+    raw_previous = getattr(
+        settings_obj,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        "[]",
+    )
+    if not isinstance(raw_previous, str) or not raw_previous.strip():
+        raise _contract_error("STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON must be a JSON list")
+    try:
+        previous_values = json.loads(raw_previous)
+    except (TypeError, ValueError) as exc:
+        raise _contract_error(
+            "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON must be valid JSON"
+        ) from exc
+    if not isinstance(previous_values, list):
+        raise _contract_error("STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON must be a JSON list")
+
+    configs = [current]
+    payment_link_ids = {current.payment_link_id}
+    canonical_urls = {
+        _canonical_payment_link_url(
+            current.payment_link_url,
+            error_message="STRIPE_PILOT_PAYMENT_LINK_URL is invalid",
+        )
+    }
+    for index, value in enumerate(previous_values):
+        label = f"STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON[{index}]"
+        if not isinstance(value, dict) or set(value) != _PREVIOUS_CONTRACT_KEYS:
+            raise _contract_error(f"{label} must contain exactly the Pilot contract keys")
+        product_id = value.get("product_id")
+        price_id = value.get("price_id")
+        payment_link_id = value.get("payment_link_id")
+        payment_link_url = value.get("payment_link_url")
+        for field_name, field_value, pattern_name in (
+            ("product_id", product_id, "STRIPE_PILOT_PRODUCT_ID"),
+            ("price_id", price_id, "STRIPE_PILOT_PRICE_ID"),
+            ("payment_link_id", payment_link_id, "STRIPE_PILOT_PAYMENT_LINK_ID"),
+        ):
+            if (
+                not isinstance(field_value, str)
+                or not field_value
+                or _ID_PATTERNS[pattern_name].fullmatch(field_value) is None
+            ):
+                raise _contract_error(f"{label}.{field_name} has an invalid format")
+        canonical_url = _canonical_payment_link_url(
+            payment_link_url,
+            error_message=f"{label}.payment_link_url is invalid",
+        )
+        if current.livemode and canonical_url[3].lstrip("/").startswith("test_"):
+            raise _contract_error(f"{label} mixes test and live modes")
+        if payment_link_id in payment_link_ids:
+            raise _contract_error(f"{label}.payment_link_id is duplicated")
+        if canonical_url in canonical_urls:
+            raise _contract_error(f"{label}.payment_link_url is duplicated")
+        payment_link_ids.add(payment_link_id)
+        canonical_urls.add(canonical_url)
+        configs.append(
+            PilotStripeConfig(
+                account_id=current.account_id,
+                product_id=product_id,
+                price_id=price_id,
+                payment_link_id=payment_link_id,
+                payment_link_url=payment_link_url,
+                livemode=current.livemode,
+                is_current=False,
+            )
+        )
+    return tuple(configs)
+
+
+def find_authorized_pilot_stripe_config(
+    payment_link: Any,
+    settings_obj: Any = settings,
+) -> PilotStripeConfig | None:
+    payment_link_id = stripe_id(payment_link)
+    return next(
+        (
+            config
+            for config in load_authorized_pilot_stripe_configs(settings_obj)
+            if config.payment_link_id == payment_link_id
+        ),
+        None,
+    )
+
+
 def is_canonical_payment_link(value: Any, config: PilotStripeConfig) -> bool:
     return stripe_id(value) == config.payment_link_id
 
@@ -211,7 +307,11 @@ def _validate_contract_metadata(value: Any, resource_name: str) -> None:
 def _validate_product(product: Any, config: PilotStripeConfig) -> None:
     _require(not isinstance(product, str), "Pilot Product was not expanded")
     _require(stripe_id(product) == config.product_id, "Pilot Product id mismatch")
-    _require(stripe_field(product, "active") is True, "Pilot Product is inactive")
+    product_active = stripe_field(product, "active")
+    _require(
+        product_active is True if config.is_current else isinstance(product_active, bool),
+        "Pilot Product active state is invalid",
+    )
     _require(
         stripe_field(product, "name") == PILOT_PRODUCT_NAME,
         "Pilot Product name mismatch",
@@ -226,7 +326,11 @@ def _validate_product(product: Any, config: PilotStripeConfig) -> None:
 def _validate_price(price: Any, config: PilotStripeConfig) -> None:
     _require(not isinstance(price, str), "Pilot Price was not expanded")
     _require(stripe_id(price) == config.price_id, "Pilot Price id mismatch")
-    _require(stripe_field(price, "active") is True, "Pilot Price is inactive")
+    price_active = stripe_field(price, "active")
+    _require(
+        price_active is True if config.is_current else isinstance(price_active, bool),
+        "Pilot Price active state is invalid",
+    )
     _require(
         bool(stripe_field(price, "livemode")) == config.livemode,
         "Pilot Price livemode mismatch",
@@ -276,7 +380,11 @@ def validate_pilot_provider_contract(
         stripe_id(payment_link) == config.payment_link_id,
         "Pilot Payment Link id mismatch",
     )
-    _require(stripe_field(payment_link, "active") is True, "Pilot Payment Link is inactive")
+    link_active = stripe_field(payment_link, "active")
+    _require(
+        link_active is True if config.is_current else isinstance(link_active, bool),
+        "Pilot Payment Link active state is invalid",
+    )
     _require(
         bool(stripe_field(payment_link, "livemode")) == config.livemode,
         "Pilot Payment Link livemode mismatch",
@@ -384,6 +492,10 @@ def validate_pilot_checkout(
     _require(session_id.startswith("cs_"), "Pilot Checkout Session id mismatch")
     _require(is_canonical_payment_link(stripe_field(session, "payment_link"), config), "Pilot Payment Link mismatch")
     _require(stripe_field(session, "mode") == "payment", "Pilot Checkout mode mismatch")
+    _require(
+        stripe_field(session, "status") in {"open", "complete"},
+        "Pilot Checkout status is invalid",
+    )
     _require(bool(stripe_field(session, "livemode")) == config.livemode, "Pilot Session livemode mismatch")
     _require(
         str(stripe_field(session, "currency") or "").lower() == PILOT_CURRENCY,
@@ -592,13 +704,14 @@ async def retrieve_pilot_line_items(session_id: str) -> Any:
 
 
 async def verify_pilot_checkout_session(session_id: str) -> VerifiedPilotCheckout:
-    config = load_pilot_stripe_config()
-    account, payment_link, session, line_items = await asyncio.gather(
+    account, session, line_items = await asyncio.gather(
         retrieve_pilot_account(),
-        retrieve_pilot_payment_link(config.payment_link_id),
         retrieve_pilot_checkout_session(session_id),
         retrieve_pilot_line_items(session_id),
     )
+    config = find_authorized_pilot_stripe_config(stripe_field(session, "payment_link"))
+    _require(config is not None, "Pilot Payment Link is not authorized")
+    payment_link = await retrieve_pilot_payment_link(config.payment_link_id)
     validate_pilot_provider_contract(account, payment_link, config)
     return validate_pilot_checkout(
         session,
@@ -613,12 +726,11 @@ async def verify_pilot_checkout_event(
     event_type: str,
     signed_session: Any,
 ) -> VerifiedPilotCheckout:
-    config = load_pilot_stripe_config()
-    _require(event_type in PILOT_CHECKOUT_EVENT_TYPES, "Unsupported Pilot event type")
-    _require(
-        is_canonical_payment_link(stripe_field(signed_session, "payment_link"), config),
-        "Pilot Payment Link mismatch",
+    config = find_authorized_pilot_stripe_config(
+        stripe_field(signed_session, "payment_link")
     )
+    _require(event_type in PILOT_CHECKOUT_EVENT_TYPES, "Unsupported Pilot event type")
+    _require(config is not None, "Pilot Payment Link is not authorized")
     event, account, payment_link = await asyncio.gather(
         retrieve_pilot_event(event_id),
         retrieve_pilot_account(),

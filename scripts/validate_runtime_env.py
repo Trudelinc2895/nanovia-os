@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 import sys
@@ -151,10 +152,13 @@ _KNOWN_ENV_KEYS = {
     "STAGING_BIND_ADDRESS",
     "STAGING_WEB_PORT",
     "STRIPE_CREDIT_PACK_SIZE",
+    "STRIPE_CREDIT_CURRENCY",
     "STRIPE_CREDIT_PRICE_ID",
+    "STRIPE_CREDIT_UNIT_AMOUNT",
     "STRIPE_ACCOUNT_ID",
     "STRIPE_PILOT_PAYMENT_LINK_ID",
     "STRIPE_PILOT_PAYMENT_LINK_URL",
+    "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
     "STRIPE_PILOT_PRICE_ID",
     "STRIPE_PILOT_PRODUCT_ID",
     "STRIPE_PRICE_ADDON_API_PACK",
@@ -271,6 +275,99 @@ def _validate_pilot_payment_link_url(
     return []
 
 
+def _validate_previous_pilot_contracts(
+    values: dict[str, str],
+    *,
+    target_env: str,
+) -> list[str]:
+    key = "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"
+    raw_value = values.get(key, "[]").strip()
+    if not raw_value or _looks_placeholder(raw_value):
+        return []
+    try:
+        contracts = json.loads(raw_value)
+    except (TypeError, ValueError):
+        return [f"{key} must be a valid JSON list"]
+    if not isinstance(contracts, list):
+        return [f"{key} must be a valid JSON list"]
+    expected_keys = {"product_id", "price_id", "payment_link_id", "payment_link_url"}
+    errors: list[str] = []
+    payment_link_ids = {values.get("STRIPE_PILOT_PAYMENT_LINK_ID", "").strip()}
+    payment_link_urls = {values.get("STRIPE_PILOT_PAYMENT_LINK_URL", "").strip()}
+    patterns = {
+        "product_id": r"^prod_[A-Za-z0-9]+$",
+        "price_id": r"^price_[A-Za-z0-9]+$",
+        "payment_link_id": r"^plink_[A-Za-z0-9]+$",
+    }
+    for index, contract_value in enumerate(contracts):
+        label = f"{key}[{index}]"
+        if not isinstance(contract_value, dict) or set(contract_value) != expected_keys:
+            errors.append(f"{label} must contain exactly the Pilot contract keys")
+            continue
+        for field_name, pattern in patterns.items():
+            field_value = contract_value.get(field_name)
+            if not isinstance(field_value, str) or re.fullmatch(pattern, field_value) is None:
+                errors.append(f"{label}.{field_name} has an invalid format")
+        link_id = contract_value.get("payment_link_id")
+        link_url = contract_value.get("payment_link_url")
+        if isinstance(link_id, str):
+            if link_id in payment_link_ids:
+                errors.append(f"{label}.payment_link_id is duplicated")
+            payment_link_ids.add(link_id)
+        url_errors = _validate_pilot_payment_link_url(
+            {"STRIPE_PILOT_PAYMENT_LINK_URL": link_url if isinstance(link_url, str) else ""},
+            target_env=target_env,
+        )
+        if url_errors:
+            errors.append(f"{label}.payment_link_url is invalid")
+        elif isinstance(link_url, str):
+            normalized_url = link_url.replace("buy.stripe.com:443", "buy.stripe.com")
+            normalized_existing = {
+                value.replace("buy.stripe.com:443", "buy.stripe.com")
+                for value in payment_link_urls
+            }
+            if normalized_url in normalized_existing:
+                errors.append(f"{label}.payment_link_url is duplicated")
+            payment_link_urls.add(link_url)
+    return errors
+
+
+def _validate_credit_contract(
+    values: dict[str, str],
+    *,
+    allow_placeholders: bool,
+) -> list[str]:
+    keys = (
+        "STRIPE_CREDIT_PRICE_ID",
+        "STRIPE_CREDIT_PACK_SIZE",
+        "STRIPE_CREDIT_UNIT_AMOUNT",
+        "STRIPE_CREDIT_CURRENCY",
+    )
+    raw_values = {key: values.get(key, "").strip() for key in keys}
+    price_id = raw_values["STRIPE_CREDIT_PRICE_ID"]
+    placeholder_price = _looks_placeholder(price_id) or "..." in price_id
+    if (
+        (not price_id or (allow_placeholders and placeholder_price))
+        and raw_values["STRIPE_CREDIT_UNIT_AMOUNT"] in {"", "0"}
+        and not raw_values["STRIPE_CREDIT_CURRENCY"]
+    ):
+        return []
+
+    errors: list[str] = []
+    if re.fullmatch(r"^price_[A-Za-z0-9]+$", price_id) is None:
+        errors.append("STRIPE_CREDIT_PRICE_ID must use the price_... format")
+    for key in ("STRIPE_CREDIT_PACK_SIZE", "STRIPE_CREDIT_UNIT_AMOUNT"):
+        try:
+            numeric_value = int(raw_values[key])
+        except ValueError:
+            numeric_value = 0
+        if numeric_value <= 0 or str(numeric_value) != raw_values[key]:
+            errors.append(f"{key} must be a positive integer")
+    if re.fullmatch(r"[a-z]{3}", raw_values["STRIPE_CREDIT_CURRENCY"]) is None:
+        errors.append("STRIPE_CREDIT_CURRENCY must be a lowercase ISO currency code")
+    return errors
+
+
 def _validate_alias_conflicts(values: dict[str, str]) -> list[str]:
     errors: list[str] = []
     for aliases in _ALIAS_GROUPS:
@@ -366,6 +463,10 @@ def validate_runtime_env(
     errors.extend(_validate_known_keys(values))
     errors.extend(_validate_pilot_formats(values))
     errors.extend(_validate_pilot_payment_link_url(values, target_env=target_env))
+    errors.extend(_validate_previous_pilot_contracts(values, target_env=target_env))
+    errors.extend(
+        _validate_credit_contract(values, allow_placeholders=allow_placeholders)
+    )
     errors.extend(_validate_alias_conflicts(values))
 
     app_env = values.get("APP_ENV", "").strip()
