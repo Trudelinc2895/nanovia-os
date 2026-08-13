@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -352,6 +353,213 @@ async def test_handle_stripe_webhook_never_dispatches_effects_after_rollback():
             )
 
     dispatch.assert_not_called()
+
+
+def _notification_event(event_type):
+    if event_type == "invoice.payment_failed":
+        return {
+            "id": "in_notification",
+            "customer": "cus_notification",
+            "attempt_count": 1,
+        }
+    return {
+        "id": "sub_notification",
+        "customer": "cus_notification",
+        "trial_end": 4_102_444_800,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "email_function"),
+    [
+        ("invoice.payment_failed", "send_payment_failed"),
+        ("customer.subscription.trial_will_end", "send_trial_ending"),
+    ],
+)
+async def test_billing_notification_commits_once_and_replay_does_not_duplicate(
+    event_type,
+    email_function,
+):
+    from api.core.monetization import webhook_handler_service
+
+    user = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="notification@example.com",
+        full_name="Notification Customer",
+        plan="pro",
+    )
+    sub = SimpleNamespace(plan="pro", stripe_subscription_id="sub_notification")
+    scalar = MagicMock()
+    scalar.scalar_one_or_none.return_value = sub
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=scalar)
+    email = AsyncMock()
+    dispatched = []
+    order = []
+    db.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+
+    def capture(actions):
+        order.append("dispatch")
+        dispatched.extend(actions)
+
+    with (
+        patch.object(
+            webhook_handler_service,
+            "get_webhook_event",
+            new=AsyncMock(
+                side_effect=[None, SimpleNamespace(status="processed")]
+            ),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "prepare_stripe_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "claim_webhook_event",
+            new=AsyncMock(return_value="claimed"),
+        ) as claim,
+        patch.object(
+            webhook_handler_service,
+            "update_webhook_status",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "dispatch_post_commit_actions",
+            side_effect=capture,
+        ),
+        patch(
+            "api.services.billing_service._get_user_by_stripe_customer_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "api.services.billing_service._write_audit",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.services.subscription_state_machine.handle_payment_failed",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.services.subscription_state_machine.handle_trial_will_end",
+            new=AsyncMock(),
+        ),
+        patch(f"api.services.email_service.{email_function}", new=email),
+    ):
+        first = await webhook_handler_service.handle_stripe_webhook(
+            "evt_notification_once",
+            event_type,
+            _notification_event(event_type),
+            db,
+        )
+        replay = await webhook_handler_service.handle_stripe_webhook(
+            "evt_notification_once",
+            event_type,
+            _notification_event(event_type),
+            db,
+        )
+        assert order == ["commit", "dispatch"]
+        assert len(dispatched) == 1
+        email.assert_not_awaited()
+        await dispatched[0]()
+
+    assert first["status"] == "processed"
+    assert replay["status"] == "duplicate"
+    assert claim.await_count == 1
+    email.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "email_function"),
+    [
+        ("invoice.payment_failed", "send_payment_failed"),
+        ("customer.subscription.trial_will_end", "send_trial_ending"),
+    ],
+)
+async def test_billing_notification_rollback_never_dispatches(
+    event_type,
+    email_function,
+):
+    from api.core.monetization import webhook_handler_service
+
+    user = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="rollback@example.com",
+        full_name="Rollback Customer",
+        plan="pro",
+    )
+    sub = SimpleNamespace(plan="pro", stripe_subscription_id="sub_rollback")
+    scalar = MagicMock()
+    scalar.scalar_one_or_none.return_value = sub
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=scalar)
+    db.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+    email = AsyncMock()
+    dispatch = MagicMock()
+
+    with (
+        patch.object(
+            webhook_handler_service,
+            "get_webhook_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "prepare_stripe_event",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "claim_webhook_event",
+            new=AsyncMock(return_value="claimed"),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "update_webhook_status",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "mark_webhook_retryable_failure",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            webhook_handler_service,
+            "dispatch_post_commit_actions",
+            dispatch,
+        ),
+        patch(
+            "api.services.billing_service._get_user_by_stripe_customer_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "api.services.billing_service._write_audit",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.services.subscription_state_machine.handle_payment_failed",
+            new=AsyncMock(),
+        ),
+        patch(
+            "api.services.subscription_state_machine.handle_trial_will_end",
+            new=AsyncMock(),
+        ),
+        patch(f"api.services.email_service.{email_function}", new=email),
+    ):
+        with pytest.raises(webhook_handler_service.WebhookProcessingUnavailable):
+            await webhook_handler_service.handle_stripe_webhook(
+                "evt_notification_rollback",
+                event_type,
+                _notification_event(event_type),
+                db,
+            )
+
+    dispatch.assert_not_called()
+    email.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -310,20 +310,32 @@ def get_upsell_suggestion(user_plan: str, usage: dict | None = None) -> dict | N
 
 # ─── Stripe customer ──────────────────────────────────────────────────────────
 
-async def get_or_create_stripe_customer(user: User, db: AsyncSession) -> str:
-    if user.stripe_customer_id:
-        return user.stripe_customer_id
+async def get_or_create_stripe_customer(
+    user: User,
+    db: AsyncSession,
+    *,
+    validate_credit_identity: bool = False,
+) -> str:
+    customer_id = user.stripe_customer_id
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=user.email,
+            name=user.full_name,
+            metadata={"user_id": str(user.id), "app": settings.APP_NAME},
+        )
+        customer_id = customer.id
+        user.stripe_customer_id = customer_id
+        db.add(user)
+        await db.commit()
+        logger.info(
+            "[billing] Created Stripe customer %s for user %s",
+            customer_id,
+            user.id,
+        )
 
-    customer = stripe.Customer.create(
-        email=user.email,
-        name=user.full_name,
-        metadata={"user_id": str(user.id), "app": settings.APP_NAME},
-    )
-    user.stripe_customer_id = customer.id
-    db.add(user)
-    await db.commit()
-    logger.info(f"[billing] Created Stripe customer {customer.id} for user {user.id}")
-    return customer.id
+    if validate_credit_identity:
+        await validate_or_repair_credit_customer_identity(user, customer_id, db)
+    return customer_id
 
 
 # ─── Subscription sync ────────────────────────────────────────────────────────
@@ -554,12 +566,20 @@ async def resync_user_subscription_from_stripe(user_id: uuid.UUID, db: AsyncSess
     customer_id = user.stripe_customer_id
     if not customer_id:
         customers = stripe.Customer.list(email=user.email, limit=10)
-        for customer in customers.data:
-            if customer.get("metadata", {}).get("user_id") == str(user.id) or customer.get("email") == user.email:
-                customer_id = customer["id"]
-                user.stripe_customer_id = customer_id
-                db.add(user)
-                break
+        customer, ambiguous = _select_resync_customer(customers, user)
+        if ambiguous:
+            await _write_audit(
+                db,
+                user.id,
+                action="billing_resync_ambiguous_customer",
+                detail="Multiple Stripe customers match the durable Nanovia identity",
+            )
+            await db.commit()
+            return {"status": "ambiguous_customer", "user_id": str(user.id)}
+        if customer is not None:
+            customer_id = _stripe_object_id(customer)
+            user.stripe_customer_id = customer_id
+            db.add(user)
         await db.commit()
 
     if not customer_id:
@@ -693,7 +713,48 @@ async def retrieve_credit_account() -> Any:
 
 async def retrieve_credit_customer(customer_id: str) -> Any:
     """Retrieve the Stripe Customer bound to the authenticated Nanovia user."""
-    return await asyncio.to_thread(stripe.Customer.retrieve, customer_id)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(stripe.Customer.retrieve, customer_id),
+            timeout=8.0,
+        )
+    except (stripe.error.StripeError, TimeoutError) as exc:
+        raise CreditFulfillmentUnavailable(
+            CREDIT_FULFILLMENT_RETRYABLE_ERROR
+        ) from exc
+
+
+async def list_credit_customers(email: str) -> Any:
+    """List candidate Customers when durable identity metadata needs repair."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(stripe.Customer.list, email=email, limit=10),
+            timeout=8.0,
+        )
+    except (stripe.error.StripeError, TimeoutError) as exc:
+        raise CreditFulfillmentUnavailable(
+            CREDIT_FULFILLMENT_RETRYABLE_ERROR
+        ) from exc
+
+
+async def update_credit_customer_metadata(
+    customer_id: str,
+    metadata: dict[str, Any],
+) -> Any:
+    """Repair only Customer metadata required by the credit webhook contract."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                stripe.Customer.modify,
+                customer_id,
+                metadata=metadata,
+            ),
+            timeout=8.0,
+        )
+    except (stripe.error.StripeError, TimeoutError) as exc:
+        raise CreditFulfillmentUnavailable(
+            CREDIT_FULFILLMENT_RETRYABLE_ERROR
+        ) from exc
 
 
 async def retrieve_credit_price(price_id: str) -> Any:
@@ -736,6 +797,146 @@ def _credit_rejected() -> PreparedCreditCheckout:
 def _stripe_metadata(value: Any) -> dict[str, Any]:
     metadata = stripe_field(value, "metadata", {}) or {}
     return dict(metadata) if not isinstance(metadata, dict) else metadata
+
+
+def _normalized_email(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip().casefold()
+
+
+def _select_resync_customer(response: Any, user: User) -> tuple[Any | None, bool]:
+    """Select one provider Customer without treating a shared email as identity."""
+    customers = _stripe_line_item_data(response)
+    if stripe_field(response, "has_more") is True:
+        return None, True
+
+    expected_user_id = str(user.id)
+    expected_email = _normalized_email(user.email)
+    owner_matches = []
+    email_matches = []
+    all_email_matches = []
+    for customer in customers:
+        metadata = _stripe_metadata(customer)
+        customer_user_id = metadata.get("user_id")
+        customer_app = metadata.get("app")
+        email_matches_user = (
+            expected_email is not None
+            and _normalized_email(stripe_field(customer, "email")) == expected_email
+        )
+        if email_matches_user:
+            all_email_matches.append(customer)
+        if customer_user_id == expected_user_id and customer_app in (
+            None,
+            "",
+            settings.APP_NAME,
+        ):
+            owner_matches.append(customer)
+        elif (
+            customer_user_id in (None, "")
+            and customer_app in (None, "", settings.APP_NAME)
+            and email_matches_user
+        ):
+            email_matches.append(customer)
+
+    if len(owner_matches) == 1:
+        return owner_matches[0], False
+    if len(owner_matches) > 1:
+        return None, True
+    if len(email_matches) == 1 and len(all_email_matches) == 1:
+        return email_matches[0], False
+    return None, len(email_matches) > 1 or len(all_email_matches) > 1
+
+
+def validate_credit_customer_identity(
+    customer: Any,
+    *,
+    customer_id: str,
+    user_id: uuid.UUID,
+) -> bool:
+    """Apply the same Customer identity contract before and after payment."""
+    metadata = _stripe_metadata(customer)
+    return (
+        _stripe_object_id(customer) == customer_id
+        and stripe_field(customer, "livemode")
+        == (settings.APP_ENV == "production")
+        and metadata.get("user_id") == str(user_id)
+        and metadata.get("app") == settings.APP_NAME
+    )
+
+
+async def validate_or_repair_credit_customer_identity(
+    user: User,
+    customer_id: str,
+    db: AsyncSession,
+) -> None:
+    """Authenticate a Customer and repair only provably absent identity fields."""
+    if user.stripe_customer_id != customer_id:
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+    result = await db.execute(
+        select(User.id).where(
+            User.stripe_customer_id == customer_id,
+            User.id != user.id,
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+
+    customer = await retrieve_credit_customer(customer_id)
+    if (
+        _stripe_object_id(customer) != customer_id
+        or stripe_field(customer, "livemode")
+        != (settings.APP_ENV == "production")
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+
+    metadata = _stripe_metadata(customer)
+    provider_user_id = metadata.get("user_id")
+    provider_app = metadata.get("app")
+    if provider_user_id not in (None, "", str(user.id)) or provider_app not in (
+        None,
+        "",
+        settings.APP_NAME,
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+    if validate_credit_customer_identity(
+        customer,
+        customer_id=customer_id,
+        user_id=user.id,
+    ):
+        return
+
+    if provider_user_id in (None, ""):
+        candidates = await list_credit_customers(user.email)
+        candidate_data = _stripe_line_item_data(candidates)
+        expected_email = _normalized_email(user.email)
+        matching_customers = [
+            candidate
+            for candidate in candidate_data
+            if _normalized_email(stripe_field(candidate, "email")) == expected_email
+        ]
+        if (
+            stripe_field(candidates, "has_more") is True
+            or len(matching_customers) != 1
+            or _stripe_object_id(matching_customers[0]) != customer_id
+        ):
+            raise CreditFulfillmentUnavailable(
+                CREDIT_FULFILLMENT_RETRYABLE_ERROR
+            )
+
+    repaired_metadata = dict(metadata)
+    repaired_metadata["user_id"] = str(user.id)
+    repaired_metadata["app"] = settings.APP_NAME
+    repaired = await update_credit_customer_metadata(
+        customer_id,
+        repaired_metadata,
+    )
+    if not validate_credit_customer_identity(
+        repaired,
+        customer_id=customer_id,
+        user_id=user.id,
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
 
 
 def _exact_positive_int(value: Any) -> int | None:
@@ -932,10 +1133,10 @@ def validate_credit_checkout_contract(
         or stripe_field(customer, "livemode") != expected_livemode
     ):
         return _credit_rejected()
-    customer_metadata = _stripe_metadata(customer)
-    if (
-        customer_metadata.get("user_id") != str(user_id)
-        or customer_metadata.get("app") != settings.APP_NAME
+    if not validate_credit_customer_identity(
+        customer,
+        customer_id=customer_id,
+        user_id=user_id,
     ):
         return _credit_rejected()
 
@@ -1368,6 +1569,16 @@ async def process_stripe_event(
                 )
                 sub = result.scalar_one_or_none()
                 await handle_payment_failed(user, sub, db)
+                if post_commit_actions is not None:
+                    from api.services.email_service import send_payment_failed
+
+                    plan = sub.plan if sub else user.plan
+                    post_commit_actions.append(
+                        lambda email=user.email, plan=plan: send_payment_failed(
+                            email,
+                            plan,
+                        )
+                    )
         except Exception as exc:
             logger.warning("[webhook] Could not handle payment-failed: %s", exc)
         return "processed"
@@ -1400,6 +1611,18 @@ async def process_stripe_event(
                     days_left = max(1, delta.days)
                 if sub:
                     await handle_trial_will_end(user, sub, days_left, db)
+                    if post_commit_actions is not None:
+                        from api.services.email_service import send_trial_ending
+
+                        post_commit_actions.append(
+                            lambda email=user.email,
+                            name=user.full_name or user.email,
+                            days_left=days_left: send_trial_ending(
+                                email,
+                                name,
+                                days_left,
+                            )
+                        )
         except Exception as exc:
             logger.warning("[webhook] Could not handle trial_will_end: %s", exc)
         return "processed"

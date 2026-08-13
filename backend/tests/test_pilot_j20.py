@@ -33,6 +33,7 @@ from api.models.pilot import PilotPayment, PilotRequest
 from api.models.user import User
 from api.models.user_module import UserModule
 from api.models.webhook_event import WebhookEvent
+from api.models.workspace_billing import CreditBalance, Member, Workspace
 from api.routers import admin as admin_router
 from api.routers import billing as billing_router
 from api.services import (
@@ -171,6 +172,9 @@ async def _isolated_legacy_database(tmp_path: Path, name: str):
                 AuditLog.__table__,
                 UserModule.__table__,
                 WebhookEvent.__table__,
+                Workspace.__table__,
+                Member.__table__,
+                CreditBalance.__table__,
             ],
         )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -3072,6 +3076,119 @@ async def test_new_credit_checkout_creation_uses_only_current_price(monkeypatch)
         {"price": CREDIT_PRICE_ID, "quantity": 2}
     ]
     assert "payment_method_types" not in checkout_create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_repaired_credit_customer_payment_is_fulfilled_once(
+    monkeypatch,
+    tmp_path,
+):
+    from api.schemas.billing import CreditPurchaseRequest
+
+    event_id = "evt_repaired_credit_customer"
+    customer_id = "cus_repaired_credit_customer"
+    session_id = "cs_repaired_credit_customer"
+    checkout_create = MagicMock(
+        return_value=MagicMock(url="https://checkout.stripe.test/repaired")
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "retrieve_credit_price",
+        AsyncMock(return_value=_credit_price()),
+    )
+    monkeypatch.setattr(
+        billing_router.stripe.checkout.Session,
+        "create",
+        checkout_create,
+    )
+
+    async with _isolated_legacy_database(tmp_path, "repaired_credit_customer") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="repaired-credit@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Repaired Credit Customer",
+                credits=0,
+                stripe_customer_id=customer_id,
+            )
+            db.add(user)
+            await db.commit()
+            missing_identity = {
+                "id": customer_id,
+                "email": user.email,
+                "livemode": False,
+                "metadata": {"source": "legacy-resync"},
+            }
+            repaired_identity = {
+                **missing_identity,
+                "metadata": {
+                    "source": "legacy-resync",
+                    "user_id": str(user.id),
+                    "app": settings.APP_NAME,
+                },
+            }
+            retrieve_customer = AsyncMock(return_value=missing_identity)
+            list_customers = AsyncMock(
+                return_value={"data": [missing_identity], "has_more": False}
+            )
+            update_customer = AsyncMock(return_value=repaired_identity)
+            monkeypatch.setattr(
+                billing_service,
+                "retrieve_credit_customer",
+                retrieve_customer,
+            )
+            monkeypatch.setattr(
+                billing_service,
+                "list_credit_customers",
+                list_customers,
+            )
+            monkeypatch.setattr(
+                billing_service,
+                "update_credit_customer_metadata",
+                update_customer,
+            )
+
+            purchase = await billing_router.purchase_credits(
+                CreditPurchaseRequest(quantity=1),
+                user,
+                db,
+            )
+            assert purchase.credits_to_add == CREDIT_PACK_SIZE
+            update_customer.assert_awaited_once()
+            checkout_create.assert_called_once()
+
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id=session_id,
+            )
+            payload["customer"] = customer_id
+            _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                customer=repaired_identity,
+            )
+            first = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+            replay = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.completed",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert first["status"] == "processed"
+            assert replay["status"] == "duplicate"
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
 
 
 @pytest.mark.asyncio

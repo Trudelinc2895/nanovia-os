@@ -495,11 +495,16 @@ async def test_process_stripe_event_handles_payment_failed():
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.email = "payment-failed@example.com"
+    user.plan = "pro"
     sub = MagicMock()
     sub.stripe_subscription_id = "sub_123"
+    sub.plan = "pro"
 
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=[_ScalarResult(user), _ScalarResult(sub)])
+    post_commit_actions = []
+    email = AsyncMock()
 
     with (
         patch(
@@ -510,6 +515,10 @@ async def test_process_stripe_event_handles_payment_failed():
             "api.services.billing_service._write_audit",
             new=AsyncMock(),
         ) as audit_mock,
+        patch(
+            "api.services.email_service.send_payment_failed",
+            new=email,
+        ),
     ):
         status = await process_stripe_event(
             "invoice.payment_failed",
@@ -519,12 +528,17 @@ async def test_process_stripe_event_handles_payment_failed():
                 "attempt_count": 2,
             },
             db,
+            post_commit_actions=post_commit_actions,
         )
 
     assert status == "processed"
     failed_mock.assert_awaited_once_with(user, sub, db)
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[2] == "invoice_payment_failed"
+    email.assert_not_awaited()
+    assert len(post_commit_actions) == 1
+    await post_commit_actions[0]()
+    email.assert_awaited_once_with(user.email, sub.plan)
 
 
 @pytest.mark.asyncio
@@ -533,11 +547,15 @@ async def test_process_stripe_event_handles_trial_will_end():
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.email = "trial-ending@example.com"
+    user.full_name = "Trial Customer"
     sub = MagicMock()
     sub.plan = "pro"
 
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=[_ScalarResult(user), _ScalarResult(sub)])
+    post_commit_actions = []
+    email = AsyncMock()
 
     with (
         patch(
@@ -548,6 +566,10 @@ async def test_process_stripe_event_handles_trial_will_end():
             "api.services.billing_service._write_audit",
             new=AsyncMock(),
         ) as audit_mock,
+        patch(
+            "api.services.email_service.send_trial_ending",
+            new=email,
+        ),
     ):
         status = await process_stripe_event(
             "customer.subscription.trial_will_end",
@@ -557,6 +579,7 @@ async def test_process_stripe_event_handles_trial_will_end():
                 "trial_end": 4_102_444_800,
             },
             db,
+            post_commit_actions=post_commit_actions,
         )
 
     assert status == "processed"
@@ -565,6 +588,374 @@ async def test_process_stripe_event_handles_trial_will_end():
     assert trial_mock.await_args.args[1] == sub
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.args[2] == "customer_subscription_trial_will_end"
+    email.assert_not_awaited()
+    assert len(post_commit_actions) == 1
+    await post_commit_actions[0]()
+    email.assert_awaited_once_with(
+        user.email,
+        user.full_name,
+        trial_mock.await_args.args[2],
+    )
+
+
+def _stripe_customer(user, metadata):
+    return {
+        "id": user.stripe_customer_id,
+        "email": user.email,
+        "livemode": False,
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.asyncio
+async def test_credit_customer_with_valid_identity_is_not_modified(mock_user):
+    from api.config import settings
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_valid_credit"
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    retrieve = AsyncMock(
+        return_value=_stripe_customer(
+            mock_user,
+            {"user_id": str(mock_user.id), "app": settings.APP_NAME},
+        )
+    )
+    update = AsyncMock()
+    candidates = AsyncMock()
+
+    with (
+        patch.object(billing_service, "retrieve_credit_customer", retrieve),
+        patch.object(billing_service, "update_credit_customer_metadata", update),
+        patch.object(billing_service, "list_credit_customers", candidates),
+    ):
+        await billing_service.validate_or_repair_credit_customer_identity(
+            mock_user,
+            mock_user.stripe_customer_id,
+            db,
+        )
+
+    retrieve.assert_awaited_once_with("cus_valid_credit")
+    update.assert_not_awaited()
+    candidates.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resynced_credit_customer_identity_is_repaired_and_confirmed(mock_user):
+    from api.config import settings
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_resynced_credit"
+    customer = _stripe_customer(mock_user, {"source": "legacy"})
+    repaired = _stripe_customer(
+        mock_user,
+        {
+            "source": "legacy",
+            "user_id": str(mock_user.id),
+            "app": settings.APP_NAME,
+        },
+    )
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    retrieve = AsyncMock(return_value=customer)
+    candidates = AsyncMock(
+        return_value={"data": [customer], "has_more": False}
+    )
+    update = AsyncMock(return_value=repaired)
+
+    with (
+        patch.object(billing_service, "retrieve_credit_customer", retrieve),
+        patch.object(billing_service, "list_credit_customers", candidates),
+        patch.object(billing_service, "update_credit_customer_metadata", update),
+    ):
+        await billing_service.validate_or_repair_credit_customer_identity(
+            mock_user,
+            mock_user.stripe_customer_id,
+            db,
+        )
+
+    candidates.assert_awaited_once_with(mock_user.email)
+    update.assert_awaited_once_with(
+        "cus_resynced_credit",
+        {
+            "source": "legacy",
+            "user_id": str(mock_user.id),
+            "app": settings.APP_NAME,
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"user_id": str(uuid.uuid4()), "app": "nanovia"},
+        {"user_id": "", "app": "foreign-app"},
+    ],
+)
+async def test_credit_customer_contradictory_identity_is_never_overwritten(
+    mock_user,
+    metadata,
+):
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_contradictory_credit"
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    update = AsyncMock()
+    with (
+        patch.object(
+            billing_service,
+            "retrieve_credit_customer",
+            new=AsyncMock(return_value=_stripe_customer(mock_user, metadata)),
+        ),
+        patch.object(billing_service, "update_credit_customer_metadata", update),
+    ):
+        with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+            await billing_service.validate_or_repair_credit_customer_identity(
+                mock_user,
+                mock_user.stripe_customer_id,
+                db,
+            )
+
+    update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_credit_customer_email_match_must_be_unambiguous(mock_user):
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_ambiguous_credit"
+    customer = _stripe_customer(mock_user, {})
+    other = dict(customer, id="cus_same_email_other")
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    update = AsyncMock()
+    with (
+        patch.object(
+            billing_service,
+            "retrieve_credit_customer",
+            new=AsyncMock(return_value=customer),
+        ),
+        patch.object(
+            billing_service,
+            "list_credit_customers",
+            new=AsyncMock(
+                return_value={"data": [customer, other], "has_more": False}
+            ),
+        ),
+        patch.object(billing_service, "update_credit_customer_metadata", update),
+    ):
+        with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+            await billing_service.validate_or_repair_credit_customer_identity(
+                mock_user,
+                mock_user.stripe_customer_id,
+                db,
+            )
+
+    update.assert_not_awaited()
+
+
+def test_resync_customer_selection_rejects_foreign_or_ambiguous_identity(mock_user):
+    from api.config import settings
+    from api.services import billing_service
+
+    unowned = {
+        "id": "cus_resync_unowned",
+        "email": mock_user.email,
+        "metadata": {},
+    }
+    selected, ambiguous = billing_service._select_resync_customer(
+        {"data": [unowned], "has_more": False},
+        mock_user,
+    )
+    assert selected == unowned
+    assert ambiguous is False
+
+    selected, ambiguous = billing_service._select_resync_customer(
+        {
+            "data": [unowned, dict(unowned, id="cus_resync_ambiguous")],
+            "has_more": False,
+        },
+        mock_user,
+    )
+    assert selected is None
+    assert ambiguous is True
+
+    selected, ambiguous = billing_service._select_resync_customer(
+        {
+            "data": [
+                dict(
+                    unowned,
+                    metadata={
+                        "user_id": str(uuid.uuid4()),
+                        "app": settings.APP_NAME,
+                    },
+                )
+            ],
+            "has_more": False,
+        },
+        mock_user,
+    )
+    assert selected is None
+    assert ambiguous is False
+
+
+@pytest.mark.asyncio
+async def test_post_commit_notification_error_is_logged_without_rollback():
+    from api.services import billing_service
+
+    action = AsyncMock(side_effect=RuntimeError("local email failure"))
+    with patch.object(billing_service.logger, "exception") as logged:
+        await billing_service._run_post_commit_action(action)
+
+    action.assert_awaited_once()
+    logged.assert_called_once_with("[webhook] Post-commit side effect failed")
+
+
+@pytest.mark.asyncio
+async def test_credit_customer_local_owner_must_be_unique(mock_user):
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_duplicate_owner"
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(uuid.uuid4()))
+    retrieve = AsyncMock()
+
+    with patch.object(billing_service, "retrieve_credit_customer", retrieve):
+        with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+            await billing_service.validate_or_repair_credit_customer_identity(
+                mock_user,
+                mock_user.stripe_customer_id,
+                db,
+            )
+
+    retrieve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_credit_customer_update_fails_closed(mock_user):
+    from api.services import billing_service
+
+    mock_user.stripe_customer_id = "cus_unconfirmed_credit"
+    customer = _stripe_customer(mock_user, {})
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    with (
+        patch.object(
+            billing_service,
+            "retrieve_credit_customer",
+            new=AsyncMock(return_value=customer),
+        ),
+        patch.object(
+            billing_service,
+            "list_credit_customers",
+            new=AsyncMock(return_value={"data": [customer], "has_more": False}),
+        ),
+        patch.object(
+            billing_service,
+            "update_credit_customer_metadata",
+            new=AsyncMock(return_value=customer),
+        ),
+    ):
+        with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+            await billing_service.validate_or_repair_credit_customer_identity(
+                mock_user,
+                mock_user.stripe_customer_id,
+                db,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        pytest.param("outage", id="outage"),
+        pytest.param("timeout", id="timeout"),
+    ],
+)
+async def test_credit_customer_update_provider_error_is_retryable(
+    monkeypatch,
+    provider_error,
+):
+    import stripe
+
+    from api.services import billing_service
+
+    error = (
+        stripe.error.APIConnectionError("local outage")
+        if provider_error == "outage"
+        else TimeoutError("local timeout")
+    )
+    monkeypatch.setattr(
+        billing_service.stripe.Customer,
+        "modify",
+        MagicMock(side_effect=error),
+    )
+
+    with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+        await billing_service.update_credit_customer_metadata(
+            "cus_provider_error",
+            {"user_id": str(uuid.uuid4()), "app": "nanovia"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "customer_error",
+    [
+        pytest.param("identity", id="contradictory-identity"),
+        pytest.param("provider", id="provider-unavailable"),
+    ],
+)
+async def test_credit_customer_failure_never_creates_checkout(
+    mock_user,
+    customer_error,
+):
+    import stripe
+
+    from fastapi import HTTPException
+
+    from api.routers import billing as billing_router
+    from api.schemas.billing import CreditPurchaseRequest
+    from api.services import billing_service
+
+    customer_failure = (
+        billing_service.CreditFulfillmentUnavailable(
+            billing_service.CREDIT_FULFILLMENT_RETRYABLE_ERROR
+        )
+        if customer_error == "identity"
+        else stripe.error.APIConnectionError("local provider outage")
+    )
+    customer = AsyncMock(side_effect=customer_failure)
+    checkout = MagicMock()
+    with (
+        patch.object(
+            billing_router,
+            "prepare_credit_purchase_contract",
+            new=AsyncMock(return_value=MagicMock(price_id="price_credit")),
+        ),
+        patch.object(
+            billing_router,
+            "get_or_create_stripe_customer",
+            customer,
+        ),
+        patch.object(
+            billing_router.stripe.checkout.Session,
+            "create",
+            checkout,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await billing_router.purchase_credits(
+                CreditPurchaseRequest(quantity=1),
+                mock_user,
+                AsyncMock(),
+            )
+
+    assert exc_info.value.status_code == 503
+    assert customer.await_args.kwargs == {"validate_credit_identity": True}
+    checkout.assert_not_called()
 
 
 @pytest.mark.asyncio

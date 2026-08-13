@@ -493,13 +493,17 @@ async def purchase_credits(
     """
     try:
         credit_contract = await prepare_credit_purchase_contract()
+        customer_id = await get_or_create_stripe_customer(
+            current_user,
+            db,
+            validate_credit_identity=True,
+        )
     except (CreditFulfillmentUnavailable, stripe.error.StripeError, TimeoutError):
         raise HTTPException(
             status_code=503,
             detail="Credit purchases are temporarily unavailable.",
         ) from None
 
-    customer_id = await get_or_create_stripe_customer(current_user, db)
     credits_to_add = body.quantity * settings.STRIPE_CREDIT_PACK_SIZE
 
     session = stripe.checkout.Session.create(
