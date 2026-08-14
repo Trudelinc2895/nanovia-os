@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -10,6 +11,9 @@ from urllib.parse import urlsplit
 
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_CANONICAL_RAW_KEYS = {"DOMAIN", "PUBLIC_WEB_URL"}
+_RESERVED_DOMAIN_LABELS = {"example", "invalid", "localhost", "test"}
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PILOT_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
 _PRODUCTION_HTTPS_URL_KEYS = (
     "API_BASE_URL",
@@ -202,9 +206,14 @@ def load_env_file(path: Path) -> dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        sanitized_value = re.sub(r"\s+#.*$", "", value).strip()
-        values[key.strip()] = sanitized_value
+        key, value = raw_line.split("=", 1)
+        normalized_key = key.strip()
+        sanitized_value = re.sub(r"\s+#.*$", "", value)
+        values[normalized_key] = (
+            sanitized_value
+            if normalized_key in _CANONICAL_RAW_KEYS
+            else sanitized_value.strip()
+        )
     return values
 
 
@@ -389,6 +398,74 @@ def _validate_http_urlish(values: dict[str, str], key: str, errors: list[str]) -
         return
     if not value.startswith(("http://", "https://")):
         errors.append(f"{key} must start with http:// or https://")
+
+
+def _is_canonical_dns_name(value: str) -> bool:
+    if (
+        not value
+        or value != value.strip()
+        or value != value.lower()
+        or len(value) > 253
+        or value.endswith(".")
+        or any(character.isspace() for character in value)
+        or "*" in value
+        or _looks_placeholder(value)
+    ):
+        return False
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        return False
+    labels = value.split(".")
+    return (
+        len(labels) >= 2
+        and not _RESERVED_DOMAIN_LABELS.intersection(labels)
+        and all(_DNS_LABEL.fullmatch(label) is not None for label in labels)
+    )
+
+
+def _validate_production_public_host(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    domain = values.get("DOMAIN", "")
+    domain_valid = _is_canonical_dns_name(domain)
+    if not domain:
+        errors.append("Production DOMAIN is required")
+    elif not domain_valid:
+        errors.append("Production DOMAIN must be a canonical DNS hostname")
+
+    public_web_url = values.get("PUBLIC_WEB_URL", "")
+    if not public_web_url:
+        errors.append("Production PUBLIC_WEB_URL is required")
+        return errors
+    try:
+        parsed = urlsplit(public_web_url)
+        port = parsed.port
+    except ValueError:
+        parsed = None
+        port = None
+    valid_url = (
+        parsed is not None
+        and public_web_url == public_web_url.strip()
+        and not any(character.isspace() for character in public_web_url)
+        and parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and parsed.path == ""
+        and not parsed.query
+        and not parsed.fragment
+        and domain_valid
+        and parsed.hostname == domain
+        and parsed.netloc in {domain, f"{domain}:443"}
+    )
+    if not valid_url:
+        errors.append(
+            "Production PUBLIC_WEB_URL must be the canonical HTTPS URL for DOMAIN"
+        )
+    return errors
 
 
 def _validate_secret_reference(
@@ -584,6 +661,8 @@ def validate_runtime_env(
         if stripe_public.startswith(stripe_live_public_prefix):
             errors.append("Staging refuses live Stripe public keys")
         return errors
+
+    errors.extend(_validate_production_public_host(values))
 
     if not allow_placeholders:
         for key in _PILOT_REQUIRED_KEYS:

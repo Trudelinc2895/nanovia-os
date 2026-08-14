@@ -18,6 +18,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 RUNBOOK = REPO_ROOT / "docs" / "J21A_CANONICAL_DEPLOYMENT.md"
 POSTFLIGHT = REPO_ROOT / "infra" / "scripts" / "verify-caddy-postflight.sh"
+PRODUCTION_COMPOSE = REPO_ROOT / "infra" / "docker-compose.prod.yml"
+CANONICAL_PRODUCTION_COMPOSE = (
+    REPO_ROOT / "infra" / "docker-compose.canonical-prod.yml"
+)
+STAGING_COMPOSE = REPO_ROOT / "infra" / "docker-compose.staging.yml"
 PRE_MIGRATION_BACKUP = REPO_ROOT / "infra" / "scripts" / "pre-migration-backup.sh"
 ALERTMANAGER_RENDERER = (
     REPO_ROOT / "infra" / "monitoring" / "render-alertmanager-config.sh"
@@ -86,6 +91,45 @@ def _run_bash(script: str, *, env: dict[str, str] | None = None, cwd=REPO_ROOT):
         [_bash_executable(), "-c", script],
         cwd=cwd,
         env=process_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _render_compose(tmp_path: Path, *compose_files: Path, domain: str | None):
+    docker = shutil.which("docker")
+    assert docker is not None, "Docker Compose is required for contract tests"
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("APP_ENV=staging\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("DOMAIN", None)
+    env.update(
+        {
+            "APP_RUNTIME_ENV_FILE": str(runtime_env),
+            "COMPOSE_PROJECT_NAME": "nanovia-contract-test",
+            "POSTGRES_VOLUME_NAME": "nanovia-contract-postgres",
+            "REDIS_VOLUME_NAME": "nanovia-contract-redis",
+            "POSTGRES_DB": "nanovia",
+            "POSTGRES_USER": "nanovia",
+            "POSTGRES_PASSWORD": "not-a-secret",
+            "REDIS_PASSWORD": "not-a-secret",
+            "NEXT_PUBLIC_API_URL": "",
+            "TELEGRAM_BOT_TOKEN": "not-a-secret",
+            "TELEGRAM_CHAT_ID": "1",
+            "GRAFANA_ADMIN_PASSWORD": "not-a-secret",
+        }
+    )
+    if domain is not None:
+        env["DOMAIN"] = domain
+    command = [docker, "compose", "-p", "nanovia-contract-test"]
+    for compose_file in compose_files:
+        command.extend(("-f", str(compose_file)))
+    command.extend(("config", "--quiet"))
+    return subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -371,6 +415,63 @@ def test_validated_runtime_env_is_bound_to_both_application_services():
         < migration
     )
     assert compose_file.count("env_file: ${APP_RUNTIME_ENV_FILE:-../.env}") == 2
+
+
+def test_canonical_domain_validation_precedes_every_production_mutation():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'timeout 2400 bash -seuo pipefail" <<\'ENDSSH\'' in workflow
+    validation = workflow.index(
+        'python3 "${RUNTIME_ENV_VALIDATOR}" \\\n'
+        '            --env-file "${ENV_FILE}"'
+    )
+    compose_config = workflow.index("compose config --quiet")
+    stop_writers = workflow.index("compose stop api ai-orchestrator")
+    backup = workflow.index("bash infra/scripts/pre-migration-backup.sh")
+    abandon_rollback = workflow.index("MIGRATION_STARTED=1")
+    migration = workflow.index(
+        'compose run --rm --no-deps -T api alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"'
+    )
+    recreate = workflow.index("api ai-orchestrator web admin caddy alertmanager")
+
+    assert validation < compose_config < stop_writers
+    assert validation < stop_writers < backup < abandon_rollback < migration < recreate
+
+
+def test_canonical_production_compose_rejects_missing_domain(tmp_path):
+    completed = _render_compose(
+        tmp_path,
+        PRODUCTION_COMPOSE,
+        CANONICAL_PRODUCTION_COMPOSE,
+        domain=None,
+    )
+
+    assert completed.returncode != 0
+    assert "DOMAIN is required for canonical production" in completed.stderr
+
+
+def test_canonical_production_compose_accepts_domain(tmp_path):
+    completed = _render_compose(
+        tmp_path,
+        PRODUCTION_COMPOSE,
+        CANONICAL_PRODUCTION_COMPOSE,
+        domain="nanovia.ca",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_staging_compose_preserves_missing_domain_without_localhost_fallback(tmp_path):
+    completed = _render_compose(
+        tmp_path,
+        PRODUCTION_COMPOSE,
+        STAGING_COMPOSE,
+        domain=None,
+    )
+    production_compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "${DOMAIN:-localhost}" not in production_compose
+    assert "DOMAIN: ${DOMAIN:-}" in production_compose
 
 
 def test_pre_migration_backup_binds_the_selected_runtime_env_to_compose():

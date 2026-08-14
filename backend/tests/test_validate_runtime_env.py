@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -33,10 +35,11 @@ def _complete_production_values() -> dict[str, str]:
         "STRIPE_PUBLIC_KEY": "pk" + "_live_test_value",
         "STRIPE_WEBHOOK_SECRET": "wh" + "sec_test_value",
         "ADMIN_ALLOWED_IP": "203.0.113.10/32",
-        "ALLOWED_ORIGINS_RAW": "https://nanovia.invalid,https://admin.nanovia.invalid",
-        "API_BASE_URL": "https://nanovia.invalid",
-        "PUBLIC_WEB_URL": "https://nanovia.invalid",
-        "PRIVATE_ADMIN_URL": "https://admin.nanovia.invalid",
+        "DOMAIN": "nanovia.ca",
+        "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
+        "API_BASE_URL": "https://nanovia.ca",
+        "PUBLIC_WEB_URL": "https://nanovia.ca",
+        "PRIVATE_ADMIN_URL": "https://admin.nanovia.ca",
         "NEXT_PUBLIC_API_URL": "",
         "CONTACT_RECIPIENT_EMAIL": "pilot@example.invalid",
         "STRIPE_ACCOUNT_ID": "acct_test123",
@@ -88,13 +91,18 @@ def test_production_external_urls_require_https(key: str):
     "key",
     ("API_BASE_URL", "PUBLIC_WEB_URL", "PRIVATE_ADMIN_URL"),
 )
-def test_production_external_urls_accept_https_without_normalization(key: str):
+def test_production_external_url_canonicalization_policy(key: str):
     values = _complete_production_values()
     values[key] = "https://external.nanovia.invalid:443/path?mode=kept#fragment"
 
     errors = validate_runtime_env(values, target_env="production")
 
     assert f"Production {key} must use https://" not in errors
+    if key == "PUBLIC_WEB_URL":
+        assert (
+            "Production PUBLIC_WEB_URL must be the canonical HTTPS URL for DOMAIN"
+            in errors
+        )
 
 
 @pytest.mark.parametrize(
@@ -126,6 +134,142 @@ def test_development_keeps_http_external_urls_supported():
     errors = validate_runtime_env(values, target_env="development")
 
     assert not any("must use https://" in error for error in errors)
+
+
+def test_nonproduction_runtime_env_does_not_require_domain():
+    values = {
+        "APP_ENV": "development",
+        "DATABASE_URL": "sqlite+aiosqlite:///./dev.db",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "JWT_SECRET_KEY": "x" * 40,
+    }
+
+    errors = validate_runtime_env(values, target_env="development")
+
+    assert not any("DOMAIN" in error for error in errors)
+
+
+def test_production_domain_is_required():
+    values = _complete_production_values()
+    values.pop("DOMAIN")
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert "Production DOMAIN is required" in errors
+
+
+@pytest.mark.parametrize(
+    "domain",
+    (
+        "",
+        "localhost",
+        "127.0.0.1",
+        "2001:db8::1",
+        "CHANGE_ME_DOMAIN",
+        "example.com",
+        "nanovia.invalid",
+        "https://nanovia.ca",
+        "nanovia.ca:443",
+        "nanovia.ca/path",
+        "nanovia.ca?query=yes",
+        "nanovia.ca#fragment",
+        "*.nanovia.ca",
+        "bad..nanovia.ca",
+        "-bad.nanovia.ca",
+        "Nanovia.ca",
+        "nanovia.ca.",
+        " nanovia.ca",
+        "nanovia.ca ",
+    ),
+)
+def test_production_domain_rejects_noncanonical_values(domain: str):
+    values = _complete_production_values()
+    values["DOMAIN"] = domain
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    expected = (
+        "Production DOMAIN is required"
+        if not domain
+        else "Production DOMAIN must be a canonical DNS hostname"
+    )
+    assert expected in errors
+
+
+@pytest.mark.parametrize(
+    "public_web_url",
+    (
+        "",
+        "http://nanovia.ca",
+        "https://user@nanovia.ca",
+        "https://nanovia.ca:444",
+        "https://nanovia.ca/",
+        "https://nanovia.ca/path",
+        "https://nanovia.ca?query=yes",
+        "https://nanovia.ca#fragment",
+        "https://www.nanovia.ca",
+        "https://NANOVIA.ca",
+        " https://nanovia.ca",
+        "https://nanovia.ca ",
+    ),
+)
+def test_production_public_web_url_rejects_noncanonical_values(
+    public_web_url: str,
+):
+    values = _complete_production_values()
+    values["PUBLIC_WEB_URL"] = public_web_url
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    expected = (
+        "Production PUBLIC_WEB_URL is required"
+        if not public_web_url
+        else "Production PUBLIC_WEB_URL must be the canonical HTTPS URL for DOMAIN"
+    )
+    assert expected in errors
+
+
+@pytest.mark.parametrize(
+    "public_web_url",
+    ("https://nanovia.ca", "https://nanovia.ca:443"),
+)
+def test_production_accepts_canonical_domain_and_public_url_pair(
+    public_web_url: str,
+):
+    values = _complete_production_values()
+    values["PUBLIC_WEB_URL"] = public_web_url
+
+    errors = validate_runtime_env(values, target_env="production")
+
+    assert errors == []
+
+
+def test_runtime_env_cli_rejects_invalid_domain_without_exposing_values(tmp_path):
+    values = _complete_production_values()
+    values["DOMAIN"] = " nanovia.ca"
+    env_file = tmp_path / "runtime.env"
+    env_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in values.items()),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT_PATH),
+            "--env-file",
+            str(env_file),
+            "--target-env",
+            "production",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "Production DOMAIN must be a canonical DNS hostname" in completed.stderr
+    assert "nanovia.ca" not in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -541,6 +685,7 @@ def test_production_template_mode_allows_placeholders():
             "STRIPE_PUBLIC_KEY": "REPLACE_WITH_STRIPE_PUBLISHABLE_KEY",
             "STRIPE_WEBHOOK_SECRET": "REPLACE_WITH_STRIPE_WEBHOOK_SECRET",
             "ADMIN_ALLOWED_IP": "REPLACE_ME_ADMIN_CIDR",
+            "DOMAIN": "nanovia.ca",
             "ALLOWED_ORIGINS_RAW": "https://nanovia.ca,https://admin.nanovia.ca",
             "API_BASE_URL": "https://nanovia.ca",
             "PUBLIC_WEB_URL": "https://nanovia.ca",

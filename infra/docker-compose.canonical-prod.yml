@@ -1,5 +1,10 @@
 # Canonical production overlay for the existing public Compose project.
 # Every persistent volume is external: Compose must never create a replacement.
+services:
+  caddy:
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required for canonical production}
+
 volumes:
   postgres_data:
     external: true
