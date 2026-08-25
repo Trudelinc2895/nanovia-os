@@ -127,6 +127,13 @@ def _build_addons() -> dict[str, dict]:
 ADDONS_CONFIG: dict[str, dict] = _build_addons()
 MAX_CREDIT_PACK_QUANTITY = 100
 SUPPORTED_AUTOMATED_FULFILLMENT_TYPES = frozenset({"credits"})
+CREDIT_CHECKOUT_EVENT_TYPES = frozenset(
+    {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+        "checkout.session.async_payment_failed",
+    }
+)
 MODULE_FULFILLMENT_RETRYABLE_ERROR = (
     "Module Checkout fulfillment is disabled pending strict server-side contract verification"
 )
@@ -1057,6 +1064,7 @@ def validate_credit_checkout_contract(
     signed_session: dict[str, Any],
     *,
     event_id: str,
+    event_type: str,
     provider_event: Any,
     provider_session: Any,
     account: Any,
@@ -1064,13 +1072,14 @@ def validate_credit_checkout_contract(
     line_items_response: Any,
     current_price: Any,
 ) -> PreparedCreditCheckout:
-    """Validate a paid credit Checkout from authenticated Stripe resources."""
+    """Validate a credit Checkout state from authenticated Stripe resources."""
     event_account_id = _stripe_object_id(stripe_field(provider_event, "account"))
     event_data = stripe_field(provider_event, "data", {}) or {}
     event_object = stripe_field(event_data, "object")
     if (
         _stripe_object_id(provider_event) != event_id
-        or stripe_field(provider_event, "type") != "checkout.session.completed"
+        or event_type not in CREDIT_CHECKOUT_EVENT_TYPES
+        or stripe_field(provider_event, "type") != event_type
         or stripe_field(provider_event, "livemode")
         != (settings.APP_ENV == "production")
         or event_account_id not in (None, settings.STRIPE_ACCOUNT_ID)
@@ -1113,7 +1122,6 @@ def validate_credit_checkout_contract(
         or isinstance(payment_intent, str)
         or stripe_field(provider_session, "mode") != "payment"
         or stripe_field(provider_session, "status") != "complete"
-        or stripe_field(provider_session, "payment_status") != "paid"
         or not isinstance(livemode, bool)
         or livemode != expected_livemode
         or metadata.get("type") != "credits"
@@ -1201,27 +1209,73 @@ def validate_credit_checkout_contract(
     ):
         return _credit_rejected()
 
+    payment_intent_status = stripe_field(payment_intent, "status")
+    amount_received = stripe_field(payment_intent, "amount_received")
     if (
         stripe_field(payment_intent, "livemode") != expected_livemode
-        or stripe_field(payment_intent, "status") != "succeeded"
         or stripe_field(payment_intent, "currency") != currency
         or stripe_field(payment_intent, "amount") != expected_amount
-        or stripe_field(payment_intent, "amount_received") != expected_amount
         or _stripe_object_id(stripe_field(payment_intent, "customer")) != customer_id
     ):
         return _credit_rejected()
 
-    return PreparedCreditCheckout(
-        "verified",
-        session_id=session_id,
-        user_id=user_id,
-        customer_id=customer_id,
-        credits=expected_credits,
-    )
+    payment_status = stripe_field(provider_session, "payment_status")
+    if event_type in {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+    } and payment_status == "paid":
+        if (
+            payment_intent_status != "succeeded"
+            or amount_received != expected_amount
+        ):
+            return _credit_rejected()
+        return PreparedCreditCheckout(
+            "verified",
+            session_id=session_id,
+            user_id=user_id,
+            customer_id=customer_id,
+            credits=expected_credits,
+        )
+
+    if event_type == "checkout.session.completed" and payment_status == "unpaid":
+        if (
+            not isinstance(payment_intent_status, str)
+            or payment_intent_status == "succeeded"
+            or amount_received != 0
+        ):
+            return _credit_rejected()
+        return PreparedCreditCheckout(
+            "pending",
+            session_id=session_id,
+            user_id=user_id,
+            customer_id=customer_id,
+            credits=expected_credits,
+        )
+
+    if (
+        event_type == "checkout.session.async_payment_failed"
+        and payment_status == "unpaid"
+    ):
+        if (
+            not isinstance(payment_intent_status, str)
+            or payment_intent_status == "succeeded"
+            or amount_received != 0
+        ):
+            return _credit_rejected()
+        return PreparedCreditCheckout(
+            "failed",
+            session_id=session_id,
+            user_id=user_id,
+            customer_id=customer_id,
+            credits=expected_credits,
+        )
+
+    return _credit_rejected()
 
 
 async def verify_credit_checkout_session(
     event_id: str,
+    event_type: str,
     signed_session: dict[str, Any],
 ) -> PreparedCreditCheckout:
     """Retrieve and verify the complete credit contract before the DB transaction."""
@@ -1251,6 +1305,7 @@ async def verify_credit_checkout_session(
     return validate_credit_checkout_contract(
         signed_session,
         event_id=event_id,
+        event_type=event_type,
         provider_event=provider_event,
         provider_session=provider_session,
         account=account,
@@ -1258,6 +1313,64 @@ async def verify_credit_checkout_session(
         line_items_response=line_items,
         current_price=current_price,
     )
+
+
+async def fulfill_credit_checkout(
+    prepared_credit: PreparedCreditCheckout,
+    db: AsyncSession,
+    *,
+    commit: bool = True,
+) -> None:
+    """Atomically fulfill one verified credit Checkout Session."""
+    if (
+        prepared_credit.classification != "verified"
+        or prepared_credit.session_id is None
+        or prepared_credit.user_id is None
+        or prepared_credit.customer_id is None
+        or prepared_credit.credits is None
+    ):
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+
+    result = await db.execute(select(User).where(User.id == prepared_credit.user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise CreditFulfillmentRejected(
+            "Credit Checkout durable local owner does not exist"
+        )
+    if user.stripe_customer_id != prepared_credit.customer_id:
+        raise CreditFulfillmentRejected(
+            "Credit Checkout customer does not match its durable local owner"
+        )
+
+    from api.services.credit_service import add_credits
+
+    idempotency_key = (
+        f"stripe_checkout_{prepared_credit.session_id}_{prepared_credit.credits}"
+    )
+    await add_credits(
+        user_id=prepared_credit.user_id,
+        amount=prepared_credit.credits,
+        source="stripe_checkout",
+        db=db,
+        idempotency_key=idempotency_key,
+        note=f"Credit pack purchased via Stripe checkout {prepared_credit.session_id}",
+        commit=False,
+    )
+    logger.info(
+        "[billing] Added %s credits to user %s via ledger",
+        prepared_credit.credits,
+        prepared_credit.user_id,
+    )
+    await _write_audit(
+        db,
+        prepared_credit.user_id,
+        "credits_purchased",
+        f"+{prepared_credit.credits} credits via Stripe",
+    )
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
 
 
 async def handle_checkout_completed(
@@ -1285,18 +1398,10 @@ async def handle_checkout_completed(
 
     credit_checkout = session.get("mode") == "payment" and checkout_type == "credits"
     if credit_checkout:
-        if (
-            prepared_credit is None
-            or prepared_credit.classification != "verified"
-            or prepared_credit.session_id is None
-            or prepared_credit.user_id is None
-            or prepared_credit.customer_id is None
-            or prepared_credit.credits is None
-        ):
+        if prepared_credit is None:
             raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
-        customer_id = prepared_credit.customer_id
-        user_id = prepared_credit.user_id
-        user_id_str = str(user_id)
+        await fulfill_credit_checkout(prepared_credit, db, commit=commit)
+        return
     else:
         customer_id = session.get("customer")
         user_id_str = session.get("client_reference_id")
@@ -1321,32 +1426,10 @@ async def handle_checkout_completed(
         logger.error(f"[billing] No user for id={user_id_str}")
         return
 
-    if credit_checkout and user.stripe_customer_id != customer_id:
-        raise CreditFulfillmentRejected(
-            "Credit Checkout customer does not match its durable local owner"
-        )
     if not user.stripe_customer_id:
         user.stripe_customer_id = customer_id
         db.add(user)
         logger.info(f"[billing] Linked customer {customer_id} to user {user_id}")
-
-    # Credit pack one-time purchase
-    if credit_checkout:
-        session_id = prepared_credit.session_id
-        credits_to_add = prepared_credit.credits
-        from api.services.credit_service import add_credits
-        idempotency_key = f"stripe_checkout_{session_id}_{credits_to_add}"
-        await add_credits(
-            user_id=user_id,
-            amount=credits_to_add,
-            source="stripe_checkout",
-            db=db,
-            idempotency_key=idempotency_key,
-            note=f"Credit pack purchased via Stripe checkout {session_id}",
-            commit=commit,
-        )
-        logger.info(f"[billing] Added {credits_to_add} credits to user {user_id} via ledger")
-        await _write_audit(db, user_id, "credits_purchased", f"+{credits_to_add} credits via Stripe")
 
     if commit:
         await db.commit()
@@ -1371,7 +1454,7 @@ async def prepare_stripe_event(
     event_id: str | None = None,
 ) -> PreparedPilotReversal | PreparedCreditCheckout | None:
     """Complete Stripe provider reads before the webhook database transaction."""
-    if event_type == "checkout.session.completed":
+    if event_type in CREDIT_CHECKOUT_EVENT_TYPES:
         metadata = data.get("metadata") or {}
         if metadata.get("type") == "credits" and not stripe_field(
             data,
@@ -1379,7 +1462,7 @@ async def prepare_stripe_event(
         ):
             if not event_id:
                 raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
-            return await verify_credit_checkout_session(event_id, data)
+            return await verify_credit_checkout_session(event_id, event_type, data)
     if event_type not in PILOT_REVERSAL_EVENT_TYPES:
         return None
     if not event_id:
@@ -1410,6 +1493,31 @@ async def process_stripe_event(
             db,
             prepared_event=prepared_event,
         )
+
+    metadata = data.get("metadata") or {}
+    credit_checkout_event = (
+        event_type in CREDIT_CHECKOUT_EVENT_TYPES
+        and metadata.get("type") == "credits"
+        and not stripe_field(data, "payment_link")
+    )
+    if credit_checkout_event:
+        if not isinstance(prepared_event, PreparedCreditCheckout):
+            raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
+        if prepared_event.classification == "pending":
+            return "pending"
+        if prepared_event.classification == "failed":
+            logger.info(
+                "[billing] Credit Checkout payment failed session=%s",
+                prepared_event.session_id,
+            )
+            return "failed"
+        if prepared_event.classification != "verified":
+            return "rejected"
+        try:
+            await fulfill_credit_checkout(prepared_event, db, commit=False)
+        except CreditFulfillmentRejected:
+            return "rejected"
+        return "processed"
 
     if event_type in PILOT_EVENT_TYPES:
         incoming_payment_link = stripe_field(data, "payment_link")

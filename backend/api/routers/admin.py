@@ -34,6 +34,7 @@ from api.models.user import User
 from api.models.webhook_event import WebhookEvent
 from api.models.workspace_billing import CreditBalance, Invoice, Member, UsageEvent, Workspace
 from api.services.billing_service import (
+    CREDIT_CHECKOUT_EVENT_TYPES,
     PLANS_CONFIG,
     dispatch_post_commit_actions,
     get_webhook_event,
@@ -602,8 +603,20 @@ async def admin_reprocess_webhook(
         )
         raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
 
+    metadata = event_payload.get("metadata") or {}
+    credit_checkout_event = (
+        stripe_event["type"] in CREDIT_CHECKOUT_EVENT_TYPES
+        and metadata.get("type") == "credits"
+        and not event_payload.get("payment_link")
+    )
     operational_status = (
-        final_status if final_status in {"ignored", "rejected"} else "processed"
+        final_status
+        if final_status in {"ignored", "rejected"}
+        or (
+            credit_checkout_event
+            and final_status in {"pending", "failed"}
+        )
+        else "processed"
     )
     try:
         await update_webhook_status(stripe_event_id, operational_status, None, db)

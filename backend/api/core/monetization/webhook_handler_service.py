@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.billing_service import (
+    CREDIT_CHECKOUT_EVENT_TYPES,
     WEBHOOK_CLAIMED,
     WEBHOOK_DUPLICATE,
     WEBHOOK_IN_PROGRESS,
@@ -95,8 +96,20 @@ async def handle_stripe_webhook(
             prepared_event=prepared_event,
             post_commit_actions=post_commit_actions,
         )
+        metadata = payload.get("metadata") or {}
+        credit_checkout_event = (
+            event_type in CREDIT_CHECKOUT_EVENT_TYPES
+            and metadata.get("type") == "credits"
+            and not payload.get("payment_link")
+        )
         webhook_status = (
-            final_status if final_status in {"ignored", "rejected"} else "processed"
+            final_status
+            if final_status in {"ignored", "rejected"}
+            or (
+                credit_checkout_event
+                and final_status in {"pending", "failed"}
+            )
+            else "processed"
         )
         await update_webhook_status(event_id, webhook_status, None, db)
         # Sole commit owner for the claim, business effects, and final status.

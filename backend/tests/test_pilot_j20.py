@@ -5,6 +5,7 @@ local deterministic data. No provider network call is permitted from this file.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -117,11 +118,12 @@ def _pilot_settings(monkeypatch):
         AsyncMock(return_value=_credit_line_items()),
     )
 
-    async def verify_credit(event_id, signed_session):
+    async def verify_credit(event_id, event_type, signed_session):
         return billing_service.validate_credit_checkout_contract(
             signed_session,
             event_id=event_id,
-            provider_event=_credit_event(event_id, signed_session),
+            event_type=event_type,
+            provider_event=_credit_event(event_id, signed_session, event_type),
             provider_session=_credit_provider_session(signed_session),
             account=_credit_account(),
             customer=_credit_customer(signed_session),
@@ -196,7 +198,7 @@ def _legacy_credit_checkout(
     return {
         "id": session_id,
         "mode": "payment",
-        "status": "complete" if payment_status == "paid" else "open",
+        "status": "complete",
         "payment_status": payment_status,
         "payment_intent": f"pi_{session_id.removeprefix('cs_')}",
         "livemode": False,
@@ -295,10 +297,14 @@ def _credit_account(*, account_id: str = ACCOUNT_ID) -> dict:
     }
 
 
-def _credit_event(event_id: str, signed_session: dict) -> dict:
+def _credit_event(
+    event_id: str,
+    signed_session: dict,
+    event_type: str = "checkout.session.completed",
+) -> dict:
     return {
         "id": event_id,
-        "type": "checkout.session.completed",
+        "type": event_type,
         "livemode": False,
         "account": ACCOUNT_ID,
         "data": {"object": deepcopy(signed_session)},
@@ -337,6 +343,7 @@ def _install_credit_provider_contract(
     signed_session: dict,
     *,
     event_id: str,
+    event_type: str = "checkout.session.completed",
     provider_event: dict | None = None,
     provider_session: dict | None = None,
     account: dict | None = None,
@@ -347,7 +354,7 @@ def _install_credit_provider_contract(
     async def retrieve_event(requested_event_id):
         if provider_event is not None:
             return provider_event
-        return _credit_event(requested_event_id, signed_session)
+        return _credit_event(requested_event_id, signed_session, event_type)
 
     boundaries = {
         "event": AsyncMock(side_effect=retrieve_event),
@@ -617,6 +624,8 @@ async def test_invalid_stripe_signature_returns_400(monkeypatch):
         "construct_event",
         reject_signature,
     )
+    handler = AsyncMock()
+    monkeypatch.setattr(billing_router, "handle_stripe_webhook", handler)
 
     with pytest.raises(HTTPException) as exc_info:
         await billing_router.stripe_webhook(
@@ -627,6 +636,7 @@ async def test_invalid_stripe_signature_returns_400(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Invalid Stripe signature"
+    handler.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2884,7 +2894,6 @@ async def test_pre_rotation_timestamp_cannot_authorize_unrelated_old_price(
         "amount",
         "owner",
         "foreign_customer",
-        "unpaid",
     ],
 )
 async def test_credit_provider_or_owner_mismatch_never_grants_value(
@@ -2912,7 +2921,6 @@ async def test_credit_provider_or_owner_mismatch_never_grants_value(
             payload = _legacy_credit_checkout(
                 user.id,
                 session_id=f"cs_credit_mismatch_{invalid_contract}",
-                payment_status="unpaid" if invalid_contract == "unpaid" else "paid",
             )
             if invalid_contract == "mode":
                 payload["mode"] = "subscription"
@@ -3377,12 +3385,6 @@ async def test_same_stripe_payment_never_grants_credits_twice(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_unconfirmed_payment_never_grants_credits(monkeypatch, tmp_path):
-    line_items = AsyncMock(
-        return_value={
-            "data": [{"price": {"id": CREDIT_PRICE_ID}, "quantity": 1}]
-        }
-    )
-    monkeypatch.setattr(billing_service, "retrieve_credit_line_items", line_items)
     async with _isolated_legacy_database(tmp_path, "legacy_unconfirmed_payment") as sessions:
         async with sessions() as db:
             user = User(
@@ -3411,10 +3413,338 @@ async def test_unconfirmed_payment_never_grants_credits(monkeypatch, tmp_path):
             ledger_count = await db.scalar(
                 select(func.count()).select_from(CreditLedger)
             )
-            assert result["status"] == "rejected"
+            event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_unconfirmed_payment"
+                )
+            )
+            assert result["status"] == "pending"
             assert user.credits == 0
             assert ledger_count == 0
-            line_items.assert_awaited_once_with("cs_unconfirmed_payment")
+            assert event is not None and event.status == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_name", "sequence", "expected_statuses"),
+    [
+        pytest.param(
+            "pending_then_async",
+            [
+                ("evt_credit_pending", "checkout.session.completed", "unpaid"),
+                (
+                    "evt_credit_async_success",
+                    "checkout.session.async_payment_succeeded",
+                    "paid",
+                ),
+                (
+                    "evt_credit_async_success",
+                    "checkout.session.async_payment_succeeded",
+                    "paid",
+                ),
+            ],
+            ["pending", "processed", "duplicate"],
+            id="completed-unpaid-then-async-success-with-retry",
+        ),
+        pytest.param(
+            "paid_then_async",
+            [
+                ("evt_credit_paid", "checkout.session.completed", "paid"),
+                (
+                    "evt_credit_async_after_paid",
+                    "checkout.session.async_payment_succeeded",
+                    "paid",
+                ),
+            ],
+            ["processed", "processed"],
+            id="completed-paid-then-async-success",
+        ),
+        pytest.param(
+            "async_then_completed",
+            [
+                (
+                    "evt_credit_async_first",
+                    "checkout.session.async_payment_succeeded",
+                    "paid",
+                ),
+                ("evt_credit_completed_late", "checkout.session.completed", "paid"),
+            ],
+            ["processed", "processed"],
+            id="async-success-before-completed",
+        ),
+    ],
+)
+async def test_credit_success_events_are_session_idempotent(
+    monkeypatch,
+    tmp_path,
+    case_name,
+    sequence,
+    expected_statuses,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    async with _isolated_legacy_database(tmp_path, case_name) as sessions:
+        async with sessions() as db:
+            user = User(
+                email=f"{case_name}@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Delayed Credit Checkout",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            base_payload = _legacy_credit_checkout(
+                user.id,
+                session_id=f"cs_{case_name}",
+            )
+
+            results = []
+            for event_id, event_type, payment_status in sequence:
+                payload = dict(base_payload, payment_status=payment_status)
+                results.append(
+                    await handle_stripe_webhook(
+                        event_id,
+                        event_type,
+                        payload,
+                        db,
+                    )
+                )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert [result["status"] for result in results] == expected_statuses
+            assert user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_payment_failed_and_no_payment_required_never_grant_credits(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    async with _isolated_legacy_database(tmp_path, "credit_terminal_failures") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="credit-failure@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Failed Credit Checkout",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            no_payment = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_no_payment_required",
+                payment_status="no_payment_required",
+            )
+            failed = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_async_payment_failed",
+                payment_status="unpaid",
+            )
+
+            no_payment_result = await handle_stripe_webhook(
+                "evt_no_payment_required",
+                "checkout.session.completed",
+                no_payment,
+                db,
+            )
+            failed_result = await handle_stripe_webhook(
+                "evt_async_payment_failed",
+                "checkout.session.async_payment_failed",
+                failed,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            failed_event = await db.scalar(
+                select(WebhookEvent).where(
+                    WebhookEvent.stripe_event_id == "evt_async_payment_failed"
+                )
+            )
+            assert no_payment_result["status"] == "rejected"
+            assert failed_result["status"] == "failed"
+            assert failed_event is not None and failed_event.status == "failed"
+            assert user.credits == 0
+            assert ledger_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_contract",
+    ["session", "metadata", "product", "amount", "currency"],
+)
+async def test_async_credit_success_contract_mismatch_fails_closed(
+    monkeypatch,
+    tmp_path,
+    invalid_contract,
+):
+    async with _isolated_legacy_database(
+        tmp_path,
+        f"async_credit_invalid_{invalid_contract}",
+    ) as sessions:
+        async with sessions() as db:
+            user = User(
+                email=f"async-credit-{invalid_contract}@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Invalid Async Credit Checkout",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id=f"cs_async_invalid_{invalid_contract}",
+            )
+            if invalid_contract == "session":
+                payload["id"] = "foreign_session"
+            elif invalid_contract == "metadata":
+                payload["metadata"] = {}
+            elif invalid_contract == "product":
+                monkeypatch.setattr(
+                    billing_service,
+                    "retrieve_credit_line_items",
+                    AsyncMock(
+                        return_value=_credit_line_items(product_id="prod_foreign")
+                    ),
+                )
+            elif invalid_contract == "amount":
+                payload["amount_total"] = CREDIT_UNIT_AMOUNT + 1
+            elif invalid_contract == "currency":
+                payload["currency"] = "cad"
+
+            result = await handle_stripe_webhook(
+                f"evt_async_invalid_{invalid_contract}",
+                "checkout.session.async_payment_succeeded",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert result["status"] in {"ignored", "rejected"}
+            assert user.credits == 0
+            assert ledger_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pilot_checkout_event_never_uses_credit_fulfillment(monkeypatch):
+    pilot_processor = AsyncMock(return_value="paid")
+    credit_fulfillment = AsyncMock()
+    monkeypatch.setattr(
+        billing_service,
+        "_optional_pilot_stripe_config",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "find_authorized_pilot_stripe_config",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "process_pilot_checkout_event",
+        pilot_processor,
+    )
+    monkeypatch.setattr(
+        billing_service,
+        "fulfill_credit_checkout",
+        credit_fulfillment,
+    )
+    payload = _valid_session()
+    payload["metadata"] = {
+        "type": "credits",
+        "credits": str(CREDIT_PACK_SIZE),
+    }
+
+    result = await billing_service.process_stripe_event(
+        "checkout.session.async_payment_succeeded",
+        payload,
+        AsyncMock(),
+        event_id="evt_pilot_not_credit",
+    )
+
+    assert result == "paid"
+    pilot_processor.assert_awaited_once()
+    credit_fulfillment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_credit_success_events_grant_at_most_once(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        credit_service,
+        "_sync_workspace_credit_projection",
+        AsyncMock(),
+    )
+    async with _isolated_legacy_database(tmp_path, "concurrent_credit_success") as sessions:
+        async with sessions() as setup_db:
+            user = User(
+                email="concurrent-credit@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Concurrent Credit Checkout",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            setup_db.add(user)
+            await setup_db.commit()
+            user_id = user.id
+        payload = _legacy_credit_checkout(
+            user_id,
+            session_id="cs_concurrent_credit_success",
+        )
+
+        async def process(event_id):
+            async with sessions() as db:
+                return await handle_stripe_webhook(
+                    event_id,
+                    "checkout.session.async_payment_succeeded",
+                    payload,
+                    db,
+                )
+
+        results = await asyncio.gather(
+            process("evt_concurrent_credit_one"),
+            process("evt_concurrent_credit_two"),
+            return_exceptions=True,
+        )
+
+        async with sessions() as verification_db:
+            user = await verification_db.scalar(select(User).where(User.id == user_id))
+            ledger_count = await verification_db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            assert user is not None and user.credits == CREDIT_PACK_SIZE
+            assert ledger_count == 1
+        assert any(
+            isinstance(result, dict) and result["status"] == "processed"
+            for result in results
+        )
+        assert all(
+            isinstance(result, dict)
+            or isinstance(result, webhook_handler_service.WebhookProcessingUnavailable)
+            for result in results
+        )
 
 
 @pytest.mark.asyncio
