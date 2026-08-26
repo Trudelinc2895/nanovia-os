@@ -168,6 +168,7 @@ class CreditCatalogContract:
     price_id: str
     currency: str
     unit_amount: int
+    credits_per_unit: int
     created: int
     product_id: str
 
@@ -952,12 +953,16 @@ def _exact_positive_int(value: Any) -> int | None:
     return value
 
 
-def _credit_resource_metadata_matches(value: Any) -> bool:
+def _credit_resource_credits(value: Any) -> int | None:
     metadata = _stripe_metadata(value)
-    return (
-        metadata.get("product_key") == "credit_pack"
-        and metadata.get("credits") == str(settings.STRIPE_CREDIT_PACK_SIZE)
-    )
+    credits = metadata.get("credits")
+    if (
+        metadata.get("product_key") != "credit_pack"
+        or not isinstance(credits, str)
+        or re.fullmatch(r"[1-9][0-9]*", credits) is None
+    ):
+        return None
+    return int(credits)
 
 
 def _credit_checkout_identity_matches(signed: Any, provider: Any) -> bool:
@@ -992,6 +997,8 @@ def validate_credit_catalog_contract(
     require_active: bool,
     expected_unit_amount: int | None = None,
     expected_currency: str | None = None,
+    expected_credits_per_unit: int | None = None,
+    expected_product_credits_per_unit: int | None = None,
 ) -> CreditCatalogContract | None:
     price_id = _stripe_object_id(value)
     created = _exact_positive_int(stripe_field(value, "created"))
@@ -1001,6 +1008,10 @@ def validate_credit_catalog_contract(
     active = stripe_field(value, "active")
     product = stripe_field(value, "product")
     product_id = _stripe_object_id(product)
+    credits_per_unit = _credit_resource_credits(value)
+    product_credits_per_unit = _credit_resource_credits(product)
+    if expected_product_credits_per_unit is None:
+        expected_product_credits_per_unit = expected_credits_per_unit
     if (
         not price_id
         or not price_id.startswith("price_")
@@ -1018,8 +1029,16 @@ def validate_credit_catalog_contract(
         or not product_id.startswith("prod_")
         or stripe_field(product, "active") is not True
         or stripe_field(product, "livemode") != expected_livemode
-        or not _credit_resource_metadata_matches(value)
-        or not _credit_resource_metadata_matches(product)
+        or credits_per_unit is None
+        or product_credits_per_unit is None
+        or (
+            expected_credits_per_unit is not None
+            and credits_per_unit != expected_credits_per_unit
+        )
+        or (
+            expected_product_credits_per_unit is not None
+            and product_credits_per_unit != expected_product_credits_per_unit
+        )
         or (
             expected_unit_amount is not None
             and unit_amount != expected_unit_amount
@@ -1031,6 +1050,7 @@ def validate_credit_catalog_contract(
         price_id=price_id,
         currency=currency,
         unit_amount=unit_amount,
+        credits_per_unit=credits_per_unit,
         created=created,
         product_id=product_id,
     )
@@ -1054,6 +1074,7 @@ async def prepare_credit_purchase_contract() -> CreditCatalogContract:
         require_active=True,
         expected_unit_amount=settings.STRIPE_CREDIT_UNIT_AMOUNT,
         expected_currency=currency,
+        expected_credits_per_unit=settings.STRIPE_CREDIT_PACK_SIZE,
     )
     if contract is None or contract.price_id != price_id:
         raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
@@ -1154,6 +1175,7 @@ def validate_credit_checkout_contract(
         require_active=True,
         expected_unit_amount=settings.STRIPE_CREDIT_UNIT_AMOUNT,
         expected_currency=(settings.STRIPE_CREDIT_CURRENCY or "").strip(),
+        expected_credits_per_unit=settings.STRIPE_CREDIT_PACK_SIZE,
     )
     if (
         current_contract is None
@@ -1173,6 +1195,7 @@ def validate_credit_checkout_contract(
         price,
         expected_livemode=expected_livemode,
         require_active=False,
+        expected_product_credits_per_unit=current_contract.credits_per_unit,
     )
     if (
         price_contract is None
@@ -1192,7 +1215,7 @@ def validate_credit_checkout_contract(
     current_created = current_contract.created
     current_product_id = current_contract.product_id
     expected_amount = unit_amount * quantity
-    expected_credits = settings.STRIPE_CREDIT_PACK_SIZE * quantity
+    expected_credits = price_contract.credits_per_unit * quantity
     declared_credits = metadata.get("credits")
     if (
         stripe_field(provider_session, "currency") != currency

@@ -221,14 +221,18 @@ def _legacy_credit_checkout(
     }
 
 
-def _credit_product(*, product_id: str = CREDIT_PRODUCT_ID) -> dict:
+def _credit_product(
+    *,
+    product_id: str = CREDIT_PRODUCT_ID,
+    credits: int = CREDIT_PACK_SIZE,
+) -> dict:
     return {
         "id": product_id,
         "active": True,
         "livemode": False,
         "metadata": {
             "product_key": "credit_pack",
-            "credits": str(CREDIT_PACK_SIZE),
+            "credits": str(credits),
         },
     }
 
@@ -241,6 +245,8 @@ def _credit_price(
     currency: str = "usd",
     unit_amount: int = CREDIT_UNIT_AMOUNT,
     product_id: str = CREDIT_PRODUCT_ID,
+    credits: int = CREDIT_PACK_SIZE,
+    product_credits: int = CREDIT_PACK_SIZE,
 ) -> dict:
     return {
         "id": price_id,
@@ -253,9 +259,12 @@ def _credit_price(
         "recurring": None,
         "metadata": {
             "product_key": "credit_pack",
-            "credits": str(CREDIT_PACK_SIZE),
+            "credits": str(credits),
         },
-        "product": _credit_product(product_id=product_id),
+        "product": _credit_product(
+            product_id=product_id,
+            credits=product_credits,
+        ),
     }
 
 
@@ -268,6 +277,8 @@ def _credit_line_items(
     unit_amount: int = CREDIT_UNIT_AMOUNT,
     quantity: int = 1,
     product_id: str = CREDIT_PRODUCT_ID,
+    credits: int = CREDIT_PACK_SIZE,
+    product_credits: int = CREDIT_PACK_SIZE,
 ) -> dict:
     amount = unit_amount * quantity
     return {
@@ -283,6 +294,8 @@ def _credit_line_items(
                     currency=currency,
                     unit_amount=unit_amount,
                     product_id=product_id,
+                    credits=credits,
+                    product_credits=product_credits,
                 ),
             }
         ]
@@ -2670,6 +2683,65 @@ async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_onc
             assert all(event.status == "processed" for event in events)
             assert boundaries["event"].await_count == 2
             assert boundaries["session"].await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_delayed_credit_checkout_preserves_pack_size_after_rotation(
+    monkeypatch,
+    tmp_path,
+):
+    old_pack_size = 10
+    event_id = "evt_credit_pack_size_before_rotation"
+    async with _isolated_legacy_database(tmp_path, "credit_pack_size_rotation") as sessions:
+        async with sessions() as db:
+            user = User(
+                email="credit-pack-size-rotation@example.com",
+                password_hash="not-a-real-password-hash",
+                full_name="Credit Pack Size Rotation",
+                credits=0,
+                stripe_customer_id="cus_legacy",
+            )
+            db.add(user)
+            await db.commit()
+            payload = _legacy_credit_checkout(
+                user.id,
+                session_id="cs_credit_pack_size_before_rotation",
+                payment_status="paid",
+                credits=old_pack_size,
+                created=CREDIT_OLD_PRICE_CREATED + 100,
+            )
+            _install_credit_provider_contract(
+                monkeypatch,
+                payload,
+                event_id=event_id,
+                event_type="checkout.session.async_payment_succeeded",
+                line_items=_credit_line_items(
+                    price_id=CREDIT_OLD_PRICE_ID,
+                    price_created=CREDIT_OLD_PRICE_CREATED,
+                    price_active=False,
+                    credits=old_pack_size,
+                    product_credits=CREDIT_PACK_SIZE,
+                ),
+            )
+
+            result = await handle_stripe_webhook(
+                event_id,
+                "checkout.session.async_payment_succeeded",
+                payload,
+                db,
+            )
+
+            await db.refresh(user)
+            ledger_count = await db.scalar(
+                select(func.count()).select_from(CreditLedger)
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+            assert result["status"] == "processed"
+            assert user.credits == old_pack_size
+            assert ledger_count == 1
+            assert event is not None and event.status == "processed"
 
 
 @pytest.mark.asyncio
