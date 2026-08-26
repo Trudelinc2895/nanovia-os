@@ -1402,27 +1402,22 @@ async def handle_checkout_completed(
             raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
         await fulfill_credit_checkout(prepared_credit, db, commit=commit)
         return
-    else:
-        customer_id = session.get("customer")
-        user_id_str = session.get("client_reference_id")
+
+    customer_id = session.get("customer")
+    user_id_str = session.get("client_reference_id")
     if not customer_id or not user_id_str:
         logger.warning("[billing] checkout.session.completed missing customer or client_reference_id")
         return
 
-    if not credit_checkout:
-        try:
-            user_id = uuid.UUID(user_id_str)
-        except ValueError:
-            logger.error(f"[billing] Invalid client_reference_id: {user_id_str}")
-            return
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except ValueError:
+        logger.error(f"[billing] Invalid client_reference_id: {user_id_str}")
+        return
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
-        if credit_checkout:
-            raise CreditFulfillmentRejected(
-                "Credit Checkout durable local owner does not exist"
-            )
         logger.error(f"[billing] No user for id={user_id_str}")
         return
 

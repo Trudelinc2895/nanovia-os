@@ -305,6 +305,41 @@ async def test_module_activation_helper_fails_closed():
 
 
 @pytest.mark.asyncio
+async def test_non_credit_checkout_missing_owner_never_fulfills_credits(monkeypatch):
+    from api.services import billing_service
+
+    credit_fulfillment = AsyncMock()
+    monkeypatch.setattr(
+        billing_service,
+        "fulfill_credit_checkout",
+        credit_fulfillment,
+    )
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.add = MagicMock()
+
+    await billing_service.handle_checkout_completed(
+        {
+            "id": "cs_non_credit_missing_owner",
+            "mode": "subscription",
+            "customer": "cus_non_credit_missing_owner",
+            "client_reference_id": str(uuid.uuid4()),
+            "metadata": {},
+        },
+        db,
+        commit=False,
+    )
+
+    credit_fulfillment.assert_not_awaited()
+    db.execute.assert_awaited_once()
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+    db.flush.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("case", "payload"),
     [
