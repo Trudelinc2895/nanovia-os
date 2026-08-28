@@ -45,8 +45,10 @@ from api.services import (
 )
 from api.services.billing_service import (
     WEBHOOK_CLAIMED,
+    WEBHOOK_DUPLICATE,
     WEBHOOK_IN_PROGRESS,
     claim_webhook_event,
+    claim_webhook_replay,
 )
 from api.services.pilot_stripe_contract_service import (
     PILOT_CONTRACT_MARKER,
@@ -97,6 +99,7 @@ def _previous_pilot_contract_json(
 @pytest.fixture(autouse=True)
 def _pilot_settings(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "test")
+    monkeypatch.setattr(settings, "PUBLIC_WEB_URL", "https://nanovia.invalid")
     monkeypatch.setattr(settings, "STRIPE_ACCOUNT_ID", ACCOUNT_ID)
     monkeypatch.setattr(settings, "STRIPE_PILOT_PAYMENT_LINK_ID", PAYMENT_LINK_ID)
     monkeypatch.setattr(
@@ -1698,11 +1701,100 @@ async def test_terminal_refund_update_is_consumed_once_without_reactivation(
             assert duplicate["status"] == "duplicate"
             assert payment.status == "paid"
             assert pilot_request.status == "paid"
-            assert payment.payment_status == f"refund_{provider_status}"
+            assert payment.payment_status == "paid"
             assert payment.stripe_event_id == event_id
             assert event is not None and event.status == "processed"
             assert event.attempt_count == 1
             verifier.assert_awaited_once()
+
+            config = pilot_stripe_contract_service.load_pilot_stripe_config()
+            monkeypatch.setattr(
+                billing_router,
+                "_retrieve_pilot_checkout_session",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        request_id=pilot_request.id,
+                        payment_intent_id=payment.stripe_payment_intent_id,
+                        config=config,
+                        paid=True,
+                    )
+                ),
+            )
+            confirmation = await billing_router.get_pilot_confirmation(
+                db,
+                session_id=payment.stripe_checkout_session_id,
+            )
+            assert confirmation.status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_admin_replay_claim_rejects_a_concurrently_finalized_event(
+    tmp_path,
+):
+    async with _isolated_database(tmp_path, "admin_replay_race") as sessions:
+        event_id = "evt_admin_replay_race"
+        event_type = "invoice.payment_succeeded"
+        async with sessions() as db:
+            db.add(
+                WebhookEvent(
+                    stripe_event_id=event_id,
+                    event_type=event_type,
+                    status="processed",
+                    attempt_count=2,
+                    error=None,
+                )
+            )
+            await db.commit()
+
+            claim_status = await claim_webhook_replay(
+                event_id,
+                event_type,
+                "retryable_failure",
+                False,
+                db,
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+
+            assert claim_status == WEBHOOK_DUPLICATE
+            assert event is not None
+            assert event.status == "processed"
+            assert event.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_marker_never_overwrites_a_concurrently_finalized_event(
+    tmp_path,
+):
+    async with _isolated_database(tmp_path, "retry_marker_race") as sessions:
+        event_id = "evt_retry_marker_race"
+        async with sessions() as db:
+            db.add(
+                WebhookEvent(
+                    stripe_event_id=event_id,
+                    event_type="invoice.payment_succeeded",
+                    status="processed",
+                    attempt_count=2,
+                    error=None,
+                )
+            )
+            await db.commit()
+
+            await billing_service.mark_webhook_retryable_failure(
+                event_id,
+                "invoice.payment_succeeded",
+                "stale replay failure",
+                db,
+            )
+            event = await db.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+
+            assert event is not None
+            assert event.status == "processed"
+            assert event.error is None
+            assert event.attempt_count == 2
 
 
 @pytest.mark.asyncio
@@ -1848,7 +1940,7 @@ async def test_terminal_refund_update_retries_after_atomic_finalization_failure(
             assert duplicate["status"] == "duplicate"
             assert payment.status == "paid"
             assert pilot_request.status == "paid"
-            assert payment.payment_status == "refund_failed"
+            assert payment.payment_status == "paid"
             assert payment.stripe_event_id == event_id
             assert event.status == "processed"
             assert event.attempt_count == 2
@@ -2764,12 +2856,17 @@ async def test_admin_credit_reprocess_prepares_before_mutation_and_retries_once(
             db,
         )
 
+    async def claim_replay(*args, **kwargs):
+        operation_order.append("processing")
+        return await billing_service.claim_webhook_replay(*args, **kwargs)
+
     monkeypatch.setattr(
         credit_service,
         "_sync_workspace_credit_projection",
         AsyncMock(),
     )
     monkeypatch.setattr(admin_router, "prepare_stripe_event", prepare_event)
+    monkeypatch.setattr(admin_router, "claim_webhook_replay", claim_replay)
     monkeypatch.setattr(admin_router, "update_webhook_status", update_status)
     async with _isolated_legacy_database(tmp_path, "admin_credit_reprocess") as sessions:
         user_id = uuid.uuid4()

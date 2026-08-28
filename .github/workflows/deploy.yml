@@ -453,6 +453,8 @@ jobs:
           REAL_COMPOSE_WORKING_DIR="$(realpath "${COMPOSE_WORKING_DIR}")"
           [ "${REAL_COMPOSE_WORKING_DIR}" = "${COMPOSE_WORKING_DIR}" ] \
             || fail "COMPOSE_WORKING_DIR is not its canonical real path"
+          [ "${REAL_COMPOSE_WORKING_DIR}" = "${REAL_DEPLOY_PATH}/infra" ] \
+            || fail "COMPOSE_WORKING_DIR must be the selected checkout's infra directory"
 
           cd "${DEPLOY_PATH}"
           [ -z "$(git status --porcelain --untracked-files=all)" ] || {

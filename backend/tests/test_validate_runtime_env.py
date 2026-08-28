@@ -298,6 +298,7 @@ def _runtime_accepts_payment_link_url(value: str, *, app_env: str) -> bool:
         STRIPE_PILOT_PRICE_ID="price_ABC123",
         STRIPE_PILOT_PAYMENT_LINK_ID="plink_ABC123",
         STRIPE_PILOT_PAYMENT_LINK_URL=value,
+        PUBLIC_WEB_URL="https://nanovia.invalid",
     )
     try:
         load_pilot_stripe_config(settings)

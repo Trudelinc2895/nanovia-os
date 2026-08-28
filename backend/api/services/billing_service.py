@@ -255,6 +255,43 @@ def _is_module_subscription(stripe_sub: dict[str, Any]) -> bool:
     )
 
 
+def _validated_module_subscription_slug(stripe_sub: dict[str, Any]) -> str:
+    """Validate a legacy module subscription entirely from signed Stripe data."""
+    metadata = stripe_sub.get("metadata") or {}
+    module_slug = canonicalize_module_slug(metadata.get("module"))
+    price_id = _stripe_subscription_price_id(stripe_sub)
+    price_module = price_id_to_module(price_id)
+    items = stripe_sub.get("items", {}).get("data", [])
+    if metadata.get("type") != "module" or not module_slug:
+        raise UnsupportedFulfillmentError("Module subscription metadata is invalid")
+    try:
+        uuid.UUID(str(metadata.get("user_id") or ""))
+    except ValueError as exc:
+        raise UnsupportedFulfillmentError(
+            "Module subscription owner metadata is invalid"
+        ) from exc
+    if price_module != module_slug or len(items) != 1:
+        raise UnsupportedFulfillmentError("Module subscription price is not authorized")
+
+    item = items[0]
+    price = item.get("price") or {}
+    module_config = MODULES_CONFIG[module_slug]
+    expected_livemode = settings.APP_ENV == "production"
+    if (
+        item.get("quantity") != 1
+        or _stripe_object_id(price) != module_config.get("stripe_price_id")
+        or price.get("type") != "recurring"
+        or (price.get("recurring") or {}).get("interval") != "month"
+        or str(price.get("currency") or "").lower() != "usd"
+        or price.get("unit_amount") != module_config["price_usd"] * 100
+        or bool(stripe_sub.get("livemode")) != expected_livemode
+        or not str(stripe_sub.get("id") or "").startswith("sub_")
+        or not str(stripe_sub.get("customer") or "").startswith("cus_")
+    ):
+        raise UnsupportedFulfillmentError("Module subscription contract is invalid")
+    return module_slug
+
+
 # ─── Feature gating ───────────────────────────────────────────────────────────
 
 # Maps each feature flag to the minimum plan required (in upgrade order)
@@ -480,42 +517,31 @@ async def sync_subscription_from_stripe(
 
 async def sync_module_subscription_from_stripe(
     stripe_sub: dict[str, Any],
-    module_slug: str,
     db: AsyncSession,
     *,
     commit: bool = True,
 ) -> None:
     """Upsert module access from a Stripe subscription without mutating User.plan."""
-    if not is_automated_fulfillment_supported("module"):
-        raise UnsupportedFulfillmentError(
-            "Automatic module subscription fulfillment is disabled"
-        )
     from api.models.user_module import UserModule
 
-    raw_module_identifier = module_slug
-    module_slug = canonicalize_module_slug(module_slug)
-    if not module_slug:
-        logger.warning(
-            "[billing] Unknown module identifier %s for Stripe module subscription %s",
-            raw_module_identifier,
-            stripe_sub.get("id"),
-        )
-        return
+    module_slug = _validated_module_subscription_slug(stripe_sub)
 
     stripe_sub_id = stripe_sub["id"]
     stripe_customer_id = stripe_sub["customer"]
     lookup_slugs = get_module_lookup_slugs(module_slug)
 
+    owner_id = uuid.UUID(str((stripe_sub.get("metadata") or {})["user_id"]))
     result = await db.execute(
-        select(User).where(User.stripe_customer_id == stripe_customer_id)
+        select(User).where(
+            User.id == owner_id,
+            User.stripe_customer_id == stripe_customer_id,
+        )
     )
     user = result.scalar_one_or_none()
     if not user:
-        logger.warning(
-            "[billing] No user for Stripe module subscription customer %s",
-            stripe_customer_id,
+        raise UnsupportedFulfillmentError(
+            "Module subscription owner does not match the Stripe customer"
         )
-        return
 
     result = await db.execute(
         select(UserModule).where(
@@ -1591,11 +1617,11 @@ async def process_stripe_event(
         "customer.subscription.deleted",
     ):
         if _is_module_subscription(data):
-            logger.warning(
-                "[billing] Unsupported module subscription event rejected type=%s",
-                event_type,
-            )
-            return "rejected"
+            try:
+                await sync_module_subscription_from_stripe(data, db, commit=False)
+            except UnsupportedFulfillmentError:
+                return "rejected"
+            return "processed"
         await sync_subscription_from_stripe(data, db, commit=False)
         user = await _get_user_by_stripe_customer_id(data.get("customer"), db)
         await _write_audit(
@@ -1853,17 +1879,63 @@ async def claim_webhook_event(
     return await _claim_existing_webhook(existing, event_type, db)
 
 
+async def claim_webhook_replay(
+    event_id: str,
+    event_type: str,
+    expected_status: str,
+    force: bool,
+    db: AsyncSession,
+) -> str:
+    """Atomically claim an operator replay only if its observed state is unchanged."""
+    if expected_status == "processing":
+        return WEBHOOK_IN_PROGRESS
+    if expected_status == "processed" and not force:
+        return WEBHOOK_DUPLICATE
+
+    update_result = await db.execute(
+        sql_update(WebhookEvent)
+        .where(
+            WebhookEvent.stripe_event_id == event_id,
+            WebhookEvent.event_type == event_type,
+            WebhookEvent.status == expected_status,
+        )
+        .values(
+            status="processing",
+            error=None,
+            processed_at=datetime.now(timezone.utc),
+            attempt_count=WebhookEvent.attempt_count + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if update_result.rowcount:
+        await db.flush()
+        return WEBHOOK_CLAIMED
+
+    current_result = await db.execute(
+        select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+    )
+    current = current_result.scalar_one_or_none()
+    if current is not None and current.status == "processing":
+        return WEBHOOK_IN_PROGRESS
+    return WEBHOOK_DUPLICATE
+
+
 async def mark_webhook_retryable_failure(
     event_id: str,
     event_type: str,
     error: str,
     db: AsyncSession,
+    *,
+    expected_statuses: tuple[str, ...] = ("processing", "retryable_failure"),
 ) -> None:
     """Persist a retry marker only after all business changes were rolled back."""
     for attempt in range(2):
         update_result = await db.execute(
             sql_update(WebhookEvent)
-            .where(WebhookEvent.stripe_event_id == event_id)
+            .where(
+                WebhookEvent.stripe_event_id == event_id,
+                WebhookEvent.status.in_(expected_statuses),
+            )
             .values(
                 event_type=event_type,
                 status="retryable_failure",
@@ -1875,6 +1947,15 @@ async def mark_webhook_retryable_failure(
         )
         if update_result.rowcount:
             await db.commit()
+            return
+
+        existing_status = await db.scalar(
+            select(WebhookEvent.status).where(
+                WebhookEvent.stripe_event_id == event_id
+            )
+        )
+        if existing_status is not None:
+            await db.rollback()
             return
 
         try:

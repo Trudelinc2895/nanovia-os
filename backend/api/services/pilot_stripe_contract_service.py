@@ -69,6 +69,7 @@ class PilotStripeConfig:
     price_id: str
     payment_link_id: str
     payment_link_url: str
+    confirmation_url: str
     livemode: bool
     is_current: bool = True
 
@@ -168,6 +169,10 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
         values["STRIPE_PILOT_PAYMENT_LINK_URL"],
         error_message="STRIPE_PILOT_PAYMENT_LINK_URL is invalid",
     )
+    public_web_url = _required_text(settings_obj, "PUBLIC_WEB_URL").rstrip("/")
+    confirmation_url = (
+        f"{public_web_url}/pilot/confirmation?session_id={{CHECKOUT_SESSION_ID}}"
+    )
 
     livemode = getattr(settings_obj, "APP_ENV", "") == "production"
     if livemode and canonical_payment_link_url[3].lstrip("/").startswith("test_"):
@@ -179,6 +184,7 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
         price_id=values["STRIPE_PILOT_PRICE_ID"],
         payment_link_id=values["STRIPE_PILOT_PAYMENT_LINK_ID"],
         payment_link_url=values["STRIPE_PILOT_PAYMENT_LINK_URL"],
+        confirmation_url=confirmation_url,
         livemode=livemode,
     )
 
@@ -255,6 +261,7 @@ def load_authorized_pilot_stripe_configs(
                 price_id=price_id,
                 payment_link_id=payment_link_id,
                 payment_link_url=payment_link_url,
+                confirmation_url=current.confirmation_url,
                 livemode=current.livemode,
                 is_current=False,
             )
@@ -412,6 +419,16 @@ def validate_pilot_provider_contract(
     _require(
         stripe_field(payment_link, "customer_creation") == "always",
         "Pilot Payment Link must create a Stripe Customer",
+    )
+    after_completion = stripe_field(payment_link, "after_completion", {}) or {}
+    _require(
+        stripe_field(after_completion, "type") == "redirect",
+        "Pilot Payment Link must redirect after completion",
+    )
+    redirect = stripe_field(after_completion, "redirect", {}) or {}
+    _require(
+        stripe_field(redirect, "url") == config.confirmation_url,
+        "Pilot Payment Link completion redirect mismatch",
     )
     _validate_contract_metadata(payment_link, "Pilot Payment Link")
     link_items = stripe_list_data(stripe_field(payment_link, "line_items", {}))

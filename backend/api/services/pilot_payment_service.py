@@ -648,7 +648,6 @@ async def process_pilot_reversal_event(
                 )
         else:
             payment.stripe_event_id = event_id
-            payment.payment_status = payment_status
         await db.flush()
         return effective_status
     effective_status = _monotone_pilot_status(

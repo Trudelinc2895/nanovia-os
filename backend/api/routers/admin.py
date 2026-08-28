@@ -36,6 +36,9 @@ from api.models.workspace_billing import CreditBalance, Invoice, Member, UsageEv
 from api.services.billing_service import (
     CREDIT_CHECKOUT_EVENT_TYPES,
     PLANS_CONFIG,
+    WEBHOOK_CLAIMED,
+    WEBHOOK_IN_PROGRESS,
+    claim_webhook_replay,
     dispatch_post_commit_actions,
     get_webhook_event,
     mark_webhook_retryable_failure,
@@ -540,6 +543,7 @@ async def admin_reprocess_webhook(
     safe_event_id = _sanitize_log_value(stripe_event_id)
     safe_admin_id = _sanitize_log_value(str(admin.id))
     stored_event_type = stored_event.event_type
+    stored_event_status = stored_event.status
 
     force = body.force if body else False
     if stored_event.status == "processing":
@@ -564,7 +568,7 @@ async def admin_reprocess_webhook(
             detail="Stored webhook event type does not match Stripe event type",
         )
 
-    post_commit_actions = []
+    preparation_error: Exception | None = None
     try:
         event_payload = stripe_event["data"]["object"]
         prepared_event = await prepare_stripe_event(
@@ -572,7 +576,39 @@ async def admin_reprocess_webhook(
             event_payload,
             event_id=stripe_event_id,
         )
-        await update_webhook_status(stripe_event_id, "processing", None, db)
+    except Exception as exc:
+        await db.rollback()
+        prepared_event = None
+        preparation_error = exc
+
+    try:
+        claim_status = await claim_webhook_replay(
+            stripe_event_id,
+            stored_event_type,
+            stored_event_status,
+            force,
+            db,
+        )
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook replay claim temporarily unavailable",
+        ) from exc
+    if claim_status == WEBHOOK_IN_PROGRESS:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Webhook event is already processing")
+    if claim_status != WEBHOOK_CLAIMED:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Webhook event state changed while preparing the replay",
+        )
+
+    post_commit_actions = []
+    try:
+        if preparation_error is not None:
+            raise preparation_error
         final_status = await process_stripe_event(
             stripe_event["type"],
             event_payload,
@@ -589,6 +625,11 @@ async def admin_reprocess_webhook(
                 stored_event_type,
                 str(exc),
                 db,
+                expected_statuses=(
+                    stored_event_status,
+                    "processing",
+                    "retryable_failure",
+                ),
             )
         except Exception:
             await db.rollback()
@@ -629,6 +670,11 @@ async def admin_reprocess_webhook(
                 stored_event_type,
                 str(exc),
                 db,
+                expected_statuses=(
+                    stored_event_status,
+                    "processing",
+                    "retryable_failure",
+                ),
             )
         except Exception:
             await db.rollback()

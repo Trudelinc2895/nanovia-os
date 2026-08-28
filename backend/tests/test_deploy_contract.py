@@ -626,6 +626,21 @@ def test_old_writer_recovery_is_disabled_before_alembic_begins():
     assert workflow.count("trap - EXIT") == 2
 
 
+def test_compose_commands_are_bound_to_the_selected_checkout():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    canonical_compose = workflow.index(
+        'REAL_COMPOSE_WORKING_DIR="$(realpath "${COMPOSE_WORKING_DIR}")"'
+    )
+    checkout_binding = workflow.index(
+        '[ "${REAL_COMPOSE_WORKING_DIR}" = "${REAL_DEPLOY_PATH}/infra" ]'
+    )
+    select_commit = workflow.index('git switch --detach "${DEPLOY_SHA}"')
+    compose_function = workflow.index("compose() {")
+    compose_cd = workflow.index('cd "${REAL_COMPOSE_WORKING_DIR}"', compose_function)
+
+    assert canonical_compose < checkout_binding < select_commit < compose_function < compose_cd
+
+
 def test_alertmanager_renderer_self_test_covers_required_inputs():
     completed = subprocess.run(
         [

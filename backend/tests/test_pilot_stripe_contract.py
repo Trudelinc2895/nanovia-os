@@ -16,6 +16,10 @@ PRODUCT_ID = "prod_pilot"
 PRICE_ID = "price_pilot"
 PAYMENT_LINK_ID = "plink_pilot"
 PAYMENT_LINK_URL = "https://buy.stripe.com/test_pilot"
+PUBLIC_WEB_URL = "https://nanovia.invalid"
+CONFIRMATION_URL = (
+    f"{PUBLIC_WEB_URL}/pilot/confirmation?session_id={{CHECKOUT_SESSION_ID}}"
+)
 PREVIOUS_PRODUCT_ID = "prod_previousPilot"
 PREVIOUS_PRICE_ID = "price_previousPilot"
 PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
@@ -36,6 +40,7 @@ def _settings(monkeypatch):
         PAYMENT_LINK_URL,
     )
     monkeypatch.setattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
+    monkeypatch.setattr(settings, "PUBLIC_WEB_URL", PUBLIC_WEB_URL)
 
 
 def _config_namespace(**overrides):
@@ -47,6 +52,7 @@ def _config_namespace(**overrides):
         "STRIPE_PILOT_PAYMENT_LINK_ID": PAYMENT_LINK_ID,
         "STRIPE_PILOT_PAYMENT_LINK_URL": PAYMENT_LINK_URL,
         "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON": "[]",
+        "PUBLIC_WEB_URL": PUBLIC_WEB_URL,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -109,6 +115,10 @@ def _payment_link() -> dict:
         "allow_promotion_codes": False,
         "automatic_tax": {"enabled": False},
         "customer_creation": "always",
+        "after_completion": {
+            "type": "redirect",
+            "redirect": {"url": CONFIRMATION_URL},
+        },
         "metadata": {"nanovia_contract": contract.PILOT_CONTRACT_MARKER},
         "line_items": {"data": [_catalog_line_item()]},
     }
@@ -299,9 +309,10 @@ def test_authorized_previous_contracts_are_explicit_complete_and_distinct():
         account_id=ACCOUNT_ID,
         product_id=PREVIOUS_PRODUCT_ID,
         price_id=PREVIOUS_PRICE_ID,
-        payment_link_id=PREVIOUS_PAYMENT_LINK_ID,
-        payment_link_url=PREVIOUS_PAYMENT_LINK_URL,
-        livemode=False,
+            payment_link_id=PREVIOUS_PAYMENT_LINK_ID,
+            payment_link_url=PREVIOUS_PAYMENT_LINK_URL,
+            confirmation_url=CONFIRMATION_URL,
+            livemode=False,
         is_current=False,
     )
 
@@ -448,6 +459,8 @@ async def test_foreign_or_temporarily_unverifiable_historical_contract_fails_clo
         ("link", "allow_promotion_codes", True),
         ("link", "automatic_tax.enabled", True),
         ("link", "customer_creation", "if_required"),
+        ("link", "after_completion.type", "hosted_confirmation"),
+        ("link", "after_completion.redirect.url", "https://example.invalid/complete"),
         ("link", "metadata.nanovia_contract", "other"),
         ("link", "line_items.data.0.quantity", 2),
         ("link", "line_items.data.0.adjustable_quantity.enabled", True),
