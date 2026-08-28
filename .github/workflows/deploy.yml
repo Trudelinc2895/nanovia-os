@@ -520,8 +520,23 @@ jobs:
               [ "$(git rev-parse HEAD)" = "${PREVIOUS_COMMIT}" ] \
                 || fail "Previous Git checkout was not restored"
               if [ "${WRITERS_STOPPED}" -eq 1 ]; then
-                compose start api ai-orchestrator \
-                  || fail "Unable to restart the previous application writers"
+                # Rebuild the Compose file list from what actually exists in the
+                # checkout we just restored to: the canonical overlay introduced
+                # by this change may not exist yet in the previous commit's tree,
+                # and `docker compose -f <missing file>` fails outright.
+                RECOVERY_COMPOSE_FILES=(-f docker-compose.prod.yml)
+                if [ -f "${REAL_COMPOSE_WORKING_DIR}/docker-compose.canonical-prod.yml" ]; then
+                  RECOVERY_COMPOSE_FILES+=(-f docker-compose.canonical-prod.yml)
+                fi
+                (
+                  cd "${REAL_COMPOSE_WORKING_DIR}"
+                  APP_RUNTIME_ENV_FILE="${ENV_FILE}" \
+                    docker compose \
+                    -p "${COMPOSE_PROJECT_NAME}" \
+                    "${RECOVERY_COMPOSE_FILES[@]}" \
+                    --env-file "${ENV_FILE}" \
+                    start api ai-orchestrator
+                ) || fail "Unable to restart the previous application writers"
               fi
             fi
             exit "${exit_status}"

@@ -524,13 +524,26 @@ async def sync_module_subscription_from_stripe(
     """Upsert module access from a Stripe subscription without mutating User.plan."""
     from api.models.user_module import UserModule
 
-    module_slug = _validated_module_subscription_slug(stripe_sub)
-
     stripe_sub_id = stripe_sub["id"]
     stripe_customer_id = stripe_sub["customer"]
-    lookup_slugs = get_module_lookup_slugs(module_slug)
 
-    owner_id = uuid.UUID(str((stripe_sub.get("metadata") or {})["user_id"]))
+    result = await db.execute(
+        select(UserModule).where(UserModule.stripe_subscription_id == stripe_sub_id)
+    )
+    module_access = result.scalar_one_or_none()
+
+    if module_access is not None:
+        # This subscription was already validated and provisioned once under
+        # this module mapping. Trust it instead of re-deriving the module from
+        # the current Price ID: if that Price was since rotated or retired,
+        # re-validating here would wrongly reject legitimate status updates
+        # (including cancellations), leaving the module active forever.
+        module_slug = module_access.module_slug
+        owner_id = module_access.user_id
+    else:
+        module_slug = _validated_module_subscription_slug(stripe_sub)
+        owner_id = uuid.UUID(str((stripe_sub.get("metadata") or {})["user_id"]))
+
     result = await db.execute(
         select(User).where(
             User.id == owner_id,
@@ -543,20 +556,22 @@ async def sync_module_subscription_from_stripe(
             "Module subscription owner does not match the Stripe customer"
         )
 
-    result = await db.execute(
-        select(UserModule).where(
-            UserModule.user_id == user.id,
-            UserModule.module_slug.in_(lookup_slugs),
-        )
-    )
-    module_access = result.scalar_one_or_none()
     if module_access is None:
-        from api.models.user_module import UserModule as UserModuleModel
+        lookup_slugs = get_module_lookup_slugs(module_slug)
+        result = await db.execute(
+            select(UserModule).where(
+                UserModule.user_id == user.id,
+                UserModule.module_slug.in_(lookup_slugs),
+            )
+        )
+        module_access = result.scalar_one_or_none()
+        if module_access is None:
+            from api.models.user_module import UserModule as UserModuleModel
 
-        module_access = UserModuleModel(user_id=user.id, module_slug=module_slug)
-        db.add(module_access)
-    else:
-        module_access.module_slug = module_slug
+            module_access = UserModuleModel(user_id=user.id, module_slug=module_slug)
+            db.add(module_access)
+        else:
+            module_access.module_slug = module_slug
 
     module_access.stripe_subscription_id = stripe_sub_id
     module_access.stripe_customer_id = stripe_customer_id

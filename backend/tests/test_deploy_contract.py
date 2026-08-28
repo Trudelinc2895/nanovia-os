@@ -399,7 +399,10 @@ def test_validated_runtime_env_is_bound_to_both_application_services():
         'python3 "${RUNTIME_ENV_VALIDATOR}" \\\n'
         '            --env-file "${ENV_FILE}"'
     )
-    binding = workflow.index('APP_RUNTIME_ENV_FILE="${ENV_FILE}"')
+    binding = workflow.index(
+        'APP_RUNTIME_ENV_FILE="${ENV_FILE}"',
+        canonical_env,
+    )
     compose_config = workflow.index("compose config --quiet")
     stop_writers = workflow.index("compose stop api ai-orchestrator")
     migration = workflow.index(
@@ -595,7 +598,7 @@ def test_pre_migration_failure_restores_checkout_before_restarting_old_writers()
         recovery_checkout,
     )
     restart_writers = workflow.index(
-        "compose start api ai-orchestrator",
+        "start api ai-orchestrator",
         recovery_verification,
     )
     recovery_trap = workflow.index("trap restore_pre_migration_state EXIT")
@@ -605,6 +608,24 @@ def test_pre_migration_failure_restores_checkout_before_restarting_old_writers()
     assert previous_commit < recovery < recovery_trap < target_checkout < stop_writers
     assert recovery_checkout < recovery_verification < restart_writers
     assert "|| true" not in workflow[recovery:recovery_trap]
+
+
+def test_pre_migration_failure_recovery_rebuilds_compose_files_from_restored_checkout():
+    """The canonical overlay this change introduces may not exist in the
+    previous commit's tree; the recovery restart must not hard-depend on it."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    recovery = workflow.index("restore_pre_migration_state()")
+    recovery_checkout = workflow.index(
+        'git switch --detach "${PREVIOUS_COMMIT}"',
+        recovery,
+    )
+    conditional_overlay = workflow.index(
+        'if [ -f "${REAL_COMPOSE_WORKING_DIR}/docker-compose.canonical-prod.yml" ]; then',
+        recovery_checkout,
+    )
+    recovery_trap = workflow.index("trap restore_pre_migration_state EXIT")
+    assert recovery_checkout < conditional_overlay < recovery_trap
+    assert "RECOVERY_COMPOSE_FILES=(-f docker-compose.prod.yml)" in workflow[recovery:recovery_trap]
 
 
 def test_old_writer_recovery_is_disabled_before_alembic_begins():

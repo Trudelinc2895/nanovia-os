@@ -259,10 +259,77 @@ async def test_module_subscription_sync_rejects_legacy_module_metadata():
 
 
 @pytest.mark.asyncio
+async def test_module_subscription_cancellation_survives_retired_price():
+    """A module Price rotation/retirement must never block cancelling an
+    already-provisioned subscription for that module.
+
+    Regression test: sync_module_subscription_from_stripe used to re-derive
+    the module from the current Price ID on every event (including
+    cancellations). Once a module's configured Price ID was rotated, the old
+    Price no longer resolved to any module, so `customer.subscription.deleted`
+    for a legacy subscription was rejected and the module stayed active
+    forever even though Stripe had already cancelled it.
+    """
+    from api.services.billing_service import sync_module_subscription_from_stripe
+    from api.models.user_module import UserModule
+
+    user_id = uuid.uuid4()
+    existing_module_access = MagicMock(spec=UserModule)
+    existing_module_access.module_slug = "ghost"
+    existing_module_access.user_id = user_id
+
+    user = MagicMock()
+    user.id = user_id
+    user.stripe_customer_id = "cus_retired_price"
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(existing_module_access),  # lookup by subscription id
+            _ScalarResult(user),  # owner/customer match
+        ]
+    )
+    db.commit = AsyncMock()
+
+    stripe_sub = {
+        "id": "sub_legacy_retired_price",
+        "customer": "cus_retired_price",
+        "status": "canceled",
+        "cancel_at_period_end": False,
+        "current_period_end": None,
+        "metadata": {"type": "module", "module": "ghost"},
+        "items": {
+            "data": [
+                {
+                    "price": {
+                        # This Price ID no longer maps to any module.
+                        "id": "price_retired_and_no_longer_configured",
+                        "recurring": {"interval": "month"},
+                    },
+                    "quantity": 1,
+                }
+            ]
+        },
+        "livemode": False,
+    }
+
+    with patch("api.services.billing_service._write_audit", new=AsyncMock()):
+        await sync_module_subscription_from_stripe(stripe_sub, db)
+
+    assert existing_module_access.status == "canceled"
+    assert existing_module_access.stripe_subscription_id == "sub_legacy_retired_price"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_module_subscription_event_is_rejected_before_fulfillment():
     from api.services.billing_service import process_stripe_event
 
     sync = AsyncMock(side_effect=AssertionError("Unsupported fulfillment ran"))
+    db = AsyncMock()
+    # No prior module row exists for this (fabricated) subscription id, so the
+    # strict initial-provisioning contract check must still run and reject it.
+    db.execute = AsyncMock(return_value=_ScalarResult(None))
     with patch(
         "api.services.billing_service.sync_subscription_from_stripe",
         sync,
@@ -276,7 +343,7 @@ async def test_module_subscription_event_is_rejected_before_fulfillment():
                 "metadata": {"type": "module", "module": "operator"},
                 "items": {"data": []},
             },
-            AsyncMock(),
+            db,
         )
 
     assert status == "rejected"
