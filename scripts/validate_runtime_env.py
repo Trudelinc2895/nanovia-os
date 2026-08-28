@@ -439,12 +439,13 @@ def _validate_production_public_host(values: dict[str, str]) -> list[str]:
     if not public_web_url:
         errors.append("Production PUBLIC_WEB_URL is required")
         return errors
+    parsed = None
+    port = None
     try:
         parsed = urlsplit(public_web_url)
         port = parsed.port
     except ValueError:
         parsed = None
-        port = None
     valid_url = (
         parsed is not None
         and public_web_url == public_web_url.strip()

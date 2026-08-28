@@ -908,6 +908,41 @@ async def test_unconfigured_async_pilot_event_fails_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_paid_checkout_with_differing_billing_email_requires_manual_review(
+    monkeypatch,
+    tmp_path,
+):
+    """A valid, unguessable request reference is authoritative on its own.
+
+    A buyer may legitimately pay with a personal or billing email that
+    differs from the contact-form address. That must not permanently
+    discard the paid checkout as an unresolvable contract error; it must
+    persist a reviewable payment instead.
+    """
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "differing_billing_email") as sessions:
+        async with sessions() as db:
+            pilot_request = await _add_request(db, email="contact-form@example.com")
+            result = await pilot_payment_service.process_pilot_checkout_event(
+                "evt_billing_email_mismatch",
+                "checkout.session.completed",
+                _valid_session(
+                    request_id=pilot_request.id,
+                    email="personal-billing@example.com",
+                ),
+                db,
+            )
+            await db.commit()
+
+            payment = (await db.execute(select(PilotPayment))).scalar_one()
+            assert result == "manual_review"
+            assert payment.pilot_request_id == pilot_request.id
+            assert payment.status == "manual_review"
+            assert payment.customer_email == "personal-billing@example.com"
+            assert pilot_request.status == "manual_review"
+
+
+@pytest.mark.asyncio
 async def test_valid_link_price_and_request_id_persist_paid_payment(
     monkeypatch,
     tmp_path,

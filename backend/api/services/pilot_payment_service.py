@@ -64,18 +64,19 @@ async def _match_request(
     verified: VerifiedPilotCheckout,
     db: AsyncSession,
 ) -> PilotRequest | None:
-    """Resolve only the server-issued UUID and require the paid customer email."""
+    """Resolve the server-issued, unguessable UUID; it is authoritative on its own.
+
+    The Stripe Checkout email is only informational: a buyer may legitimately
+    pay with a personal or billing email that differs from the contact-form
+    address. Requiring an exact match here would silently discard an
+    otherwise valid, paid checkout instead of routing it for manual review.
+    """
     result = await db.execute(
         select(PilotRequest)
         .where(PilotRequest.id == verified.request_id)
         .with_for_update()
     )
-    request = result.scalar_one_or_none()
-    if request is None:
-        return None
-    if request.email.strip().lower() != verified.customer_email:
-        return None
-    return request
+    return result.scalar_one_or_none()
 
 
 async def _find_payment_collisions(
@@ -234,7 +235,7 @@ async def process_pilot_checkout_event(
     request = await _match_request(verified, db)
     if request is None:
         raise PilotStripeContractError(
-            "Pilot Checkout does not match exactly one server-side request"
+            "Pilot Checkout reference does not match any server-side request"
         )
 
     provider_session = verified.session
@@ -269,6 +270,10 @@ async def process_pilot_checkout_event(
         )
 
     target_status = _target_checkout_status(event_type, verified)
+    if request.email.strip().lower() != verified.customer_email:
+        # The reference is authoritative, but a differing paid-with email is
+        # unusual enough to require a human review before granting delivery.
+        target_status = "manual_review"
     if session_payment is not None:
         if session_payment.status in {"manual_review", "failed"} and target_status in {
             "processing",
