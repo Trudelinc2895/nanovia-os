@@ -34,6 +34,17 @@ except Exception:
     _HAS_PROM = False
 
 
+def record_credits_added_metric(source: str, amount: int) -> None:
+    """Increment the credits-added counter.
+
+    Callers that pass ``commit=False`` to :func:`add_credits` must invoke this
+    themselves only after the outer transaction actually commits, so the
+    metric never counts credits that were rolled back.
+    """
+    if _HAS_PROM:
+        _kt_credits_added.labels(source=source).inc(amount)
+
+
 async def _sync_workspace_credit_projection(user: User, db: AsyncSession) -> None:
     """Keep workspace-native credit_balances aligned with the owner ledger balance."""
     from api.core.monetization._workspace import ensure_owner_workspace
@@ -88,10 +99,14 @@ async def add_credits(
     note: str | None = None,
     *,
     commit: bool = True,
+    post_commit_actions: list | None = None,
 ) -> CreditLedger:
     """Add credits and record in ledger. Idempotent when idempotency_key is provided.
 
-    ``commit=False`` lets a transaction orchestrator own the final commit.
+    ``commit=False`` lets a transaction orchestrator own the final commit. In
+    that case, pass ``post_commit_actions`` (the same list the orchestrator
+    dispatches after its commit succeeds) so the credits-added metric is only
+    recorded once the credits are durably committed, never before.
     """
     if amount <= 0:
         raise ValueError(f"add_credits: amount must be positive, got {amount}")
@@ -138,8 +153,22 @@ async def add_credits(
             await db.rollback()
         raise
     logger.info("[credits] +%d for user=%s balance=%d source=%s", amount, user_id, user.credits, source)
-    if _HAS_PROM:
-        _kt_credits_added.labels(source=source).inc(amount)
+    if commit:
+        # Safe to record now: the ledger write above is already durably committed.
+        record_credits_added_metric(source, amount)
+    elif post_commit_actions is not None:
+        async def _record_metric_after_commit(_source: str = source, _amount: int = amount) -> None:
+            record_credits_added_metric(_source, _amount)
+
+        post_commit_actions.append(_record_metric_after_commit)
+    else:
+        logger.warning(
+            "[credits] add_credits(commit=False) called without post_commit_actions; "
+            "skipping credits-added metric for user=%s source=%s to avoid overcounting "
+            "if the outer transaction rolls back",
+            user_id,
+            source,
+        )
     return entry
 
 

@@ -1369,6 +1369,7 @@ async def fulfill_credit_checkout(
     db: AsyncSession,
     *,
     commit: bool = True,
+    post_commit_actions: list[PostCommitAction] | None = None,
 ) -> None:
     """Atomically fulfill one verified credit Checkout Session."""
     if (
@@ -1396,6 +1397,10 @@ async def fulfill_credit_checkout(
     idempotency_key = (
         f"stripe_checkout_{prepared_credit.session_id}_{prepared_credit.credits}"
     )
+    # Always defer the credits-added metric locally: whichever transaction
+    # boundary below actually commits is the only one allowed to record it,
+    # so a rollback (here or in an outer caller) can never overcount it.
+    deferred_metric_actions: list[PostCommitAction] = []
     await add_credits(
         user_id=prepared_credit.user_id,
         amount=prepared_credit.credits,
@@ -1404,6 +1409,7 @@ async def fulfill_credit_checkout(
         idempotency_key=idempotency_key,
         note=f"Credit pack purchased via Stripe checkout {prepared_credit.session_id}",
         commit=False,
+        post_commit_actions=deferred_metric_actions,
     )
     logger.info(
         "[billing] Added %s credits to user %s via ledger",
@@ -1418,8 +1424,13 @@ async def fulfill_credit_checkout(
     )
     if commit:
         await db.commit()
+        # This call owns the transaction and it just committed successfully:
+        # safe to record the metric now.
+        dispatch_post_commit_actions(deferred_metric_actions)
     else:
         await db.flush()
+        if post_commit_actions is not None:
+            post_commit_actions.extend(deferred_metric_actions)
 
 
 async def handle_checkout_completed(
@@ -1428,6 +1439,7 @@ async def handle_checkout_completed(
     *,
     prepared_credit: PreparedCreditCheckout | None = None,
     commit: bool = True,
+    post_commit_actions: list[PostCommitAction] | None = None,
 ) -> None:
     """
     Handle checkout.session.completed:
@@ -1449,7 +1461,12 @@ async def handle_checkout_completed(
     if credit_checkout:
         if prepared_credit is None:
             raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR)
-        await fulfill_credit_checkout(prepared_credit, db, commit=commit)
+        await fulfill_credit_checkout(
+            prepared_credit,
+            db,
+            commit=commit,
+            post_commit_actions=post_commit_actions,
+        )
         return
 
     customer_id = session.get("customer")
@@ -1558,7 +1575,12 @@ async def process_stripe_event(
         if prepared_event.classification != "verified":
             return "rejected"
         try:
-            await fulfill_credit_checkout(prepared_event, db, commit=False)
+            await fulfill_credit_checkout(
+                prepared_event,
+                db,
+                commit=False,
+                post_commit_actions=post_commit_actions,
+            )
         except CreditFulfillmentRejected:
             return "rejected"
         return "processed"
@@ -1606,6 +1628,7 @@ async def process_stripe_event(
                 db,
                 prepared_credit=prepared_credit,
                 commit=False,
+                post_commit_actions=post_commit_actions,
             )
         except CreditFulfillmentRejected:
             return "rejected"
