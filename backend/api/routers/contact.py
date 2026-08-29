@@ -8,6 +8,7 @@ Pilot request endpoint.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from urllib.parse import urlsplit
@@ -22,7 +23,11 @@ from api.models.pilot import PilotRequest
 from api.services.email_service import _send as send_email
 from api.services.pilot_stripe_contract_service import (
     PilotStripeContractError,
+    PilotStripeProviderUnavailable,
     load_pilot_stripe_config,
+    retrieve_pilot_account,
+    retrieve_pilot_payment_link,
+    validate_pilot_provider_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,8 +40,8 @@ def _sanitize_log_value(value: str | None) -> str:
     return (value or "").replace("\n", " ").replace("\r", " ")
 
 
-def _configured_payment_link_url() -> str | None:
-    """Return the configured public Payment Link only when it is safe to expose."""
+async def _configured_payment_link_url() -> str | None:
+    """Expose the current Payment Link only after live provider validation."""
     raw_value = settings.STRIPE_PILOT_PAYMENT_LINK_URL
     value = raw_value.strip()
     if not value or raw_value != value:
@@ -58,6 +63,15 @@ def _configured_payment_link_url() -> str | None:
         or parsed.query
         or parsed.fragment
     ):
+        return None
+
+    try:
+        account, payment_link = await asyncio.gather(
+            retrieve_pilot_account(),
+            retrieve_pilot_payment_link(config.payment_link_id),
+        )
+        validate_pilot_provider_contract(account, payment_link, config)
+    except (PilotStripeContractError, PilotStripeProviderUnavailable):
         return None
     return config.payment_link_url
 
@@ -141,6 +155,10 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
             detail="La demande ne peut pas être enregistrée pour le moment.",
         ) from exc
 
+    # Payment remains disabled unless the live Stripe Account -> Payment Link ->
+    # Price -> Product contract is valid at the moment we would expose checkout.
+    payment_link_url = await _configured_payment_link_url()
+
     safe_name = str(escape(body.name))
     safe_email = str(escape(str(body.email)))
     safe_subject = str(escape(subject_label))
@@ -180,7 +198,7 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
     return {
         "received": True,
         "request_id": request_id,
-        "payment_link_url": _configured_payment_link_url(),
+        "payment_link_url": payment_link_url,
         "notification_sent": delivered,
         "message": "Votre demande a été enregistrée.",
     }
