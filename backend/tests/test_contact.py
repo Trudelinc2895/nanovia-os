@@ -31,6 +31,29 @@ def _configure_pilot(
         monkeypatch.setattr(contact.settings, key, value)
 
 
+def _mock_valid_provider(monkeypatch) -> dict[str, object]:
+    account = object()
+    payment_link = object()
+    observed: dict[str, object] = {}
+
+    async def fake_account():
+        return account
+
+    async def fake_payment_link(payment_link_id: str):
+        observed["payment_link_id"] = payment_link_id
+        return payment_link
+
+    def fake_validate(provider_account, provider_payment_link, config):
+        observed["account"] = provider_account
+        observed["payment_link"] = provider_payment_link
+        observed["config"] = config
+
+    monkeypatch.setattr(contact, "retrieve_pilot_account", fake_account)
+    monkeypatch.setattr(contact, "retrieve_pilot_payment_link", fake_payment_link)
+    monkeypatch.setattr(contact, "validate_pilot_provider_contract", fake_validate)
+    return observed
+
+
 def _request(client_host: str = "127.0.0.1") -> Request:
     return Request({"type": "http", "client": (client_host, 12345)})
 
@@ -68,6 +91,7 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
 
     monkeypatch.setattr(contact, "send_email", fake_send_email)
     _configure_pilot(monkeypatch, payment_link_url=configured_url)
+    provider = _mock_valid_provider(monkeypatch)
     db, engine = await _isolated_session(tmp_path)
     try:
         response = await contact.contact_form(
@@ -86,11 +110,15 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
         assert "<script>" not in sent["html"]
         assert "&lt;script&gt;" in sent["html"]
         assert "127.0.0.1" not in sent["html"]
+        assert provider["payment_link_id"] == "plink_ABC123"
+        assert provider["account"] is not None
+        assert provider["payment_link"] is not None
     finally:
         await db.close()
         await engine.dispose()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "configured_url",
     (
@@ -99,12 +127,17 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
         "https://buy.stripe.com/ABC_123",
     ),
 )
-def test_payment_link_configuration_accepts_canonical_urls(monkeypatch, configured_url):
+async def test_payment_link_configuration_accepts_canonical_urls(
+    monkeypatch,
+    configured_url,
+):
     _configure_pilot(monkeypatch, payment_link_url=configured_url)
+    _mock_valid_provider(monkeypatch)
 
-    assert contact._configured_payment_link_url() == configured_url
+    assert await contact._configured_payment_link_url() == configured_url
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "configured_url",
     (
@@ -126,21 +159,60 @@ def test_payment_link_configuration_accepts_canonical_urls(monkeypatch, configur
         "https://BUY.stripe.com/ABC123",
     ),
 )
-def test_payment_link_configuration_fails_closed(monkeypatch, configured_url):
+async def test_payment_link_configuration_fails_closed(monkeypatch, configured_url):
     _configure_pilot(monkeypatch, payment_link_url=configured_url)
 
-    assert contact._configured_payment_link_url() is None
+    assert await contact._configured_payment_link_url() is None
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("payment_link_id", ("", "plink_bad_id", "payment_link_ABC123"))
-def test_payment_link_configuration_requires_canonical_id(monkeypatch, payment_link_id):
+async def test_payment_link_configuration_requires_canonical_id(
+    monkeypatch,
+    payment_link_id,
+):
     _configure_pilot(
         monkeypatch,
         payment_link_url="https://buy.stripe.com/ABC123",
         payment_link_id=payment_link_id,
     )
 
-    assert contact._configured_payment_link_url() is None
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+async def test_payment_link_is_hidden_when_live_provider_contract_rejects(monkeypatch):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+    )
+    _mock_valid_provider(monkeypatch)
+
+    def reject_contract(*_args, **_kwargs):
+        raise contact.PilotStripeContractError("synthetic provider drift")
+
+    monkeypatch.setattr(contact, "validate_pilot_provider_contract", reject_contract)
+
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+async def test_payment_link_is_hidden_when_provider_is_unavailable(monkeypatch):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+    )
+
+    async def unavailable_account():
+        raise contact.PilotStripeProviderUnavailable("synthetic outage")
+
+    async def fake_payment_link(_payment_link_id: str):
+        return object()
+
+    monkeypatch.setattr(contact, "retrieve_pilot_account", unavailable_account)
+    monkeypatch.setattr(contact, "retrieve_pilot_payment_link", fake_payment_link)
+
+    assert await contact._configured_payment_link_url() is None
 
 
 @pytest.mark.asyncio
@@ -152,7 +224,11 @@ async def test_contact_log_sanitizes_client_address_and_omits_form_content(
     async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
         return True
 
+    async def no_payment_link() -> None:
+        return None
+
     monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
     db, engine = await _isolated_session(tmp_path)
     try:
         with caplog.at_level(logging.INFO, logger=contact.__name__):
@@ -186,7 +262,11 @@ async def test_contact_persists_when_delivery_is_unavailable(monkeypatch, tmp_pa
     async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
         raise RuntimeError("Resend unavailable")
 
+    async def no_payment_link() -> None:
+        return None
+
     monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
     db, engine = await _isolated_session(tmp_path)
     try:
         response = await contact.contact_form(_body(), _request(), db)
