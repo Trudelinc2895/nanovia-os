@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import json
 import re
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit
 
 
 _PLACEHOLDER_TOKENS = ("CHANGE_ME", "REPLACE_ME", "REPLACE_WITH", "GENERATE_WITH")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_CANONICAL_RAW_KEYS = {"DOMAIN", "PUBLIC_WEB_URL"}
+_RESERVED_DOMAIN_LABELS = {"example", "invalid", "localhost", "test"}
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_PILOT_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
+_PRODUCTION_HTTPS_URL_KEYS = (
+    "API_BASE_URL",
+    "PUBLIC_WEB_URL",
+    "PRIVATE_ADMIN_URL",
+)
 _SENSITIVE_PATTERNS = (
     r"(sk|pk|whsec)_[A-Za-z0-9_\.\-]+",
     r"postgres(?:ql)?://[^:]+:[^@]+@",
@@ -18,6 +30,36 @@ _ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("STRIPE_PUBLIC_KEY", "STRIPE_PUBLISHABLE_KEY"),
     ("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
     ("PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS_RAW", "PRIVATE_ORCHESTRATOR_ALLOWED_AGENTS"),
+)
+_PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
+    (
+        "CONTACT_RECIPIENT_EMAIL",
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        "must be a valid email address",
+    ),
+    (
+        "STRIPE_ACCOUNT_ID",
+        r"^acct_[A-Za-z0-9]+$",
+        "must use the acct_... format",
+    ),
+    (
+        "STRIPE_PILOT_PAYMENT_LINK_ID",
+        r"^plink_[A-Za-z0-9]+$",
+        "must use the plink_... format",
+    ),
+    (
+        "STRIPE_PILOT_PRICE_ID",
+        r"^price_[A-Za-z0-9]+$",
+        "must use the price_... format",
+    ),
+    (
+        "STRIPE_PILOT_PRODUCT_ID",
+        r"^prod_[A-Za-z0-9]+$",
+        "must use the prod_... format",
+    ),
+)
+_PILOT_REQUIRED_KEYS = tuple(rule[0] for rule in _PILOT_FORMAT_RULES) + (
+    "STRIPE_PILOT_PAYMENT_LINK_URL",
 )
 _KNOWN_ENV_KEYS = {
     "ACME_EMAIL",
@@ -35,6 +77,7 @@ _KNOWN_ENV_KEYS = {
     "APP_REGION",
     "APP_RUNTIME_ENV_FILE",
     "APP_VERSION",
+    "CONTACT_RECIPIENT_EMAIL",
     "DATABASE_URL",
     "CHAOS_ENABLED",
     "DOMAIN",
@@ -113,7 +156,15 @@ _KNOWN_ENV_KEYS = {
     "STAGING_BIND_ADDRESS",
     "STAGING_WEB_PORT",
     "STRIPE_CREDIT_PACK_SIZE",
+    "STRIPE_CREDIT_CURRENCY",
     "STRIPE_CREDIT_PRICE_ID",
+    "STRIPE_CREDIT_UNIT_AMOUNT",
+    "STRIPE_ACCOUNT_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_ID",
+    "STRIPE_PILOT_PAYMENT_LINK_URL",
+    "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+    "STRIPE_PILOT_PRICE_ID",
+    "STRIPE_PILOT_PRODUCT_ID",
     "STRIPE_PRICE_ADDON_API_PACK",
     "STRIPE_PRICE_ADDON_STORAGE_10GB",
     "STRIPE_PRICE_BUSINESS_MONTHLY_ID",
@@ -155,9 +206,14 @@ def load_env_file(path: Path) -> dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        sanitized_value = re.sub(r"\s+#.*$", "", value).strip()
-        values[key.strip()] = sanitized_value
+        key, value = raw_line.split("=", 1)
+        normalized_key = key.strip()
+        sanitized_value = re.sub(r"\s+#.*$", "", value)
+        values[normalized_key] = (
+            sanitized_value
+            if normalized_key in _CANONICAL_RAW_KEYS
+            else sanitized_value.strip()
+        )
     return values
 
 
@@ -183,6 +239,144 @@ def _validate_known_keys(values: dict[str, str]) -> list[str]:
     return [f"Unknown env key: {key}" for key in sorted(values) if key not in _KNOWN_ENV_KEYS]
 
 
+def _validate_pilot_formats(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    for key, pattern, message in _PILOT_FORMAT_RULES:
+        value = values.get(key, "").strip()
+        if not value or _looks_placeholder(value):
+            continue
+        if re.fullmatch(pattern, value) is None:
+            errors.append(f"{key} {message}")
+    return errors
+
+
+def _validate_pilot_payment_link_url(
+    values: dict[str, str],
+    *,
+    target_env: str,
+) -> list[str]:
+    key = "STRIPE_PILOT_PAYMENT_LINK_URL"
+    raw_value = values.get(key, "")
+    value = raw_value.strip()
+    if not value or _looks_placeholder(value):
+        return []
+    message = f"{key} must use a canonical https://buy.stripe.com/... URL"
+    if raw_value != value:
+        return [message]
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return [message]
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "buy.stripe.com"
+        or parsed.netloc not in {"buy.stripe.com", "buy.stripe.com:443"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or _PILOT_PAYMENT_LINK_PATH.fullmatch(parsed.path) is None
+        or parsed.query
+        or parsed.fragment
+        or (target_env == "production" and parsed.path.lstrip("/").startswith("test_"))
+    ):
+        return [message]
+    return []
+
+
+def _validate_previous_pilot_contracts(
+    values: dict[str, str],
+    *,
+    target_env: str,
+) -> list[str]:
+    key = "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"
+    raw_value = values.get(key, "[]").strip()
+    if not raw_value or _looks_placeholder(raw_value):
+        return []
+    try:
+        contracts = json.loads(raw_value)
+    except (TypeError, ValueError):
+        return [f"{key} must be a valid JSON list"]
+    if not isinstance(contracts, list):
+        return [f"{key} must be a valid JSON list"]
+    expected_keys = {"product_id", "price_id", "payment_link_id", "payment_link_url"}
+    errors: list[str] = []
+    payment_link_ids = {values.get("STRIPE_PILOT_PAYMENT_LINK_ID", "").strip()}
+    payment_link_urls = {values.get("STRIPE_PILOT_PAYMENT_LINK_URL", "").strip()}
+    patterns = {
+        "product_id": r"^prod_[A-Za-z0-9]+$",
+        "price_id": r"^price_[A-Za-z0-9]+$",
+        "payment_link_id": r"^plink_[A-Za-z0-9]+$",
+    }
+    for index, contract_value in enumerate(contracts):
+        label = f"{key}[{index}]"
+        if not isinstance(contract_value, dict) or set(contract_value) != expected_keys:
+            errors.append(f"{label} must contain exactly the Pilot contract keys")
+            continue
+        for field_name, pattern in patterns.items():
+            field_value = contract_value.get(field_name)
+            if not isinstance(field_value, str) or re.fullmatch(pattern, field_value) is None:
+                errors.append(f"{label}.{field_name} has an invalid format")
+        link_id = contract_value.get("payment_link_id")
+        link_url = contract_value.get("payment_link_url")
+        if isinstance(link_id, str):
+            if link_id in payment_link_ids:
+                errors.append(f"{label}.payment_link_id is duplicated")
+            payment_link_ids.add(link_id)
+        url_errors = _validate_pilot_payment_link_url(
+            {"STRIPE_PILOT_PAYMENT_LINK_URL": link_url if isinstance(link_url, str) else ""},
+            target_env=target_env,
+        )
+        if url_errors:
+            errors.append(f"{label}.payment_link_url is invalid")
+        elif isinstance(link_url, str):
+            normalized_url = link_url.replace("buy.stripe.com:443", "buy.stripe.com")
+            normalized_existing = {
+                value.replace("buy.stripe.com:443", "buy.stripe.com")
+                for value in payment_link_urls
+            }
+            if normalized_url in normalized_existing:
+                errors.append(f"{label}.payment_link_url is duplicated")
+            payment_link_urls.add(link_url)
+    return errors
+
+
+def _validate_credit_contract(
+    values: dict[str, str],
+    *,
+    allow_placeholders: bool,
+) -> list[str]:
+    keys = (
+        "STRIPE_CREDIT_PRICE_ID",
+        "STRIPE_CREDIT_PACK_SIZE",
+        "STRIPE_CREDIT_UNIT_AMOUNT",
+        "STRIPE_CREDIT_CURRENCY",
+    )
+    raw_values = {key: values.get(key, "").strip() for key in keys}
+    price_id = raw_values["STRIPE_CREDIT_PRICE_ID"]
+    placeholder_price = _looks_placeholder(price_id) or "..." in price_id
+    if (
+        (not price_id or (allow_placeholders and placeholder_price))
+        and raw_values["STRIPE_CREDIT_UNIT_AMOUNT"] in {"", "0"}
+        and not raw_values["STRIPE_CREDIT_CURRENCY"]
+    ):
+        return []
+
+    errors: list[str] = []
+    if re.fullmatch(r"^price_[A-Za-z0-9]+$", price_id) is None:
+        errors.append("STRIPE_CREDIT_PRICE_ID must use the price_... format")
+    for key in ("STRIPE_CREDIT_PACK_SIZE", "STRIPE_CREDIT_UNIT_AMOUNT"):
+        try:
+            numeric_value = int(raw_values[key])
+        except ValueError:
+            numeric_value = 0
+        if numeric_value <= 0 or str(numeric_value) != raw_values[key]:
+            errors.append(f"{key} must be a positive integer")
+    if re.fullmatch(r"[a-z]{3}", raw_values["STRIPE_CREDIT_CURRENCY"]) is None:
+        errors.append("STRIPE_CREDIT_CURRENCY must be a lowercase ISO currency code")
+    return errors
+
+
 def _validate_alias_conflicts(values: dict[str, str]) -> list[str]:
     errors: list[str] = []
     for aliases in _ALIAS_GROUPS:
@@ -204,6 +398,75 @@ def _validate_http_urlish(values: dict[str, str], key: str, errors: list[str]) -
         return
     if not value.startswith(("http://", "https://")):
         errors.append(f"{key} must start with http:// or https://")
+
+
+def _is_canonical_dns_name(value: str) -> bool:
+    if (
+        not value
+        or value != value.strip()
+        or value != value.lower()
+        or len(value) > 253
+        or value.endswith(".")
+        or any(character.isspace() for character in value)
+        or "*" in value
+        or _looks_placeholder(value)
+    ):
+        return False
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        return False
+    labels = value.split(".")
+    return (
+        len(labels) >= 2
+        and not _RESERVED_DOMAIN_LABELS.intersection(labels)
+        and all(_DNS_LABEL.fullmatch(label) is not None for label in labels)
+    )
+
+
+def _validate_production_public_host(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    domain = values.get("DOMAIN", "")
+    domain_valid = _is_canonical_dns_name(domain)
+    if not domain:
+        errors.append("Production DOMAIN is required")
+    elif not domain_valid:
+        errors.append("Production DOMAIN must be a canonical DNS hostname")
+
+    public_web_url = values.get("PUBLIC_WEB_URL", "")
+    if not public_web_url:
+        errors.append("Production PUBLIC_WEB_URL is required")
+        return errors
+    parsed = None
+    port = None
+    try:
+        parsed = urlsplit(public_web_url)
+        port = parsed.port
+    except ValueError:
+        parsed = None
+    valid_url = (
+        parsed is not None
+        and public_web_url == public_web_url.strip()
+        and not any(character.isspace() for character in public_web_url)
+        and parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and parsed.path == ""
+        and not parsed.query
+        and not parsed.fragment
+        and domain_valid
+        and parsed.hostname == domain
+        and parsed.netloc in {domain, f"{domain}:443"}
+    )
+    if not valid_url:
+        errors.append(
+            "Production PUBLIC_WEB_URL must be the canonical HTTPS URL for DOMAIN"
+        )
+    return errors
 
 
 def _validate_secret_reference(
@@ -276,6 +539,12 @@ def validate_runtime_env(
         return [f"Unsupported target environment: {target_env}"]
 
     errors.extend(_validate_known_keys(values))
+    errors.extend(_validate_pilot_formats(values))
+    errors.extend(_validate_pilot_payment_link_url(values, target_env=target_env))
+    errors.extend(_validate_previous_pilot_contracts(values, target_env=target_env))
+    errors.extend(
+        _validate_credit_contract(values, allow_placeholders=allow_placeholders)
+    )
     errors.extend(_validate_alias_conflicts(values))
 
     app_env = values.get("APP_ENV", "").strip()
@@ -394,6 +663,17 @@ def validate_runtime_env(
             errors.append("Staging refuses live Stripe public keys")
         return errors
 
+    errors.extend(_validate_production_public_host(values))
+
+    if not allow_placeholders:
+        for key in _PILOT_REQUIRED_KEYS:
+            _require_value(
+                errors,
+                values,
+                key,
+                message=f"{key} is required in production",
+            )
+
     if not stripe_secret and not stripe_secret_ref:
         errors.append("Production requires a live Stripe secret key")
     elif not stripe_secret_ref and not allow_placeholders and not stripe_secret.startswith(stripe_live_secret_prefix):
@@ -420,8 +700,15 @@ def validate_runtime_env(
     if "localhost" in origins or "127.0.0.1" in origins:
         errors.append("Production ALLOWED_ORIGINS_RAW cannot include localhost/127.0.0.1")
 
-    for key in ("API_BASE_URL", "PUBLIC_WEB_URL", "PRIVATE_ADMIN_URL"):
-        value = values.get(key, "").strip()
+    for key in _PRODUCTION_HTTPS_URL_KEYS:
+        raw_value = values.get(key, "")
+        value = raw_value.strip()
+        if (
+            value
+            and not _looks_placeholder(value)
+            and (raw_value != value or not value.startswith("https://"))
+        ):
+            errors.append(f"Production {key} must use https://")
         if value and ("localhost" in value or "127.0.0.1" in value):
             errors.append(f"Production {key} cannot include localhost/127.0.0.1")
 

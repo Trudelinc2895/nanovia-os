@@ -1,0 +1,35 @@
+# Canonical production overlay for the existing public Compose project.
+# Every persistent volume is external: Compose must never create a replacement.
+services:
+  caddy:
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required for canonical production}
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:?POSTGRES_VOLUME_NAME is required}
+
+  redis_data:
+    external: true
+    name: ${REDIS_VOLUME_NAME:?REDIS_VOLUME_NAME is required}
+
+  caddy_data:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}_caddy_data
+
+  caddy_config:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}_caddy_config
+
+  grafana_data:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}_grafana_data
+
+  prometheus_data:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}_prometheus_data
+
+  alertmanager_data:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}_alertmanager_data

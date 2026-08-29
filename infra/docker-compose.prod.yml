@@ -19,7 +19,7 @@ services:
       # Host mount so fail2ban on the VPS can read Caddy access logs
       - /var/log/caddy:/var/log/caddy
     environment:
-      DOMAIN: ${DOMAIN:-localhost}
+      DOMAIN: ${DOMAIN:-}
       ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       # Restrict admin.{DOMAIN} to this IP (CIDR). Default = localhost only (fail-closed).
@@ -150,6 +150,9 @@ services:
       retries: 5
     networks: [kt-net]
     cap_drop: ["ALL"]
+    # The official entrypoint repairs data-directory ownership before dropping
+    # from root to postgres. Keep ALL dropped and restore only what that requires.
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
@@ -171,6 +174,9 @@ services:
       retries: 5
     networks: [kt-net]
     cap_drop: ["ALL"]
+    # The official entrypoint repairs /data ownership before dropping from root
+    # to redis. Keep ALL dropped and restore only what that requires.
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 100
     logging:
@@ -204,11 +210,14 @@ services:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
     expose: ["9093"]
+    entrypoint:
+      - /bin/sh
+      - /etc/alertmanager/render-alertmanager-config.sh
     command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
     volumes:
-      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./monitoring/render-alertmanager-config.sh:/etc/alertmanager/render-alertmanager-config.sh:ro
       - alertmanager_data:/alertmanager
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}

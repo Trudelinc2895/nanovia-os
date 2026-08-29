@@ -22,8 +22,8 @@ import logging
 from typing import Annotated
 
 import stripe
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from sqlalchemy import select
 
 from api.config import settings
 from api.core.deps import CurrentUser, DB
@@ -31,7 +31,10 @@ from api.core.monetization import (
     getEntitlements as monetization_get_entitlements,
     getUsageSnapshot as monetization_get_usage_snapshot,
 )
-from api.core.monetization.webhook_handler_service import handle_stripe_webhook
+from api.core.monetization.webhook_handler_service import (
+    WebhookProcessingUnavailable,
+    handle_stripe_webhook,
+)
 from api.core.monetization.pricing_config_service import get_pricing_catalog
 from api.schemas.billing import (
     AddonCheckoutRequest,
@@ -44,22 +47,35 @@ from api.schemas.billing import (
     EntitlementsResponse,
     ModuleCheckoutRequest,
     ModulePublic,
+    PilotConfirmationResponse,
     PlanPublic,
     PortalResponse,
     UsageResponse,
 )
+from api.models.pilot import PilotPayment, PilotRequest
 from api.services.billing_service import (
     ADDONS_CONFIG,
+    CreditFulfillmentUnavailable,
     MODULES_CONFIG,
     PLANS_CONFIG,
-    compute_entitlements,
     get_active_subscription,
     get_or_create_stripe_customer,
     get_upsell_suggestion,
-    has_feature,
+    is_automated_fulfillment_supported,
+    prepare_credit_purchase_contract,
 )
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
+from api.services.pilot_stripe_contract_service import (
+    PILOT_AMOUNT_CENTS,
+    PILOT_CURRENCY,
+    PILOT_WEBHOOK_TOLERANCE_SECONDS,
+    PilotStripeContractError,
+    PilotStripeProviderUnavailable,
+    VerifiedPilotCheckout,
+    find_authorized_pilot_stripe_config,
+    verify_pilot_checkout_session,
+)
 from api.services.usage_service import get_monthly_usage
 
 logger = logging.getLogger(__name__)
@@ -115,6 +131,86 @@ async def list_plans() -> list[PlanPublic]:
     ]
 
 
+async def _retrieve_pilot_checkout_session(
+    session_id: str,
+) -> VerifiedPilotCheckout:
+    """Verify the complete provider-side Pilot contract with bounded calls."""
+    return await verify_pilot_checkout_session(session_id)
+
+
+@router.get(
+    "/pilot/confirmation",
+    response_model=PilotConfirmationResponse,
+)
+async def get_pilot_confirmation(
+    db: DB,
+    session_id: str | None = None,
+) -> PilotConfirmationResponse:
+    """Return a non-sensitive state; this endpoint never provisions Pilot value."""
+    normalized_session_id = (session_id or "").strip()
+    if (
+        not normalized_session_id.startswith("cs_")
+        or not 6 <= len(normalized_session_id) <= 255
+        or not all(
+            character.isalnum() or character == "_"
+            for character in normalized_session_id
+        )
+    ):
+        return PilotConfirmationResponse(status="manual_review")
+
+    payment_result = await db.execute(
+        select(PilotPayment).where(
+            PilotPayment.stripe_checkout_session_id == normalized_session_id
+        )
+    )
+    payment = payment_result.scalar_one_or_none()
+    if payment is None:
+        return PilotConfirmationResponse(status="processing")
+
+    try:
+        config = find_authorized_pilot_stripe_config(payment.stripe_payment_link_id)
+    except PilotStripeContractError:
+        return PilotConfirmationResponse(status="manual_review")
+    if (
+        config is None
+        or payment.pilot_request_id is None
+        or payment.stripe_price_id != config.price_id
+        or payment.currency.lower() != PILOT_CURRENCY
+        or payment.amount_subtotal != PILOT_AMOUNT_CENTS
+        or payment.livemode != config.livemode
+    ):
+        return PilotConfirmationResponse(status="manual_review")
+
+    request_result = await db.execute(
+        select(PilotRequest.id).where(PilotRequest.id == payment.pilot_request_id)
+    )
+    if request_result.scalar_one_or_none() is None:
+        return PilotConfirmationResponse(status="manual_review")
+    if payment.status in {"pending", "processing"}:
+        return PilotConfirmationResponse(status="processing")
+    if payment.status != "paid" or payment.payment_status != "paid":
+        return PilotConfirmationResponse(status="manual_review")
+
+    try:
+        verified = await _retrieve_pilot_checkout_session(normalized_session_id)
+    except PilotStripeContractError:
+        return PilotConfirmationResponse(status="manual_review")
+    except (PilotStripeProviderUnavailable, stripe.error.StripeError):
+        return PilotConfirmationResponse(status="processing")
+    except Exception:
+        logger.warning("[billing] Pilot confirmation provider lookup unavailable")
+        return PilotConfirmationResponse(status="processing")
+
+    if (
+        verified.request_id != payment.pilot_request_id
+        or verified.payment_intent_id != payment.stripe_payment_intent_id
+        or verified.config != config
+        or not verified.paid
+    ):
+        return PilotConfirmationResponse(status="manual_review")
+    return PilotConfirmationResponse(status="confirmed")
+
+
 @router.get("/modules", response_model=list[ModulePublic])
 async def list_modules() -> list[ModulePublic]:
     """Return all available à-la-carte modules with pricing."""
@@ -125,7 +221,10 @@ async def list_modules() -> list[ModulePublic]:
             name=cfg["name"],
             price_usd=cfg["price_usd"],
             description=cfg["description"],
-            available=bool(cfg.get("stripe_price_id")),
+            available=(
+                is_automated_fulfillment_supported("module")
+                and bool(cfg.get("stripe_price_id"))
+            ),
             included_in_plans=cfg["included_in_plans"],
         )
         for cfg in catalog["modules"].values()
@@ -177,7 +276,10 @@ async def get_my_modules(current_user: CurrentUser, db: DB):
             "description": cfg["description"],
             "access": access,
             "source": source,
-            "stripe_price_id_available": bool(cfg.get("stripe_price_id")),
+            "stripe_price_id_available": (
+                is_automated_fulfillment_supported("module")
+                and bool(cfg.get("stripe_price_id"))
+            ),
         })
 
     return {
@@ -317,6 +419,14 @@ async def create_module_checkout_session(
     if not mod_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown module: {body.module}")
 
+    if not is_automated_fulfillment_supported("module"):
+        if _HAS_PROM:
+            _payment_errors.labels(reason="unsupported_module_fulfillment").inc()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Individual module purchases are not currently available.",
+        )
+
     price_id: str | None = mod_cfg.get("stripe_price_id")
     if not price_id:
         if _HAS_PROM:
@@ -381,17 +491,25 @@ async def purchase_credits(
     Create a one-time Stripe Checkout session to purchase credit packs.
     Each pack = STRIPE_CREDIT_PACK_SIZE credits.
     """
-    if not settings.STRIPE_CREDIT_PRICE_ID:
-        raise HTTPException(status_code=503, detail="Credit purchases not configured.")
+    try:
+        credit_contract = await prepare_credit_purchase_contract()
+        customer_id = await get_or_create_stripe_customer(
+            current_user,
+            db,
+            validate_credit_identity=True,
+        )
+    except (CreditFulfillmentUnavailable, stripe.error.StripeError, TimeoutError):
+        raise HTTPException(
+            status_code=503,
+            detail="Credit purchases are temporarily unavailable.",
+        ) from None
 
-    customer_id = await get_or_create_stripe_customer(current_user, db)
     credits_to_add = body.quantity * settings.STRIPE_CREDIT_PACK_SIZE
 
     session = stripe.checkout.Session.create(
         customer=customer_id,
         client_reference_id=str(current_user.id),
-        payment_method_types=["card"],
-        line_items=[{"price": settings.STRIPE_CREDIT_PRICE_ID, "quantity": body.quantity}],
+        line_items=[{"price": credit_contract.price_id, "quantity": body.quantity}],
         mode="payment",
         success_url=settings.STRIPE_CHECKOUT_SUCCESS_URL + f"&credits={credits_to_add}",
         cancel_url=settings.STRIPE_CHECKOUT_CANCEL_URL,
@@ -405,6 +523,8 @@ async def purchase_credits(
 @router.get("/addons", response_model=list[AddonPublic])
 async def list_addons():
     """Return all available add-on packs (API calls, storage, credits)."""
+    if not is_automated_fulfillment_supported("addon"):
+        return []
     return [
         AddonPublic(slug=slug, **{k: v for k, v in cfg.items() if k != "stripe_price_id"})
         for slug, cfg in ADDONS_CONFIG.items()
@@ -422,6 +542,12 @@ async def addon_checkout(body: AddonCheckoutRequest, current_user: CurrentUser, 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown add-on: {body.addon!r}",
+        )
+
+    if not is_automated_fulfillment_supported("addon"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Add-on purchases are not currently available.",
         )
 
     price_id = addon_cfg.get("stripe_price_id")
@@ -471,6 +597,13 @@ async def stripe_webhook(
     """
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+    webhook_secret = (settings.STRIPE_WEBHOOK_SECRET or "").strip()
+    if not webhook_secret.startswith("whsec_"):
+        logger.error("[webhook] Stripe webhook verification is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        )
 
     payload = await request.body()  # raw bytes — must not be parsed first
 
@@ -478,28 +611,43 @@ async def stripe_webhook(
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=stripe_signature,
-            secret=settings.STRIPE_WEBHOOK_SECRET,
+            secret=webhook_secret,
+            tolerance=PILOT_WEBHOOK_TOLERANCE_SECONDS,
         )
     except stripe.error.SignatureVerificationError:
         logger.warning("[webhook] Invalid Stripe signature — rejecting")
         raise HTTPException(status_code=400, detail="Invalid Stripe signature")
-    except Exception as exc:
-        logger.error(f"[webhook] Malformed payload: {exc}")
+    except Exception:
+        logger.error("[webhook] Malformed signed payload")
         raise HTTPException(status_code=400, detail="Malformed payload")
 
     event_id = event["id"]
     event_type = event["type"]
 
-    logger.info(f"[webhook] Processing {event_type} id={event_id}")
+    logger.info("[webhook] Processing %s id=%s", event_type, event_id)
 
     try:
         result = await handle_stripe_webhook(event_id, event_type, event["data"]["object"], db)
-    except Exception as exc:
+    except WebhookProcessingUnavailable as exc:
         logger.exception("[webhook] Error processing %s id=%s: %s", event_type, event_id, exc)
         if _HAS_PROM:
             _webhook_errors.labels(event_type=event_type).inc()
-        # Return 200 to prevent Stripe from retrying non-retriable errors.
-        # For transient DB errors, let it raise (Stripe will retry).
-        return {"received": True, "status": "failed", "type": event_type}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "[webhook] Unexpected processing error %s id=%s: %s",
+            event_type,
+            event_id,
+            exc,
+        )
+        if _HAS_PROM:
+            _webhook_errors.labels(event_type=event_type).inc()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook processing temporarily unavailable",
+        ) from exc
 
     return {"received": True, "status": result["status"], "type": event_type}

@@ -67,6 +67,15 @@ def test_production_accepts_valid_totp_encryption_and_admin_allowlist(monkeypatc
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-prod")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk" + "_live_prod")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "wh" + "sec_prod")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PRODUCT_ID", "prod_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PRICE_ID", "price_test_j20")
+    monkeypatch.setenv("STRIPE_PILOT_PAYMENT_LINK_ID", "plink_test_j20")
+    monkeypatch.setenv(
+        "STRIPE_PILOT_PAYMENT_LINK_URL",
+        "https://buy.stripe.com/test_j20",
+    )
+    monkeypatch.setenv("CONTACT_RECIPIENT_EMAIL", "pilot-test@nanovia.ca")
     monkeypatch.setenv("API_BASE_URL", "https://nanovia.ca")
     monkeypatch.setenv("PUBLIC_WEB_URL", "https://nanovia.ca")
     monkeypatch.setenv("PRIVATE_ADMIN_URL", "https://admin.nanovia.ca")
@@ -131,4 +140,14 @@ def test_scraping_timeout_ms_rejects_fractional_values(monkeypatch):
     monkeypatch.setenv("SCRAPE_TIMEOUT_MS", "15000.5")
 
     with pytest.raises(ValueError, match="SCRAPE_TIMEOUT_MS must be a positive integer"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", ("USD", "us", "usd1", " usd "))
+def test_credit_currency_rejects_noncanonical_values(monkeypatch, value):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_credit_currency.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-minimum-32-chars-long-credit")
+    monkeypatch.setenv("STRIPE_CREDIT_CURRENCY", value)
+
+    with pytest.raises(ValueError, match="STRIPE_CREDIT_CURRENCY"):
         Settings(_env_file=None)

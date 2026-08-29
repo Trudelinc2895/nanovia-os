@@ -1,0 +1,281 @@
+"""Focused tests for the public Nanovia Pro Pilot contact endpoint."""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import pytest
+from fastapi import Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from api.models.pilot import PilotRequest
+from api.routers import contact
+
+
+def _configure_pilot(
+    monkeypatch,
+    *,
+    payment_link_url: str,
+    payment_link_id: str = "plink_ABC123",
+) -> None:
+    values = {
+        "APP_ENV": "production",
+        "STRIPE_ACCOUNT_ID": "acct_ABC123",
+        "STRIPE_PILOT_PRODUCT_ID": "prod_ABC123",
+        "STRIPE_PILOT_PRICE_ID": "price_ABC123",
+        "STRIPE_PILOT_PAYMENT_LINK_ID": payment_link_id,
+        "STRIPE_PILOT_PAYMENT_LINK_URL": payment_link_url,
+    }
+    for key, value in values.items():
+        monkeypatch.setattr(contact.settings, key, value)
+
+
+def _mock_valid_provider(monkeypatch) -> dict[str, object]:
+    account = object()
+    payment_link = object()
+    observed: dict[str, object] = {}
+
+    async def fake_account():
+        return account
+
+    async def fake_payment_link(payment_link_id: str):
+        observed["payment_link_id"] = payment_link_id
+        return payment_link
+
+    def fake_validate(provider_account, provider_payment_link, config):
+        observed["account"] = provider_account
+        observed["payment_link"] = provider_payment_link
+        observed["config"] = config
+
+    monkeypatch.setattr(contact, "retrieve_pilot_account", fake_account)
+    monkeypatch.setattr(contact, "retrieve_pilot_payment_link", fake_payment_link)
+    monkeypatch.setattr(contact, "validate_pilot_provider_contract", fake_validate)
+    return observed
+
+
+def _request(client_host: str = "127.0.0.1") -> Request:
+    return Request({"type": "http", "client": (client_host, 12345)})
+
+
+async def _isolated_session(
+    tmp_path: Path,
+) -> tuple[AsyncSession, object]:
+    database_path = (tmp_path / "contact.db").as_posix()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    async with engine.begin() as connection:
+        await connection.run_sync(PilotRequest.__table__.create)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    return session_factory(), engine
+
+
+def _body(**overrides: str) -> contact.ContactRequest:
+    values = {
+        "name": "Client Pilot",
+        "email": "client@example.com",
+        "subject": "demo",
+        "message": "Une tâche répétitive clairement décrite.",
+    }
+    values.update(overrides)
+    return contact.ContactRequest(**values)
+
+
+@pytest.mark.asyncio
+async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_path):
+    sent: dict[str, str] = {}
+    configured_url = "https://buy.stripe.com/ABC123"
+
+    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
+        sent.update(to=to, subject=subject, html=html)
+        return True
+
+    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
+    provider = _mock_valid_provider(monkeypatch)
+    db, engine = await _isolated_session(tmp_path)
+    try:
+        response = await contact.contact_form(
+            _body(name="Client <script>alert(1)</script>"),
+            _request(),
+            db,
+        )
+        stored = (await db.execute(select(PilotRequest))).scalar_one()
+
+        assert response["received"] is True
+        assert response["request_id"] == str(stored.id)
+        assert response["payment_link_url"] == configured_url
+        assert response["notification_sent"] is True
+        assert stored.notification_status == "sent"
+        assert sent["to"] == contact.settings.CONTACT_RECIPIENT_EMAIL
+        assert "<script>" not in sent["html"]
+        assert "&lt;script&gt;" in sent["html"]
+        assert "127.0.0.1" not in sent["html"]
+        assert provider["payment_link_id"] == "plink_ABC123"
+        assert provider["account"] is not None
+        assert provider["payment_link"] is not None
+    finally:
+        await db.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured_url",
+    (
+        "https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com:443/ABC123",
+        "https://buy.stripe.com/ABC_123",
+    ),
+)
+async def test_payment_link_configuration_accepts_canonical_urls(
+    monkeypatch,
+    configured_url,
+):
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
+    _mock_valid_provider(monkeypatch)
+
+    assert await contact._configured_payment_link_url() == configured_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured_url",
+    (
+        "",
+        "not-a-url",
+        "http://buy.stripe.com/ABC123",
+        "https://buy.stripe.com.evil.example/ABC123",
+        "https://user:password@buy.stripe.com/ABC123",
+        "https://buy.stripe.com:444/ABC123",
+        "https://buy.stripe.com/ABC123?locale=fr",
+        "https://buy.stripe.com/ABC123#fragment",
+        "https://buy.stripe.com/",
+        "https://buy.stripe.com/test_ABC123",
+        " https://buy.stripe.com/ABC123",
+        "https://buy.stripe.com/ABC123 ",
+        "https://buy.stripe.com/ABC%20123",
+        "https://buy.stripe.com/ABC-123",
+        "https://buy.stripe.com/ABC123/extra",
+        "https://BUY.stripe.com/ABC123",
+    ),
+)
+async def test_payment_link_configuration_fails_closed(monkeypatch, configured_url):
+    _configure_pilot(monkeypatch, payment_link_url=configured_url)
+
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payment_link_id", ("", "plink_bad_id", "payment_link_ABC123"))
+async def test_payment_link_configuration_requires_canonical_id(
+    monkeypatch,
+    payment_link_id,
+):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+        payment_link_id=payment_link_id,
+    )
+
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+async def test_payment_link_is_hidden_when_live_provider_contract_rejects(monkeypatch):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+    )
+    _mock_valid_provider(monkeypatch)
+
+    def reject_contract(*_args, **_kwargs):
+        raise contact.PilotStripeContractError("synthetic provider drift")
+
+    monkeypatch.setattr(contact, "validate_pilot_provider_contract", reject_contract)
+
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+async def test_payment_link_is_hidden_when_provider_is_unavailable(monkeypatch):
+    _configure_pilot(
+        monkeypatch,
+        payment_link_url="https://buy.stripe.com/ABC123",
+    )
+
+    async def unavailable_account():
+        raise contact.PilotStripeProviderUnavailable("synthetic outage")
+
+    async def fake_payment_link(_payment_link_id: str):
+        return object()
+
+    monkeypatch.setattr(contact, "retrieve_pilot_account", unavailable_account)
+    monkeypatch.setattr(contact, "retrieve_pilot_payment_link", fake_payment_link)
+
+    assert await contact._configured_payment_link_url() is None
+
+
+@pytest.mark.asyncio
+async def test_contact_log_sanitizes_client_address_and_omits_form_content(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
+        return True
+
+    async def no_payment_link() -> None:
+        return None
+
+    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
+    db, engine = await _isolated_session(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger=contact.__name__):
+            await contact.contact_form(
+                _body(
+                    name="Client\r\nFORGED_NAME",
+                    email="private@example.com",
+                    message="Message légitime.\r\nFORGED_FORM_CONTENT",
+                ),
+                _request("203.0.113.10\r\nFORGED_LOG_RECORD"),
+                db,
+            )
+
+        messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == contact.__name__
+        ]
+        assert len(messages) == 1
+        assert all("\r" not in message and "\n" not in message for message in messages)
+        assert all("private@example.com" not in message for message in messages)
+        assert all("FORGED_NAME" not in message for message in messages)
+        assert all("FORGED_FORM_CONTENT" not in message for message in messages)
+    finally:
+        await db.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_contact_persists_when_delivery_is_unavailable(monkeypatch, tmp_path):
+    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
+        raise RuntimeError("Resend unavailable")
+
+    async def no_payment_link() -> None:
+        return None
+
+    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
+    db, engine = await _isolated_session(tmp_path)
+    try:
+        response = await contact.contact_form(_body(), _request(), db)
+        stored = (await db.execute(select(PilotRequest))).scalar_one()
+
+        assert response["received"] is True
+        assert response["request_id"] == str(stored.id)
+        assert response["notification_sent"] is False
+        assert stored.notification_status == "failed"
+    finally:
+        await db.close()
+        await engine.dispose()

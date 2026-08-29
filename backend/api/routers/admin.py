@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import stripe
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -34,8 +34,15 @@ from api.models.user import User
 from api.models.webhook_event import WebhookEvent
 from api.models.workspace_billing import CreditBalance, Invoice, Member, UsageEvent, Workspace
 from api.services.billing_service import (
+    CREDIT_CHECKOUT_EVENT_TYPES,
     PLANS_CONFIG,
+    WEBHOOK_CLAIMED,
+    WEBHOOK_IN_PROGRESS,
+    claim_webhook_replay,
+    dispatch_post_commit_actions,
     get_webhook_event,
+    mark_webhook_retryable_failure,
+    prepare_stripe_event,
     process_stripe_event,
     update_webhook_status,
 )
@@ -533,6 +540,10 @@ async def admin_reprocess_webhook(
     stored_event = await get_webhook_event(stripe_event_id, db)
     if not stored_event:
         raise HTTPException(status_code=404, detail="Webhook event not found")
+    safe_event_id = _sanitize_log_value(stripe_event_id)
+    safe_admin_id = _sanitize_log_value(str(admin.id))
+    stored_event_type = stored_event.event_type
+    stored_event_status = stored_event.status
 
     force = body.force if body else False
     if stored_event.status == "processing":
@@ -542,6 +553,7 @@ async def admin_reprocess_webhook(
             status_code=409,
             detail="Webhook event already processed; retry with force=true to replay",
         )
+    await db.rollback()
 
     try:
         stripe_event = stripe.Event.retrieve(stripe_event_id)
@@ -550,41 +562,140 @@ async def admin_reprocess_webhook(
 
     if stripe_event["id"] != stripe_event_id:
         raise HTTPException(status_code=502, detail="Stripe returned mismatched event id")
-    if stripe_event["type"] != stored_event.event_type:
+    if stripe_event["type"] != stored_event_type:
         raise HTTPException(
             status_code=409,
             detail="Stored webhook event type does not match Stripe event type",
         )
 
-    await update_webhook_status(stripe_event_id, "processing", None, db)
+    preparation_error: Exception | None = None
+    try:
+        event_payload = stripe_event["data"]["object"]
+        prepared_event = await prepare_stripe_event(
+            stripe_event["type"],
+            event_payload,
+            event_id=stripe_event_id,
+        )
+    except Exception as exc:
+        await db.rollback()
+        prepared_event = None
+        preparation_error = exc
 
     try:
-        final_status = await process_stripe_event(
-            stripe_event["type"],
-            stripe_event["data"]["object"],
+        claim_status = await claim_webhook_replay(
+            stripe_event_id,
+            stored_event_type,
+            stored_event_status,
+            force,
             db,
         )
     except Exception as exc:
-        await update_webhook_status(stripe_event_id, "failed", str(exc), db)
-        logger.exception(
-            "[admin] Webhook reprocess failed event=%s by admin=%s",
-            stripe_event_id,
-            admin.email,
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook replay claim temporarily unavailable",
+        ) from exc
+    if claim_status == WEBHOOK_IN_PROGRESS:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Webhook event is already processing")
+    if claim_status != WEBHOOK_CLAIMED:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Webhook event state changed while preparing the replay",
         )
-        raise HTTPException(status_code=502, detail=f"Webhook reprocess failed: {exc}") from exc
 
-    await update_webhook_status(stripe_event_id, final_status, None, db)
+    post_commit_actions = []
+    try:
+        if preparation_error is not None:
+            raise preparation_error
+        final_status = await process_stripe_event(
+            stripe_event["type"],
+            event_payload,
+            db,
+            event_id=stripe_event_id,
+            prepared_event=prepared_event,
+            post_commit_actions=post_commit_actions,
+        )
+    except Exception as exc:
+        await db.rollback()
+        try:
+            await mark_webhook_retryable_failure(
+                stripe_event_id,
+                stored_event_type,
+                str(exc),
+                db,
+                expected_statuses=(
+                    stored_event_status,
+                    "processing",
+                    "retryable_failure",
+                ),
+            )
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "[admin] Failed to persist retryable webhook state event=%s",
+                safe_event_id,
+            )
+        logger.exception(
+            "[admin] Webhook reprocess failed event=%s by admin_id=%s",
+            safe_event_id,
+            safe_admin_id,
+        )
+        raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
+
+    metadata = event_payload.get("metadata") or {}
+    credit_checkout_event = (
+        stripe_event["type"] in CREDIT_CHECKOUT_EVENT_TYPES
+        and metadata.get("type") == "credits"
+        and not event_payload.get("payment_link")
+    )
+    operational_status = (
+        final_status
+        if final_status in {"ignored", "rejected"}
+        or (
+            credit_checkout_event
+            and final_status in {"pending", "failed"}
+        )
+        else "processed"
+    )
+    try:
+        await update_webhook_status(stripe_event_id, operational_status, None, db)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        try:
+            await mark_webhook_retryable_failure(
+                stripe_event_id,
+                stored_event_type,
+                str(exc),
+                db,
+                expected_statuses=(
+                    stored_event_status,
+                    "processing",
+                    "retryable_failure",
+                ),
+            )
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "[admin] Failed to persist retryable webhook state event=%s",
+                safe_event_id,
+            )
+        raise HTTPException(status_code=503, detail="Webhook reprocess temporarily unavailable") from exc
+
+    dispatch_post_commit_actions(post_commit_actions)
     logger.info(
-        "[admin] Webhook reprocessed event=%s by admin=%s status=%s force=%s",
-        stripe_event_id,
-        admin.email,
+        "[admin] Webhook reprocessed event=%s by admin_id=%s status=%s force=%s",
+        safe_event_id,
+        safe_admin_id,
         final_status,
         force,
     )
     return {
         "status": final_status,
         "stripe_event_id": stripe_event_id,
-        "event_type": stored_event.event_type,
+        "event_type": stored_event_type,
         "forced": force,
     }
 

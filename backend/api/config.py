@@ -114,9 +114,17 @@ class Settings(BaseSettings):
     STRIPE_PRICE_BUSINESS_YEARLY_ID: str = ""
     STRIPE_CREDIT_PRICE_ID: str = ""
     STRIPE_CREDIT_PACK_SIZE: int = Field(default=100, ge=1)
+    STRIPE_CREDIT_UNIT_AMOUNT: int = Field(default=0, ge=0)
+    STRIPE_CREDIT_CURRENCY: str = ""
     STRIPE_PRICE_ADDON_API_PACK: str = ""
     STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""
     STRIPE_PRICE_CREDITS_PACK: str = ""
+    STRIPE_ACCOUNT_ID: str = ""
+    STRIPE_PILOT_PRODUCT_ID: str = ""
+    STRIPE_PILOT_PRICE_ID: str = ""
+    STRIPE_PILOT_PAYMENT_LINK_ID: str = ""
+    STRIPE_PILOT_PAYMENT_LINK_URL: str = ""
+    STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON: str = "[]"
 
     # Per-module à-la-carte prices (optional — set in Stripe dashboard)
     STRIPE_PRICE_MODULE_OPERATOR: str = ""
@@ -141,6 +149,7 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@nanovia.ca"
     RESEND_FROM_NAME: str = "Nanovia OS"
+    CONTACT_RECIPIENT_EMAIL: str = ""
     TELEGRAM_BOT_TOKEN_REF: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
@@ -407,6 +416,19 @@ class Settings(BaseSettings):
         ipaddress.ip_address(v.strip())
         return v.strip()
 
+    @field_validator("STRIPE_CREDIT_CURRENCY")
+    @classmethod
+    def validate_stripe_credit_currency(cls, v: str) -> str:
+        value = v.strip()
+        if value and (
+            v != value
+            or len(value) != 3
+            or not value.isalpha()
+            or value != value.lower()
+        ):
+            raise ValueError("STRIPE_CREDIT_CURRENCY must be a lowercase ISO currency code")
+        return value
+
     @field_validator("ADMIN_ALLOWED_IPS_RAW")
     @classmethod
     def validate_admin_allowed_ips(cls, v: str) -> str:
@@ -452,6 +474,16 @@ class Settings(BaseSettings):
                 errors.append("STRIPE_SECRET_KEY must be a live Stripe key in production")
             if not self.STRIPE_WEBHOOK_SECRET.startswith(stripe_webhook_prefix):
                 errors.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret")
+            for field_name in (
+                "STRIPE_ACCOUNT_ID",
+                "STRIPE_PILOT_PRODUCT_ID",
+                "STRIPE_PILOT_PRICE_ID",
+                "STRIPE_PILOT_PAYMENT_LINK_ID",
+                "STRIPE_PILOT_PAYMENT_LINK_URL",
+                "CONTACT_RECIPIENT_EMAIL",
+            ):
+                if not getattr(self, field_name):
+                    errors.append(f"{field_name} is required in production")
             if not self.ADMIN_ALLOWED_IPS:
                 errors.append("ADMIN_ALLOWED_IPS/ADMIN_ALLOWED_IP is required in production")
             if not self.TOTP_ENCRYPTION_KEY:

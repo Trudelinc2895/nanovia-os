@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-import os
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
-
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_auth.db"
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-minimum-32-chars-long-for-auth-tests"
-os.environ["APP_ENV"] = "development"
-os.environ["ALLOWED_ORIGINS_RAW"] = "http://localhost:3000"
-os.environ["PUBLIC_WEB_URL"] = "http://localhost:3000"
-os.environ["PRIVATE_ADMIN_URL"] = "http://localhost:3020"
-os.environ["API_BASE_URL"] = "http://127.0.0.1:8010"
-os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
 Path("test_auth.db").unlink(missing_ok=True)
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api import main as main_module
@@ -1047,14 +1041,90 @@ def test_admin_webhook_reprocess_persists_failure_state(monkeypatch):
             headers={"Authorization": f"Bearer {access_token}"},
         )
 
-        assert response.status_code == 502, response.text
-        assert "processor exploded" in response.json()["detail"]
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == "Webhook reprocess temporarily unavailable"
         process_event.assert_awaited_once()
 
         with sqlite3.connect("test_auth.db") as conn:
             row = conn.execute(
-                "SELECT status, error FROM webhook_events WHERE stripe_event_id = ?",
+                """
+                SELECT status, error, attempt_count
+                FROM webhook_events
+                WHERE stripe_event_id = ?
+                """,
                 (event_id,),
             ).fetchone()
 
-        assert row == ("failed", "processor exploded")
+        assert row == ("retryable_failure", "processor exploded", 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_phase", ["processing", "commit"])
+async def test_admin_webhook_reprocess_keeps_untrusted_values_on_one_log_line(
+    monkeypatch,
+    caplog,
+    failure_phase,
+):
+    from api.routers import admin as admin_module
+
+    forged_event_id = "evt_safe\r\nFORGED_EVENT_RECORD"
+    forged_admin_id = "admin_safe\nFORGED_ADMIN_RECORD"
+    stored_event = SimpleNamespace(
+        status="failed",
+        event_type="customer.subscription.updated",
+    )
+    db = AsyncMock()
+
+    monkeypatch.setattr(
+        admin_module,
+        "get_webhook_event",
+        AsyncMock(return_value=stored_event),
+    )
+    monkeypatch.setattr(admin_module, "update_webhook_status", AsyncMock())
+    monkeypatch.setattr(
+        admin_module,
+        "mark_webhook_retryable_failure",
+        AsyncMock(side_effect=RuntimeError("retry state unavailable")),
+    )
+    monkeypatch.setattr(
+        admin_module.stripe.Event,
+        "retrieve",
+        lambda requested_id: {
+            "id": requested_id,
+            "type": stored_event.event_type,
+            "data": {"object": {"id": "sub_log_test"}},
+        },
+    )
+
+    if failure_phase == "processing":
+        monkeypatch.setattr(
+            admin_module,
+            "process_stripe_event",
+            AsyncMock(side_effect=RuntimeError("processing failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            admin_module,
+            "process_stripe_event",
+            AsyncMock(return_value="processed"),
+        )
+        db.commit.side_effect = RuntimeError("commit failed")
+
+    with caplog.at_level(logging.ERROR, logger=admin_module.__name__):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_module.admin_reprocess_webhook(
+                forged_event_id,
+                SimpleNamespace(id=forged_admin_id),
+                db,
+            )
+
+    assert exc_info.value.status_code == 503
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == admin_module.__name__
+    ]
+    assert any("Failed to persist retryable webhook state" in message for message in messages)
+    assert messages
+    assert all("\r" not in message and "\n" not in message for message in messages)
+    assert all("by admin=" not in message for message in messages)
