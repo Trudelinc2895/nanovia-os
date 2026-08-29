@@ -11,12 +11,13 @@ updates:
     reviewers: ["Trudelinc2895"]
 
   - package-ecosystem: "npm"
-    directory: "/frontend"
+    directory: "/frontend/client"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
+      time: "03:15"
     open-pull-requests-limit: 5
-    labels: ["dependencies"]
+    labels: ["security", "dependencies"]
+    reviewers: ["Trudelinc2895"]
 
   - package-ecosystem: "docker"
     directory: "/infra"
