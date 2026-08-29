@@ -34,11 +34,17 @@ jobs:
       - name: Refresh lockfile from package.json
         run: npm install --package-lock-only --ignore-scripts
 
+      - name: Apply non-breaking npm audit fixes to lockfile
+        run: npm audit fix --package-lock-only --ignore-scripts || true
+
       - name: Install locked dependencies
         run: npm ci
 
       - name: Build frontend
         run: npm run build
+
+      - name: Report remaining dependency vulnerabilities
+        run: npm audit --audit-level=high || true
 
       - name: Commit refreshed lockfile
         shell: bash
@@ -49,6 +55,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash origin "$GITHUB_REF_NAME"
           git add package-lock.json
           git commit -m "chore(security): refresh frontend lockfile"
-          git push
+          git push origin "HEAD:$GITHUB_REF_NAME"
