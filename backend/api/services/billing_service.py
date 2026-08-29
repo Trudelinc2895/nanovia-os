@@ -1251,7 +1251,8 @@ def validate_credit_checkout_contract(
     price_created = price_contract.created
     product_id = price_contract.product_id
     current_price_id = current_contract.price_id
-    current_currency = current_contract.currency
+    # A delayed Checkout remains bound to its authenticated historical Price
+    # currency even if the current credit catalog has rotated currencies.
     current_unit_amount = current_contract.unit_amount
     current_created = current_contract.created
     current_product_id = current_contract.product_id
@@ -1260,7 +1261,6 @@ def validate_credit_checkout_contract(
     declared_credits = metadata.get("credits")
     if (
         stripe_field(provider_session, "currency") != currency
-        or currency != current_currency
         or amount_subtotal != expected_amount
         or amount_total != expected_amount
         or line_subtotal != expected_amount
