@@ -834,3 +834,83 @@ def test_runtime_env_rejects_partial_or_invalid_credit_contract(
     errors = validate_runtime_env(values, target_env="production")
 
     assert any(expected_key in error for error in errors)
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        "", "not-json", "[]", '{"product_old":25}', '{"prod_Old":0}',
+        '{"prod_Old":-1}', '{"prod_Old":true}', '{"prod_Old":"25"}',
+        '{"prod_Old":1.5}', '{"prod_Old":25,"prod_Old":30}',
+    ],
+)
+def test_invalid_credit_history_is_blocked_by_preflight_and_retryable_at_runtime(
+    monkeypatch, raw_value,
+):
+    from api.config import settings
+    from api.services import billing_service
+
+    values = _complete_production_values()
+    values["STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON"] = raw_value
+    errors = validate_runtime_env(values, target_env="production")
+    assert any("STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON" in error for error in errors)
+
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON", raw_value)
+    with pytest.raises(billing_service.CreditFulfillmentUnavailable):
+        billing_service.load_previous_credit_products()
+
+
+def test_history_configuration_is_accepted_by_preflight_and_runtime(monkeypatch):
+    from api.config import settings
+    from api.services import billing_service
+    from api.services.pilot_stripe_contract_service import load_authorized_pilot_stripe_configs
+
+    values = _complete_production_values()
+    confirmation_url = "https://old.nanovia.invalid/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}"
+    values["STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"] = json.dumps([{
+        "product_id": "prod_Previous123",
+        "price_id": "price_Previous123",
+        "payment_link_id": "plink_Previous123",
+        "payment_link_url": "https://buy.stripe.com/Previous123",
+        "confirmation_url": confirmation_url,
+    }])
+    values["STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON"] = '{"prod_Retired123":25}'
+    assert validate_runtime_env(values, target_env="production") == []
+    configs = load_authorized_pilot_stripe_configs(SimpleNamespace(**values))
+    assert configs[1].confirmation_url == confirmation_url
+    assert configs[0].confirmation_url.startswith("https://nanovia.ca/")
+    monkeypatch.setattr(
+        settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON",
+        values["STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON"],
+    )
+    assert billing_service.load_previous_credit_products() == {"prod_Retired123": 25}
+
+
+@pytest.mark.parametrize(
+    "confirmation_url",
+    [
+        None, "", 123,
+        "http://old.nanovia.invalid/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}",
+        "https://user:pass@old.nanovia.invalid/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}",
+        "https://old.nanovia.invalid:bad/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}",
+        "https://old.nanovia.invalid/pilot/confirmation?session_id=wrong",
+        "https://old.nanovia.invalid/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}#fragment",
+        "https://old.nanovia.invalid/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}\n",
+    ],
+)
+def test_historical_redirect_invalid_values_are_rejected_in_preflight_and_runtime(
+    confirmation_url,
+):
+    from api.services.pilot_stripe_contract_service import load_authorized_pilot_stripe_configs
+
+    values = _complete_production_values()
+    values["STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON"] = json.dumps([{
+        "product_id": "prod_Previous123",
+        "price_id": "price_Previous123",
+        "payment_link_id": "plink_Previous123",
+        "payment_link_url": "https://buy.stripe.com/Previous123",
+        "confirmation_url": confirmation_url,
+    }])
+    errors = validate_runtime_env(values, target_env="production")
+    assert any("confirmation_url" in error for error in errors)
+    with pytest.raises(PilotStripeContractError, match="confirmation_url"):
+        load_authorized_pilot_stripe_configs(SimpleNamespace(**values))

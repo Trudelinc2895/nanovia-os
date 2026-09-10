@@ -39,14 +39,30 @@ Retired Payment Links remain unauthorized by default. Outstanding Sessions may
 be completed only when their former Product, Price, Payment Link ID, and Payment
 Link URL are listed together in the non-secret
 `STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON` registry and the complete provider-side
-contract is verified. Real historical production identifiers remain **NOT
-VERIFIED** and require a separately authorized read-only preflight.
+contract is verified. Before changing `PUBLIC_WEB_URL`, add each retired link's
+exact historical `confirmation_url` to its registry entry, including
+`/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}`. Entries without this
+optional field retain the current-domain behavior for compatibility. The
+historical URL is checked against Stripe; it is not offered for new purchases.
+Real historical production identifiers remain **NOT VERIFIED** and require a
+separately authorized read-only preflight.
 
 Credit purchases remain disabled unless `STRIPE_CREDIT_PRICE_ID`,
 `STRIPE_CREDIT_PACK_SIZE`, `STRIPE_CREDIT_UNIT_AMOUNT`, and
 `STRIPE_CREDIT_CURRENCY` agree exactly with an active provider Price/Product
 carrying `product_key=credit_pack` and the configured credit count on both
 resources. This validation completes before Customer or Checkout creation.
+
+Before rotating a credit Price to another Product, record the old Product in
+`STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON`, a JSON object mapping each retired
+`prod_...` ID to its last verified integer `metadata.credits` value, for example
+`{"prod_RetiredExample":25}` (illustrative only). The default is `{}`.
+Authenticated pending Sessions on those Products remain fulfillable even after
+archival. Credits, currency, amount, and quantity still come from the verified
+historical Price and payment; the Product's recorded metadata must match.
+Unlisted Products and Sessions created outside the existing historical
+timestamp bounds are rejected. Invalid registry configuration remains retryable.
+This registry authorizes fulfillment only and never enables new purchases.
 
 The browser redirect never confirms payment or grants value. A webhook signature
 is verified with a 300-second tolerance, then the event is retrieved from the

@@ -114,6 +114,7 @@ def _pilot_settings(monkeypatch):
     monkeypatch.setattr(settings, "STRIPE_CREDIT_PACK_SIZE", CREDIT_PACK_SIZE)
     monkeypatch.setattr(settings, "STRIPE_CREDIT_UNIT_AMOUNT", CREDIT_UNIT_AMOUNT)
     monkeypatch.setattr(settings, "STRIPE_CREDIT_CURRENCY", "usd")
+    monkeypatch.setattr(settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON", "{}")
     monkeypatch.setattr(settings, "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON", "[]")
     monkeypatch.setattr(
         billing_service,
@@ -2739,9 +2740,11 @@ async def test_legacy_checkout_and_final_status_commit_atomically(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("product_state", ["current", "retired_active", "retired_archived"])
 async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_once(
     monkeypatch,
     tmp_path,
+    product_state,
 ):
     monkeypatch.setattr(
         credit_service,
@@ -2765,15 +2768,25 @@ async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_onc
                 session_id="cs_credit_before_rotation",
                 created=CREDIT_OLD_PRICE_CREATED + 100,
             )
+            line_items = _credit_line_items(
+                price_id=CREDIT_OLD_PRICE_ID,
+                price_created=CREDIT_OLD_PRICE_CREATED,
+                price_active=False,
+            )
+            if product_state != "current":
+                product = line_items["data"][0]["price"]["product"]
+                product["id"] = "prod_previousCredit"
+                product["active"] = product_state == "retired_active"
+                monkeypatch.setitem(
+                    settings.__dict__,
+                    "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON",
+                    json.dumps({"prod_previousCredit": CREDIT_PACK_SIZE}),
+                )
             boundaries = _install_credit_provider_contract(
                 monkeypatch,
                 payload,
                 event_id=event_id,
-                line_items=_credit_line_items(
-                    price_id=CREDIT_OLD_PRICE_ID,
-                    price_created=CREDIT_OLD_PRICE_CREATED,
-                    price_active=False,
-                ),
+                line_items=line_items,
             )
 
             first = await handle_stripe_webhook(
@@ -2813,9 +2826,11 @@ async def test_pre_rotation_credit_checkout_paid_after_rotation_is_fulfilled_onc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("product_rotation", [False, True])
 async def test_delayed_credit_checkout_preserves_pack_size_after_rotation(
     monkeypatch,
     tmp_path,
+    product_rotation,
 ):
     old_pack_size = 10
     event_id = "evt_credit_pack_size_before_rotation"
@@ -2837,18 +2852,31 @@ async def test_delayed_credit_checkout_preserves_pack_size_after_rotation(
                 credits=old_pack_size,
                 created=CREDIT_OLD_PRICE_CREATED + 100,
             )
+            line_items = _credit_line_items(
+                price_id=CREDIT_OLD_PRICE_ID,
+                price_created=CREDIT_OLD_PRICE_CREATED,
+                price_active=False,
+                credits=old_pack_size,
+                product_credits=old_pack_size if product_rotation else CREDIT_PACK_SIZE,
+                product_id="prod_previousCredit" if product_rotation else CREDIT_PRODUCT_ID,
+            )
+            current_price = _credit_price()
+            if product_rotation:
+                line_items["data"][0]["price"]["product"]["active"] = False
+                monkeypatch.setattr(
+                    settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON",
+                    json.dumps({"prod_previousCredit": old_pack_size}),
+                )
+                # The old USD/10-credit Session survives a new CAD/25-credit Product.
+                current_price["currency"] = "cad"
+                monkeypatch.setattr(settings, "STRIPE_CREDIT_CURRENCY", "cad")
             _install_credit_provider_contract(
                 monkeypatch,
                 payload,
                 event_id=event_id,
                 event_type="checkout.session.async_payment_succeeded",
-                line_items=_credit_line_items(
-                    price_id=CREDIT_OLD_PRICE_ID,
-                    price_created=CREDIT_OLD_PRICE_CREATED,
-                    price_active=False,
-                    credits=old_pack_size,
-                    product_credits=CREDIT_PACK_SIZE,
-                ),
+                line_items=line_items,
+                current_price=current_price,
             )
 
             result = await handle_stripe_webhook(
@@ -2869,6 +2897,56 @@ async def test_delayed_credit_checkout_preserves_pack_size_after_rotation(
             assert user.credits == old_pack_size
             assert ledger_count == 1
             assert event is not None and event.status == "processed"
+
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["unlisted", "product_credits", "price_marker", "mode", "active_type",
+     "future_session", "wrong_amount", "wrong_currency"],
+)
+def test_retired_credit_product_drift_never_grants_value(monkeypatch, drift):
+    payload = _legacy_credit_checkout(
+        uuid.uuid4(), session_id="cs_retiredProduct",
+        created=CREDIT_OLD_PRICE_CREATED + 100,
+    )
+    line_items = _credit_line_items(
+        price_id=CREDIT_OLD_PRICE_ID, price_created=CREDIT_OLD_PRICE_CREATED,
+        price_active=False, product_id="prod_previousCredit",
+    )
+    price = line_items["data"][0]["price"]
+    price["product"]["active"] = False
+    registry = {"prod_previousCredit": CREDIT_PACK_SIZE}
+    if drift == "unlisted":
+        registry = {}
+    elif drift == "product_credits":
+        price["product"]["metadata"]["credits"] = str(CREDIT_PACK_SIZE + 1)
+    elif drift == "price_marker":
+        price["metadata"]["product_key"] = "unrelated"
+    elif drift == "mode":
+        price["product"]["livemode"] = True
+    elif drift == "active_type":
+        price["product"]["active"] = None
+    elif drift == "future_session":
+        payload["created"] = CREDIT_CURRENT_PRICE_CREATED + 1
+    elif drift == "wrong_amount":
+        price["unit_amount"] += 1
+    elif drift == "wrong_currency":
+        price["currency"] = "cad"
+    monkeypatch.setattr(
+        settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON", json.dumps(registry),
+    )
+
+    result = billing_service.validate_credit_checkout_contract(
+        payload, event_id="evt_retiredProduct",
+        event_type="checkout.session.completed",
+        provider_event=_credit_event("evt_retiredProduct", payload),
+        provider_session=_credit_provider_session(payload),
+        account=_credit_account(), customer=_credit_customer(payload),
+        line_items_response=line_items, current_price=_credit_price(),
+    )
+
+    assert result.classification == "rejected"
 
 
 @pytest.mark.asyncio

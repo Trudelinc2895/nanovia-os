@@ -189,6 +189,34 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
     )
 
 
+def _historical_confirmation_url(value: Any, *, production: bool) -> str:
+    if not isinstance(value, str) or any(
+        char.isspace() or ord(char) < 32 or char == "\\" for char in value
+    ):
+        raise ValueError("Invalid historical confirmation URL")
+    parsed = urlsplit(value)
+    port = parsed.port
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or not parsed.path.endswith("/pilot/confirmation")
+        or parsed.query != "session_id={CHECKOUT_SESSION_ID}"
+        or port == 0
+        or (
+            parsed.scheme != "https"
+            and not (
+                not production
+                and parsed.scheme == "http"
+                and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            )
+        )
+    ):
+        raise ValueError("Invalid historical confirmation URL")
+    return value
+
+
 _PREVIOUS_CONTRACT_KEYS = frozenset(
     {"product_id", "price_id", "payment_link_id", "payment_link_url"}
 )
@@ -225,8 +253,19 @@ def load_authorized_pilot_stripe_configs(
     }
     for index, value in enumerate(previous_values):
         label = f"STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON[{index}]"
-        if not isinstance(value, dict) or set(value) != _PREVIOUS_CONTRACT_KEYS:
-            raise _contract_error(f"{label} must contain exactly the Pilot contract keys")
+        if not isinstance(value, dict) or set(value) not in (
+            _PREVIOUS_CONTRACT_KEYS,
+            _PREVIOUS_CONTRACT_KEYS | {"confirmation_url"},
+        ):
+            raise _contract_error(f"{label} must contain the Pilot contract keys")
+        confirmation_url = current.confirmation_url
+        if "confirmation_url" in value:
+            try:
+                confirmation_url = _historical_confirmation_url(
+                    value["confirmation_url"], production=current.livemode,
+                )
+            except (TypeError, ValueError) as exc:
+                raise _contract_error(f"{label}.confirmation_url is invalid") from exc
         product_id = value.get("product_id")
         price_id = value.get("price_id")
         payment_link_id = value.get("payment_link_id")
@@ -261,7 +300,7 @@ def load_authorized_pilot_stripe_configs(
                 price_id=price_id,
                 payment_link_id=payment_link_id,
                 payment_link_url=payment_link_url,
-                confirmation_url=current.confirmation_url,
+                confirmation_url=confirmation_url,
                 livemode=current.livemode,
                 is_current=False,
             )

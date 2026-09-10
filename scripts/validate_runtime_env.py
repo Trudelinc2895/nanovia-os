@@ -157,6 +157,7 @@ _KNOWN_ENV_KEYS = {
     "STAGING_WEB_PORT",
     "STRIPE_CREDIT_PACK_SIZE",
     "STRIPE_CREDIT_CURRENCY",
+    "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON",
     "STRIPE_CREDIT_PRICE_ID",
     "STRIPE_CREDIT_UNIT_AMOUNT",
     "STRIPE_ACCOUNT_ID",
@@ -284,6 +285,58 @@ def _validate_pilot_payment_link_url(
     return []
 
 
+def _historical_confirmation_url(value: object, *, production: bool) -> str:
+    if not isinstance(value, str) or any(
+        char.isspace() or ord(char) < 32 or char == "\\" for char in value
+    ):
+        raise ValueError("Invalid historical confirmation URL")
+    parsed = urlsplit(value)
+    port = parsed.port
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or not parsed.path.endswith("/pilot/confirmation")
+        or parsed.query != "session_id={CHECKOUT_SESSION_ID}"
+        or port == 0
+        or (
+            parsed.scheme != "https"
+            and not (
+                not production
+                and parsed.scheme == "http"
+                and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            )
+        )
+    ):
+        raise ValueError("Invalid historical confirmation URL")
+    return value
+
+
+def _validate_previous_credit_products(values: dict[str, str]) -> list[str]:
+    key = "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON"
+
+    def unique_products(pairs):
+        products = dict(pairs)
+        if len(products) != len(pairs):
+            raise ValueError("Duplicate retired credit Product")
+        return products
+
+    try:
+        products = json.loads(values.get(key, "{}"), object_pairs_hook=unique_products)
+        if not isinstance(products, dict) or any(
+            not isinstance(product_id, str)
+            or re.fullmatch(r"prod_[A-Za-z0-9]+", product_id) is None
+            or type(credits) is not int
+            or credits <= 0
+            for product_id, credits in products.items()
+        ):
+            raise ValueError("Invalid retired credit Product registry")
+    except (TypeError, ValueError):
+        return [f"{key} must map unique prod_ IDs to positive integer credit counts"]
+    return []
+
+
 def _validate_previous_pilot_contracts(
     values: dict[str, str],
     *,
@@ -310,9 +363,19 @@ def _validate_previous_pilot_contracts(
     }
     for index, contract_value in enumerate(contracts):
         label = f"{key}[{index}]"
-        if not isinstance(contract_value, dict) or set(contract_value) != expected_keys:
-            errors.append(f"{label} must contain exactly the Pilot contract keys")
+        if not isinstance(contract_value, dict) or set(contract_value) not in (
+            expected_keys, expected_keys | {"confirmation_url"},
+        ):
+            errors.append(f"{label} must contain the Pilot contract keys")
             continue
+        if "confirmation_url" in contract_value:
+            try:
+                _historical_confirmation_url(
+                    contract_value["confirmation_url"],
+                    production=target_env == "production",
+                )
+            except (TypeError, ValueError):
+                errors.append(f"{label}.confirmation_url is invalid")
         for field_name, pattern in patterns.items():
             field_value = contract_value.get(field_name)
             if not isinstance(field_value, str) or re.fullmatch(pattern, field_value) is None:
@@ -542,6 +605,7 @@ def validate_runtime_env(
     errors.extend(_validate_pilot_formats(values))
     errors.extend(_validate_pilot_payment_link_url(values, target_env=target_env))
     errors.extend(_validate_previous_pilot_contracts(values, target_env=target_env))
+    errors.extend(_validate_previous_credit_products(values))
     errors.extend(
         _validate_credit_contract(values, allow_placeholders=allow_placeholders)
     )

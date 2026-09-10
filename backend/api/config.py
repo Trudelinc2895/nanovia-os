@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     STRIPE_CREDIT_PACK_SIZE: int = Field(default=100, ge=1)
     STRIPE_CREDIT_UNIT_AMOUNT: int = Field(default=0, ge=0)
     STRIPE_CREDIT_CURRENCY: str = ""
+    STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON: str = "{}"
     STRIPE_PRICE_ADDON_API_PACK: str = ""
     STRIPE_PRICE_ADDON_STORAGE_10GB: str = ""
     STRIPE_PRICE_CREDITS_PACK: str = ""

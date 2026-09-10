@@ -12,6 +12,7 @@ Single source of truth for all monetization logic:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -1031,6 +1032,33 @@ def _credit_checkout_identity_matches(signed: Any, provider: Any) -> bool:
     return _stripe_metadata(signed) == _stripe_metadata(provider)
 
 
+def load_previous_credit_products() -> dict[str, int]:
+    """Explicit retired Product IDs and their last authorized credit metadata."""
+    def unique_products(pairs):
+        products = dict(pairs)
+        if len(products) != len(pairs):
+            raise ValueError("Duplicate retired credit Product")
+        return products
+
+    try:
+        products = json.loads(
+            settings.STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON,
+            object_pairs_hook=unique_products,
+        )
+        if not isinstance(products, dict) or any(
+            not isinstance(product_id, str)
+            or re.fullmatch(r"prod_[A-Za-z0-9]+", product_id) is None
+            or type(credits) is not int
+            or credits <= 0
+            for product_id, credits in products.items()
+        ):
+            raise ValueError("Invalid retired credit Product registry")
+    except (TypeError, ValueError) as exc:
+        # Configuration errors must remain retryable, never finalize a paid event.
+        raise CreditFulfillmentUnavailable(CREDIT_FULFILLMENT_RETRYABLE_ERROR) from exc
+    return products
+
+
 def validate_credit_catalog_contract(
     value: Any,
     *,
@@ -1040,6 +1068,7 @@ def validate_credit_catalog_contract(
     expected_currency: str | None = None,
     expected_credits_per_unit: int | None = None,
     expected_product_credits_per_unit: int | None = None,
+    allow_inactive_product: bool = False,
 ) -> CreditCatalogContract | None:
     price_id = _stripe_object_id(value)
     created = _exact_positive_int(stripe_field(value, "created"))
@@ -1068,7 +1097,8 @@ def validate_credit_catalog_contract(
         or stripe_field(value, "recurring") is not None
         or not product_id
         or not product_id.startswith("prod_")
-        or stripe_field(product, "active") is not True
+        or not isinstance(stripe_field(product, "active"), bool)
+        or (not allow_inactive_product and stripe_field(product, "active") is not True)
         or stripe_field(product, "livemode") != expected_livemode
         or credits_per_unit is None
         or product_credits_per_unit is None
@@ -1232,11 +1262,22 @@ def validate_credit_checkout_contract(
     quantity = _exact_positive_int(stripe_field(line_item, "quantity"))
     line_subtotal = _exact_positive_int(stripe_field(line_item, "amount_subtotal"))
     line_total = _exact_positive_int(stripe_field(line_item, "amount_total"))
+    product_id = _stripe_object_id(stripe_field(price, "product"))
+    previous_products = load_previous_credit_products()
+    is_previous_product = product_id != current_contract.product_id
+    product_credits = (
+        previous_products.get(product_id)
+        if is_previous_product
+        else current_contract.credits_per_unit
+    )
+    if product_credits is None:
+        return _credit_rejected()
     price_contract = validate_credit_catalog_contract(
         price,
         expected_livemode=expected_livemode,
         require_active=False,
-        expected_product_credits_per_unit=current_contract.credits_per_unit,
+        expected_product_credits_per_unit=product_credits,
+        allow_inactive_product=is_previous_product,
     )
     if (
         price_contract is None
@@ -1249,13 +1290,11 @@ def validate_credit_checkout_contract(
     currency = price_contract.currency
     unit_amount = price_contract.unit_amount
     price_created = price_contract.created
-    product_id = price_contract.product_id
     current_price_id = current_contract.price_id
     # A delayed Checkout remains bound to its authenticated historical Price
     # currency even if the current credit catalog has rotated currencies.
     current_unit_amount = current_contract.unit_amount
     current_created = current_contract.created
-    current_product_id = current_contract.product_id
     expected_amount = unit_amount * quantity
     expected_credits = price_contract.credits_per_unit * quantity
     declared_credits = metadata.get("credits")
@@ -1266,7 +1305,6 @@ def validate_credit_checkout_contract(
         or line_subtotal != expected_amount
         or line_total != expected_amount
         or declared_credits != str(expected_credits)
-        or product_id != current_product_id
         or (price_id == current_price_id and unit_amount != current_unit_amount)
         or price_created > created
         or (price_id != current_price_id and created >= current_created)

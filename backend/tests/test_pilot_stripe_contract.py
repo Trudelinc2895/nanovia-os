@@ -203,7 +203,7 @@ def _set_path(target: dict, path: str, value) -> None:
         current[final] = value
 
 
-def _previous_contract_json() -> str:
+def _previous_contract_json(*, confirmation_url: str | None = None) -> str:
     return json.dumps(
         [
             {
@@ -211,6 +211,10 @@ def _previous_contract_json() -> str:
                 "price_id": PREVIOUS_PRICE_ID,
                 "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
                 "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                **(
+                    {"confirmation_url": confirmation_url}
+                    if confirmation_url is not None else {}
+                ),
             }
         ]
     )
@@ -360,11 +364,18 @@ def test_invalid_previous_pilot_contract_registry_fails_closed(raw_value):
 
 
 @pytest.mark.asyncio
-async def test_previous_contract_session_is_fully_verified_after_rotation(monkeypatch):
+@pytest.mark.parametrize("domain_changed", [False, True])
+async def test_previous_contract_session_is_fully_verified_after_rotation(
+    monkeypatch, domain_changed,
+):
+    if domain_changed:
+        monkeypatch.setattr(settings, "PUBLIC_WEB_URL", "https://new.nanovia.invalid")
     monkeypatch.setattr(
         settings,
         "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
-        _previous_contract_json(),
+        _previous_contract_json(
+            confirmation_url=CONFIRMATION_URL if domain_changed else None,
+        ),
     )
     session = _session()
     session["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
@@ -408,6 +419,15 @@ async def test_previous_contract_session_is_fully_verified_after_rotation(monkey
     assert verified.config.payment_link_id == PREVIOUS_PAYMENT_LINK_ID
     assert verified.config.price_id == PREVIOUS_PRICE_ID
     assert verified.config.product_id == PREVIOUS_PRODUCT_ID
+    assert verified.config.confirmation_url == CONFIRMATION_URL
+    if domain_changed:
+        current_config = contract.load_pilot_stripe_config()
+        assert current_config.confirmation_url.startswith("https://new.nanovia.invalid/")
+        payment_link["after_completion"]["redirect"]["url"] = current_config.confirmation_url
+        with pytest.raises(contract.PilotStripeContractError, match="redirect mismatch"):
+            contract.validate_pilot_provider_contract(
+                _account(), payment_link, verified.config,
+            )
     boundaries["retrieve_pilot_payment_link"].assert_awaited_once_with(
         PREVIOUS_PAYMENT_LINK_ID
     )
