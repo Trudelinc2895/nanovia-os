@@ -376,6 +376,13 @@ _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
     "/api/v1/auth/reset-password": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
     "/api/v1/auth/refresh": {"scope": "ip", "limit": 20, "window": 60, "bucket": "refresh"},
     "/api/v1/auth/resend-verification": {"scope": "ip", "limit": 5, "window": 300, "bucket": "verify"},
+    "/api/v1/contact": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 600,
+        "bucket": "pilot-contact",
+        "detail": "Trop de demandes. Réessaie dans 10 minutes.",
+    },
     # Stricter limits for 2FA — prevents TOTP brute force (6-digit = 1M combos)
     "/api/v1/auth/2fa/verify-login": {
         "scope": "ip",

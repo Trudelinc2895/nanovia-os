@@ -207,6 +207,7 @@ def test_refresh_rate_limit_kicks_in(monkeypatch):
 def test_admin_route_requires_allowed_ip_in_production(monkeypatch):
     previous_env = settings.APP_ENV
     previous_ips_raw = settings.ADMIN_ALLOWED_IPS_RAW
+    previous_owner_email = settings.CONTROL_CENTER_OWNER_EMAIL
 
     fake_redis = _FakeRedis()
 
@@ -221,6 +222,7 @@ def test_admin_route_requires_allowed_ip_in_production(monkeypatch):
         with TestClient(app) as client:
             monkeypatch.setattr(settings, "APP_ENV", "production")
             monkeypatch.setattr(settings, "ADMIN_ALLOWED_IPS_RAW", "203.0.113.10/32")
+            monkeypatch.setattr(settings, "CONTROL_CENTER_OWNER_EMAIL", email)
             register = client.post(
                 "/api/v1/auth/register",
                 json={"email": email, "password": "Password1", "full_name": "Admin Guard"},
@@ -229,7 +231,10 @@ def test_admin_route_requires_allowed_ip_in_production(monkeypatch):
             access_token = register.json()["access_token"]
 
             with sqlite3.connect("test_auth.db") as conn:
-                conn.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
+                conn.execute(
+                    "UPDATE users SET is_admin = 1, totp_enabled = 1 WHERE email = ?",
+                    (email,),
+                )
                 conn.commit()
 
             denied = client.get(
@@ -247,6 +252,7 @@ def test_admin_route_requires_allowed_ip_in_production(monkeypatch):
     finally:
         settings.APP_ENV = previous_env
         settings.ADMIN_ALLOWED_IPS_RAW = previous_ips_raw
+        settings.CONTROL_CENTER_OWNER_EMAIL = previous_owner_email
 
 
 def test_admin_workspace_routes_expose_and_block_workspace(monkeypatch):
@@ -1072,6 +1078,7 @@ async def test_admin_webhook_reprocess_keeps_untrusted_values_on_one_log_line(
     stored_event = SimpleNamespace(
         status="failed",
         event_type="customer.subscription.updated",
+        attempt_count=1,
     )
     db = AsyncMock()
 

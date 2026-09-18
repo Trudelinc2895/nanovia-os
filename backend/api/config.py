@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, EmailStr, Field, TypeAdapter, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from api.core.secret_manager import resolve_secret_value
@@ -36,6 +36,7 @@ RUNTIME_NON_RELOADABLE_AREAS = (
     "OPENAI_*",
     "TELEGRAM_BOT_TOKEN",
     "SCRAPING_*",
+    "CONTROL_CENTER_*",
 )
 
 
@@ -76,6 +77,7 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP"),
     )
+    CONTROL_CENTER_OWNER_EMAIL: str = ""
 
     DATABASE_URL: str
     POSTGRES_DB: str = ""
@@ -440,6 +442,14 @@ class Settings(BaseSettings):
             ipaddress.ip_network(cidr, strict=False)
         return ",".join(items)
 
+    @field_validator("CONTROL_CENTER_OWNER_EMAIL")
+    @classmethod
+    def validate_control_center_owner_email(cls, v: str) -> str:
+        value = v.strip()
+        if not value or _looks_placeholder(value):
+            return ""
+        return str(TypeAdapter(EmailStr).validate_python(value)).casefold()
+
     @field_validator("TOTP_ENCRYPTION_KEY")
     @classmethod
     def validate_totp_encryption_key(cls, v: str) -> str:
@@ -482,6 +492,7 @@ class Settings(BaseSettings):
                 "STRIPE_PILOT_PAYMENT_LINK_ID",
                 "STRIPE_PILOT_PAYMENT_LINK_URL",
                 "CONTACT_RECIPIENT_EMAIL",
+                "CONTROL_CENTER_OWNER_EMAIL",
             ):
                 if not getattr(self, field_name):
                     errors.append(f"{field_name} is required in production")

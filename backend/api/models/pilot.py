@@ -34,11 +34,39 @@ class PilotRequest(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     subject: Mapped[str] = mapped_column(String(50), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    company: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    business_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    repetitive_task: Mapped[str | None] = mapped_column(Text, nullable=True)
+    examples: Mapped[str | None] = mapped_column(Text, nullable=True)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    urgency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    consented_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    routed_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending", index=True
     )
+    fulfillment_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="new", index=True
+    )
     notification_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
+    )
+    client_notification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending"
+    )
+    payment_notification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending"
+    )
+    notification_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    payment_notification_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    last_notification_error: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -51,6 +79,9 @@ class PilotRequest(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+    last_contacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     payments: Mapped[list["PilotPayment"]] = relationship(

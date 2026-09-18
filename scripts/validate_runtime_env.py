@@ -33,6 +33,11 @@ _ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     (
+        "CONTROL_CENTER_OWNER_EMAIL",
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        "must be a valid email address",
+    ),
+    (
         "CONTACT_RECIPIENT_EMAIL",
         r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
         "must be a valid email address",
@@ -58,7 +63,9 @@ _PILOT_FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
         "must use the prod_... format",
     ),
 )
-_PILOT_REQUIRED_KEYS = tuple(rule[0] for rule in _PILOT_FORMAT_RULES) + (
+_PILOT_REQUIRED_KEYS = tuple(
+    rule[0] for rule in _PILOT_FORMAT_RULES if rule[0] != "CONTROL_CENTER_OWNER_EMAIL"
+) + (
     "STRIPE_PILOT_PAYMENT_LINK_URL",
 )
 _KNOWN_ENV_KEYS = {
@@ -78,6 +85,7 @@ _KNOWN_ENV_KEYS = {
     "APP_RUNTIME_ENV_FILE",
     "APP_VERSION",
     "CONTACT_RECIPIENT_EMAIL",
+    "CONTROL_CENTER_OWNER_EMAIL",
     "DATABASE_URL",
     "CHAOS_ENABLED",
     "DOMAIN",
@@ -759,6 +767,9 @@ def validate_runtime_env(
     admin_allowlist = _first_present(values, "ADMIN_ALLOWED_IPS_RAW", "ADMIN_ALLOWED_IPS", "ADMIN_ALLOWED_IP")
     if not admin_allowlist:
         errors.append("Production requires ADMIN_ALLOWED_IPS/ADMIN_ALLOWED_IP to be configured")
+
+    if not values.get("CONTROL_CENTER_OWNER_EMAIL", "").strip():
+        errors.append("Production requires CONTROL_CENTER_OWNER_EMAIL to be configured")
 
     origins = values.get("ALLOWED_ORIGINS_RAW", "")
     if "localhost" in origins or "127.0.0.1" in origins:

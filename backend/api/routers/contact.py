@@ -11,16 +11,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, status
-from markupsafe import escape
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from api.config import settings
 from api.core.deps import DB
 from api.models.pilot import PilotRequest
-from api.services.email_service import _send as send_email
+from api.services.pilot_notification_service import deliver_intake_notifications
 from api.services.pilot_stripe_contract_service import (
     PilotStripeContractError,
     PilotStripeProviderUnavailable,
@@ -88,20 +89,25 @@ SUBJECTS = {
 
 
 class ContactRequest(BaseModel):
-    name: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=2, max_length=100)
+    company: str = Field(min_length=2, max_length=100)
     email: EmailStr
     subject: str
-    message: str
+    message: str = Field(min_length=10, max_length=4000)
+    business_type: str = Field(min_length=2, max_length=120)
+    repetitive_task: str = Field(min_length=10, max_length=700)
+    examples: str = Field(min_length=10, max_length=1200)
+    goal: str = Field(min_length=10, max_length=700)
+    urgency: Literal["faible", "moyen", "eleve", "urgent"]
+    consent: bool
+    company_url: str = Field(default="", max_length=200)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        v = " ".join(v.split())
-        if not v or len(v) < 2:
-            raise ValueError("Le nom doit faire au moins 2 caractères.")
-        if len(v) > 100:
-            raise ValueError("Le nom est trop long.")
-        return v
+        return " ".join(v.split())
 
     @field_validator("subject")
     @classmethod
@@ -110,15 +116,19 @@ class ContactRequest(BaseModel):
             raise ValueError(f"Sujet invalide. Valeurs acceptées: {list(SUBJECTS)}")
         return v
 
-    @field_validator("message")
+    @field_validator("consent")
     @classmethod
-    def validate_message(cls, v: str) -> str:
-        v = v.strip()
-        if not v or len(v) < 10:
-            raise ValueError("Le message doit faire au moins 10 caractères.")
-        if len(v) > 4000:
-            raise ValueError("Le message est trop long (max 4000 chars).")
-        return v
+    def validate_consent(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Le consentement est requis.")
+        return value
+
+    @field_validator("company_url")
+    @classmethod
+    def validate_honeypot(cls, value: str) -> str:
+        if value:
+            raise ValueError("Soumission invalide.")
+        return value
 
 
 @router.post("/contact")
@@ -127,8 +137,6 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
     Persist a Pilot request, then send a non-canonical notification.
     """
     ip = request.client.host if request.client else "unknown"
-    subject_label = SUBJECTS.get(body.subject, body.subject)
-
     logger.info(
         "[contact] New message | subject=%s | ip=%s",
         _sanitize_log_value(body.subject),
@@ -140,8 +148,18 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
         email=str(body.email).strip().lower(),
         subject=body.subject,
         message=body.message,
+        company=body.company,
+        business_type=body.business_type,
+        repetitive_task=body.repetitive_task,
+        examples=body.examples,
+        goal=body.goal,
+        urgency=body.urgency,
+        consented_at=datetime.now(timezone.utc),
         status="pending",
+        fulfillment_status="new",
         notification_status="pending",
+        client_notification_status="pending",
+        payment_notification_status="pending",
     )
     try:
         db.add(pilot_request)
@@ -159,36 +177,13 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
     # Price -> Product contract is valid at the moment we would expose checkout.
     payment_link_url = await _configured_payment_link_url()
 
-    safe_name = str(escape(body.name))
-    safe_email = str(escape(str(body.email)))
-    safe_subject = str(escape(subject_label))
-    safe_message = str(escape(body.message))
-
-    # Escape all visitor-controlled fields before inserting them into HTML.
-    html = f"""
-    <div style="font-family:sans-serif;max-width:600px">
-      <h2>Nouvelle demande — Nanovia Pro Pilot</h2>
-      <table style="width:100%;border-collapse:collapse">
-        <tr><td style="padding:8px;font-weight:bold">Nom</td><td style="padding:8px">{safe_name}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Email</td><td style="padding:8px">{safe_email}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Sujet</td><td style="padding:8px">{safe_subject}</td></tr>
-      </table>
-      <h3>Message:</h3>
-      <div style="background:#f5f5f5;padding:16px;border-radius:6px;white-space:pre-wrap">{safe_message}</div>
-    </div>
-    """
-
     try:
-        delivered = await send_email(
-            to=settings.CONTACT_RECIPIENT_EMAIL,
-            subject=f"[Nanovia Pro Pilot] {subject_label} — {body.name}",
-            html=html,
-        )
+        notification_result = await deliver_intake_notifications(pilot_request)
     except Exception as exc:
-        logger.warning("[contact] Email delivery failed: %s", exc)
-        delivered = False
-
-    pilot_request.notification_status = "sent" if delivered else "failed"
+        logger.warning("[contact] Notification delivery failed: %s", exc)
+        notification_result = {"operator": False, "client": False}
+        pilot_request.notification_status = "failed"
+        pilot_request.client_notification_status = "failed"
     try:
         await db.commit()
     except Exception as exc:
@@ -199,6 +194,7 @@ async def contact_form(body: ContactRequest, request: Request, db: DB):
         "received": True,
         "request_id": request_id,
         "payment_link_url": payment_link_url,
-        "notification_sent": delivered,
+        "notification_sent": notification_result["operator"],
+        "acknowledgement_sent": notification_result["client"],
         "message": "Votre demande a été enregistrée.",
     }

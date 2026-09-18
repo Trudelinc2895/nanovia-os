@@ -4,6 +4,7 @@ backend/api/core/deps.py — FastAPI dependency injection
 from __future__ import annotations
 
 import ipaddress
+import hmac
 import uuid
 from typing import Annotated
 
@@ -195,15 +196,46 @@ def _is_allowed_admin_ip(ip_text: str | None) -> bool:
     return False
 
 
+def is_control_center_owner(user: User) -> bool:
+    """Return true only for the configured human owner identity."""
+    owner_email = settings.CONTROL_CENTER_OWNER_EMAIL.strip().casefold()
+    user_email = (getattr(user, "email", "") or "").strip().casefold()
+    return bool(owner_email and user_email and hmac.compare_digest(user_email, owner_email))
+
+
+def has_control_center_access(user: User) -> bool:
+    """Allow the owner; retain an explicit development-only admin fallback."""
+    if not getattr(user, "is_admin", False):
+        return False
+    if settings.CONTROL_CENTER_OWNER_EMAIL:
+        return is_control_center_owner(user)
+    return settings.APP_ENV != "production"
+
+
 async def get_admin_user(
     user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
 ) -> User:
-    """Require the user to have admin role (is_admin flag)."""
+    """Require the configured owner identity for the private control center."""
     if not getattr(user, "is_admin", False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    if settings.APP_ENV == "production" and not settings.CONTROL_CENTER_OWNER_EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Control center owner is not configured",
+        )
+    if settings.CONTROL_CENTER_OWNER_EMAIL and not is_control_center_owner(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Control center owner approval required",
+        )
+    if settings.APP_ENV == "production" and not getattr(user, "totp_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner 2FA required for control center access",
         )
     if (
         settings.APP_ENV == "production"

@@ -8,6 +8,7 @@ import { isPrivateOrchestratorUiEnabled } from "@/lib/feature-flags";
 import { Badge } from "@/components/ui";
 
 const NAV_ITEMS = [
+  { label: "Pilot", href: "/admin/pilot", icon: "🚀" },
   { label: "Users", href: "/admin/users", icon: "👥" },
   { label: "Webhooks", href: "/admin/webhooks", icon: "🔗" },
   { label: "Metrics", href: "/admin/metrics", icon: "📊" },
@@ -26,7 +27,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     if (!loading) {
       if (!user) {
         router.push("/login");
-      } else if (!user.is_admin) {
+      } else if (!user.control_center_access) {
         router.push("/dashboard");
       }
     }
@@ -40,7 +41,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     );
   }
 
-  if (!user.is_admin) return null;
+  if (!user.control_center_access) return null;
 
   return (
     <div className="min-h-screen bg-bg-base flex">
@@ -86,7 +87,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <span className="text-sm text-text-muted">
               Logged in as <span className="text-primary font-medium">{user.email}</span>
             </span>
-            <Badge variant="info">ADMIN</Badge>
+            <Badge variant="info">
+              {user.is_control_center_owner ? "PROPRIETAIRE" : "ADMIN DEV"}
+            </Badge>
           </div>
         </header>
         <main className="flex-1 p-8">{children}</main>

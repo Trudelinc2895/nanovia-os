@@ -76,6 +76,7 @@ def test_production_accepts_valid_totp_encryption_and_admin_allowlist(monkeypatc
         "https://buy.stripe.com/test_j20",
     )
     monkeypatch.setenv("CONTACT_RECIPIENT_EMAIL", "pilot-test@nanovia.ca")
+    monkeypatch.setenv("CONTROL_CENTER_OWNER_EMAIL", "owner@nanovia.ca")
     monkeypatch.setenv("API_BASE_URL", "https://nanovia.ca")
     monkeypatch.setenv("PUBLIC_WEB_URL", "https://nanovia.ca")
     monkeypatch.setenv("PRIVATE_ADMIN_URL", "https://admin.nanovia.ca")

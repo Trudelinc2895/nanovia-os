@@ -1799,6 +1799,73 @@ async def test_admin_replay_claim_rejects_a_concurrently_finalized_event(
             assert event.attempt_count == 2
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["processing", "status_update"])
+@pytest.mark.parametrize("final_status", ["processed", "ignored", "rejected", "pending", "failed"])
+async def test_admin_failed_replay_cannot_overwrite_a_later_final_result(
+    monkeypatch, tmp_path, failure_stage, final_status,
+):
+    event_id = "evt_adminLateFailure"
+    event_type = "invoice.payment_succeeded"
+    monkeypatch.setattr(
+        admin_router.stripe.Event, "retrieve",
+        lambda _: {"id": event_id, "type": event_type, "data": {"object": {}}},
+    )
+    monkeypatch.setattr(admin_router, "prepare_stripe_event", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        admin_router, "process_stripe_event",
+        AsyncMock(
+            side_effect=RuntimeError("earlier replay failed")
+            if failure_stage == "processing" else None,
+            return_value="processed",
+        ),
+    )
+    if failure_stage == "status_update":
+        monkeypatch.setattr(
+            admin_router, "update_webhook_status",
+            AsyncMock(side_effect=RuntimeError("earlier status write failed")),
+        )
+
+    async with _isolated_database(tmp_path, "admin_late_failure") as sessions:
+        async with sessions() as setup:
+            setup.add(WebhookEvent(
+                stripe_event_id=event_id, event_type=event_type,
+                status=final_status, attempt_count=1, error=None,
+            ))
+            await setup.commit()
+
+        async def mark_after_successful_replay(*args, **kwargs):
+            # A has rolled back. B claims and commits before A marks its failure.
+            async with sessions() as winner:
+                assert await claim_webhook_replay(
+                    event_id, event_type, final_status, True, winner,
+                ) == WEBHOOK_CLAIMED
+                await billing_service.update_webhook_status(
+                    event_id, final_status, None, winner,
+                )
+                await winner.commit()
+            await billing_service.mark_webhook_retryable_failure(*args, **kwargs)
+
+        monkeypatch.setattr(
+            admin_router, "mark_webhook_retryable_failure", mark_after_successful_replay,
+        )
+        async with sessions() as failed_replay:
+            with pytest.raises(HTTPException) as error:
+                await admin_router.admin_reprocess_webhook(
+                    event_id, SimpleNamespace(id=uuid.uuid4()), failed_replay,
+                    admin_router.WebhookReprocessRequest(force=True),
+                )
+            assert error.value.status_code == 503
+
+        async with sessions() as verify:
+            event = await verify.scalar(
+                select(WebhookEvent).where(WebhookEvent.stripe_event_id == event_id)
+            )
+            assert event.status == final_status
+            assert event.error is None
+            assert event.attempt_count == 2
+
 @pytest.mark.asyncio
 async def test_retry_marker_never_overwrites_a_concurrently_finalized_event(
     tmp_path,

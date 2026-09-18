@@ -2003,15 +2003,19 @@ async def mark_webhook_retryable_failure(
     db: AsyncSession,
     *,
     expected_statuses: tuple[str, ...] = ("processing", "retryable_failure"),
+    expected_attempt_count: int | None = None,
 ) -> None:
-    """Persist a retry marker only after all business changes were rolled back."""
+    """Persist a retry marker only if the failed claim is still current."""
     for attempt in range(2):
+        predicates = [
+            WebhookEvent.stripe_event_id == event_id,
+            WebhookEvent.status.in_(expected_statuses),
+        ]
+        if expected_attempt_count is not None:
+            predicates.append(WebhookEvent.attempt_count == expected_attempt_count)
         update_result = await db.execute(
             sql_update(WebhookEvent)
-            .where(
-                WebhookEvent.stripe_event_id == event_id,
-                WebhookEvent.status.in_(expected_statuses),
-            )
+            .where(*predicates)
             .values(
                 event_type=event_type,
                 status="retryable_failure",

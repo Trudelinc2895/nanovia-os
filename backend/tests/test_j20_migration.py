@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 
 REVISION = "c7e4a91f2b60"
+LATEST_REVISION = "d8f5b4c3a210"
 PARENT_REVISIONS = ("5d9f6e2a4c31", "a1b2c3d4e5f6")
 
 
@@ -78,7 +79,7 @@ def test_j20_migration_upgrade_and_downgrade_are_reversible(tmp_path):
     revision = script.get_revision(REVISION)
     assert revision is not None
     assert tuple(revision._versioned_down_revisions) == PARENT_REVISIONS
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [LATEST_REVISION]
 
     migration = _load_migration()
     assert migration.down_revision == PARENT_REVISIONS

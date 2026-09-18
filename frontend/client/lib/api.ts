@@ -78,9 +78,17 @@ export async function apiFetch<T>(
 
 export interface ContactRequest {
   name: string;
+  company: string;
   email: string;
   subject: "demo";
   message: string;
+  business_type: string;
+  repetitive_task: string;
+  examples: string;
+  goal: string;
+  urgency: "faible" | "moyen" | "eleve" | "urgent";
+  consent: true;
+  company_url: string;
 }
 
 declare const pilotRequestIdBrand: unique symbol;
@@ -93,6 +101,7 @@ export interface ContactResponse {
   request_id: PilotRequestId;
   payment_link_url: string | null;
   notification_sent: boolean;
+  acknowledgement_sent: boolean;
   message: string;
 }
 
@@ -156,6 +165,8 @@ export interface User {
   plan: string;
   is_active: boolean;
   is_admin: boolean;
+  is_control_center_owner: boolean;
+  control_center_access: boolean;
   is_verified: boolean;
   credits: number;
   totp_enabled: boolean;
@@ -579,8 +590,61 @@ export interface AdminMetrics {
   estimated_mrr_usd: number;
 }
 
+export type PilotFulfillmentStatus =
+  | "new"
+  | "qualified"
+  | "in_progress"
+  | "waiting_client"
+  | "delivered"
+  | "closed"
+  | "rejected";
+
+export interface AdminPilotRequest {
+  id: string;
+  name: string;
+  email: string;
+  company: string | null;
+  business_type: string | null;
+  repetitive_task: string;
+  examples: string | null;
+  goal: string | null;
+  urgency: "faible" | "moyen" | "eleve" | "urgent" | null;
+  status: string;
+  fulfillment_status: PilotFulfillmentStatus;
+  routed_to: string | null;
+  notification_status: string;
+  client_notification_status: string;
+  payment_notification_status: string;
+  notification_attempts: number;
+  payment_notification_attempts: number;
+  last_notification_error: string | null;
+  payment: {
+    status: string;
+    payment_status: string;
+    amount_subtotal: number | null;
+    currency: string;
+    created_at: string;
+  } | null;
+  created_at: string;
+  updated_at: string;
+  last_contacted_at: string | null;
+}
+
+export interface AdminPilotReport {
+  generated_at: string;
+  total: number;
+  last_7_days: number;
+  requires_action: number;
+  notification_failures: number;
+  by_payment_status: Record<string, number>;
+  by_fulfillment_status: Record<string, number>;
+  simple_summary: string;
+}
+
 export interface AdminPrivateOrchestratorAccess {
   admin_only: boolean;
+  owner_only: boolean;
+  owner_approval_required_for_mutations: boolean;
   feature_flagged: boolean;
   public_saas_exposure: boolean;
   destructive_merge_with_my_agent_hub: boolean;
@@ -591,6 +655,13 @@ export interface AdminPrivateOrchestratorAccess {
 export interface AdminPrivateOrchestratorCapabilities {
   agent_catalog_read: boolean;
   upstream_health_read: boolean;
+  planner_preview: boolean;
+  agent_routing: boolean;
+  conversation_memory: boolean;
+  result_scoring: boolean;
+  pilot_operations_read: boolean;
+  pilot_action_proposals: boolean;
+  pilot_mutation: boolean;
   prompt_execution: boolean;
   terminal_access: boolean;
   filesystem_access: boolean;
@@ -678,6 +749,36 @@ export async function getAdminWebhooks(
 
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>("/api/v1/admin/metrics");
+}
+
+export async function getAdminPilotRequests(): Promise<{
+  total: number;
+  page: number;
+  per_page: number;
+  requests: AdminPilotRequest[];
+}> {
+  return apiFetch("/api/v1/admin/pilot-requests?per_page=100");
+}
+
+export async function getAdminPilotReport(): Promise<AdminPilotReport> {
+  return apiFetch("/api/v1/admin/pilot-requests/report");
+}
+
+export async function updateAdminPilotFulfillment(
+  requestId: string,
+  fulfillmentStatus: PilotFulfillmentStatus,
+): Promise<{ id: string; fulfillment_status: PilotFulfillmentStatus; updated_at: string }> {
+  return apiFetch(`/api/v1/admin/pilot-requests/${encodeURIComponent(requestId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ fulfillment_status: fulfillmentStatus }),
+  });
+}
+
+export async function retryAdminPilotNotifications(requestId: string): Promise<void> {
+  await apiFetch(
+    `/api/v1/admin/pilot-requests/${encodeURIComponent(requestId)}/retry-notifications`,
+    { method: "POST" },
+  );
 }
 
 export async function getAdminPrivateOrchestratorOverview(): Promise<AdminPrivateOrchestratorOverview> {

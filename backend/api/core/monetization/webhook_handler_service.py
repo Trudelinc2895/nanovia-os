@@ -34,8 +34,11 @@ async def handle_stripe_webhook(
     try:
         existing = await get_webhook_event(event_id, db)
         existing_status = getattr(existing, "status", None)
+        existing_attempt_count = getattr(existing, "attempt_count", None)
         if not isinstance(existing_status, str):
             existing_status = None
+        if not isinstance(existing_attempt_count, int):
+            existing_attempt_count = None
         await db.rollback()
     except Exception as exc:
         await db.rollback()
@@ -122,6 +125,7 @@ async def handle_stripe_webhook(
                 event_type,
                 str(exc)[:2000],
                 db,
+                expected_attempt_count=existing_attempt_count,
             )
         except Exception as marker_exc:
             await db.rollback()

@@ -16,11 +16,13 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import stripe
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 
 from api.config import get_runtime_settings_snapshot, reload_runtime_settings
 from api.core.monetization import getEntitlements as monetization_get_entitlements
@@ -29,6 +31,7 @@ from api.core.monetization._workspace import ensure_owner_workspace, get_workspa
 from api.core.deps import AdminUser, DB
 from api.models.audit import AuditLog
 from api.models.credit_ledger import CreditLedger
+from api.models.pilot import PilotRequest
 from api.models.subscription import Subscription
 from api.models.user import User
 from api.models.webhook_event import WebhookEvent
@@ -47,6 +50,10 @@ from api.services.billing_service import (
     update_webhook_status,
 )
 from api.services.credit_service import adjust_credits
+from api.services.pilot_notification_service import (
+    deliver_intake_notifications,
+    deliver_payment_notifications,
+)
 from api.services.subscription_state_machine import is_access_granted
 
 logger = logging.getLogger(__name__)
@@ -87,6 +94,19 @@ class WorkspacePlanOverrideRequest(BaseModel):
 
 class RuntimeConfigReloadRequest(BaseModel):
     dry_run: bool = False
+
+
+class PilotFulfillmentUpdateRequest(BaseModel):
+    fulfillment_status: Literal[
+        "new",
+        "qualified",
+        "in_progress",
+        "waiting_client",
+        "delivered",
+        "closed",
+        "rejected",
+    ]
+    note: str | None = None
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -544,6 +564,7 @@ async def admin_reprocess_webhook(
     safe_admin_id = _sanitize_log_value(str(admin.id))
     stored_event_type = stored_event.event_type
     stored_event_status = stored_event.status
+    stored_event_attempt_count = stored_event.attempt_count
 
     force = body.force if body else False
     if stored_event.status == "processing":
@@ -630,6 +651,7 @@ async def admin_reprocess_webhook(
                     "processing",
                     "retryable_failure",
                 ),
+                expected_attempt_count=stored_event_attempt_count,
             )
         except Exception:
             await db.rollback()
@@ -675,6 +697,7 @@ async def admin_reprocess_webhook(
                     "processing",
                     "retryable_failure",
                 ),
+                expected_attempt_count=stored_event_attempt_count,
             )
         except Exception:
             await db.rollback()
@@ -697,6 +720,211 @@ async def admin_reprocess_webhook(
         "stripe_event_id": stripe_event_id,
         "event_type": stored_event_type,
         "forced": force,
+    }
+
+
+def _pilot_request_payload(request: PilotRequest) -> dict[str, object]:
+    latest_payment = max(
+        request.payments,
+        key=lambda payment: payment.created_at,
+        default=None,
+    )
+    return {
+        "id": str(request.id),
+        "name": request.name,
+        "email": request.email,
+        "company": request.company,
+        "business_type": request.business_type,
+        "repetitive_task": request.repetitive_task or request.message,
+        "examples": request.examples,
+        "goal": request.goal,
+        "urgency": request.urgency,
+        "status": request.status,
+        "fulfillment_status": request.fulfillment_status,
+        "routed_to": request.routed_to,
+        "notification_status": request.notification_status,
+        "client_notification_status": request.client_notification_status,
+        "payment_notification_status": request.payment_notification_status,
+        "notification_attempts": request.notification_attempts,
+        "payment_notification_attempts": request.payment_notification_attempts,
+        "last_notification_error": request.last_notification_error,
+        "payment": (
+            {
+                "status": latest_payment.status,
+                "payment_status": latest_payment.payment_status,
+                "amount_subtotal": latest_payment.amount_subtotal,
+                "currency": latest_payment.currency,
+                "created_at": latest_payment.created_at.isoformat(),
+            }
+            if latest_payment is not None
+            else None
+        ),
+        "created_at": request.created_at.isoformat(),
+        "updated_at": request.updated_at.isoformat(),
+        "last_contacted_at": (
+            request.last_contacted_at.isoformat()
+            if request.last_contacted_at is not None
+            else None
+        ),
+    }
+
+
+@router.get("/pilot-requests")
+async def admin_list_pilot_requests(
+    admin: AdminUser,
+    db: DB,
+    page: int = 1,
+    per_page: int = 50,
+    payment_status: str | None = None,
+    fulfillment_status: str | None = None,
+):
+    """List structured Pilot requests for the private operations console."""
+    del admin
+    page = max(page, 1)
+    per_page = min(max(per_page, 1), 100)
+    filters = []
+    if payment_status:
+        filters.append(PilotRequest.status == payment_status)
+    if fulfillment_status:
+        filters.append(PilotRequest.fulfillment_status == fulfillment_status)
+
+    total = await db.scalar(select(func.count(PilotRequest.id)).where(*filters))
+    result = await db.execute(
+        select(PilotRequest)
+        .options(selectinload(PilotRequest.payments))
+        .where(*filters)
+        .order_by(PilotRequest.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    )
+    return {
+        "total": total or 0,
+        "page": page,
+        "per_page": per_page,
+        "requests": [_pilot_request_payload(row) for row in result.scalars().all()],
+    }
+
+
+@router.get("/pilot-requests/report")
+async def admin_pilot_report(admin: AdminUser, db: DB):
+    """Return a compact operational report without exposing public PII."""
+    del admin
+
+    async def grouped(column) -> dict[str, int]:
+        rows = await db.execute(select(column, func.count()).group_by(column))
+        return {str(key): int(count) for key, count in rows.all()}
+
+    now = datetime.now(timezone.utc)
+    total = int(await db.scalar(select(func.count(PilotRequest.id))) or 0)
+    last_7_days = int(
+        await db.scalar(
+            select(func.count(PilotRequest.id)).where(
+                PilotRequest.created_at >= now - timedelta(days=7)
+            )
+        )
+        or 0
+    )
+    notification_failures = int(
+        await db.scalar(
+            select(func.count(PilotRequest.id)).where(
+                or_(
+                    PilotRequest.notification_status == "failed",
+                    PilotRequest.client_notification_status == "failed",
+                    PilotRequest.payment_notification_status == "failed",
+                )
+            )
+        )
+        or 0
+    )
+    requires_action = int(
+        await db.scalar(
+            select(func.count(PilotRequest.id)).where(
+                PilotRequest.fulfillment_status.in_(
+                    ("new", "qualified", "in_progress", "waiting_client")
+                )
+            )
+        )
+        or 0
+    )
+    return {
+        "generated_at": now.isoformat(),
+        "total": total,
+        "last_7_days": last_7_days,
+        "requires_action": requires_action,
+        "notification_failures": notification_failures,
+        "by_payment_status": await grouped(PilotRequest.status),
+        "by_fulfillment_status": await grouped(PilotRequest.fulfillment_status),
+        "simple_summary": (
+            f"{total} demande(s), {requires_action} à traiter, "
+            f"{notification_failures} alerte(s) de notification."
+        ),
+    }
+
+
+@router.patch("/pilot-requests/{request_id}")
+async def admin_update_pilot_request(
+    request_id: uuid.UUID,
+    body: PilotFulfillmentUpdateRequest,
+    admin: AdminUser,
+    db: DB,
+):
+    pilot_request = await db.get(PilotRequest, request_id)
+    if pilot_request is None:
+        raise HTTPException(status_code=404, detail="Pilot request not found")
+
+    pilot_request.fulfillment_status = body.fulfillment_status
+    if body.fulfillment_status in {"in_progress", "waiting_client"}:
+        pilot_request.last_contacted_at = datetime.now(timezone.utc)
+    db.add(
+        AuditLog(
+            user_id=admin.id,
+            action="pilot_fulfillment_status_updated",
+            resource="pilot_request",
+            status="success",
+            detail=(
+                f"request_id={request_id} status={body.fulfillment_status} "
+                f"note={_sanitize_log_value(body.note)[:500]}"
+            ),
+        )
+    )
+    await db.commit()
+    await db.refresh(pilot_request)
+    return {
+        "id": str(pilot_request.id),
+        "fulfillment_status": pilot_request.fulfillment_status,
+        "updated_at": pilot_request.updated_at.isoformat(),
+    }
+
+
+@router.post("/pilot-requests/{request_id}/retry-notifications")
+async def admin_retry_pilot_notifications(
+    request_id: uuid.UUID,
+    admin: AdminUser,
+    db: DB,
+):
+    pilot_request = await db.get(PilotRequest, request_id)
+    if pilot_request is None:
+        raise HTTPException(status_code=404, detail="Pilot request not found")
+
+    pilot_request.notification_attempts = 0
+    pilot_request.payment_notification_attempts = 0
+    intake = await deliver_intake_notifications(pilot_request)
+    payment = await deliver_payment_notifications(pilot_request)
+    db.add(
+        AuditLog(
+            user_id=admin.id,
+            action="pilot_notifications_retried",
+            resource="pilot_request",
+            status="success",
+            detail=f"request_id={request_id}",
+        )
+    )
+    await db.commit()
+    return {
+        "id": str(pilot_request.id),
+        "operator_notification_sent": intake["operator"],
+        "client_notification_sent": intake["client"],
+        "payment_notification_sent": payment,
     }
 
 

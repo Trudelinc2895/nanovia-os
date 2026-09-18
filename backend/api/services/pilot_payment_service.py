@@ -361,6 +361,8 @@ async def process_pilot_checkout_event(
                 payment.status = target_status
                 payment.customer_email = verified.customer_email
             request.status = target_status
+            if target_status == "paid" and request.fulfillment_status == "new":
+                request.fulfillment_status = "qualified"
             await db.flush()
             await savepoint.commit()
             return target_status

@@ -69,33 +69,43 @@ async def _isolated_session(
     return session_factory(), engine
 
 
-def _body(**overrides: str) -> contact.ContactRequest:
+def _body(**overrides: object) -> contact.ContactRequest:
     values = {
         "name": "Client Pilot",
+        "company": "Entreprise Pilot",
         "email": "client@example.com",
         "subject": "demo",
         "message": "Une tâche répétitive clairement décrite.",
+        "business_type": "Services professionnels",
+        "repetitive_task": "Répondre aux demandes entrantes chaque matin.",
+        "examples": "Exemple anonymisé suffisamment détaillé pour le test.",
+        "goal": "Réduire le délai de réponse sans perdre de qualité.",
+        "urgency": "moyen",
+        "consent": True,
+        "company_url": "",
     }
     values.update(overrides)
     return contact.ContactRequest(**values)
 
 
 @pytest.mark.asyncio
-async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_path):
-    sent: dict[str, str] = {}
+async def test_contact_persists_structured_request_and_notifications(monkeypatch, tmp_path):
+    delivered: dict[str, object] = {}
     configured_url = "https://buy.stripe.com/ABC123"
 
-    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
-        sent.update(to=to, subject=subject, html=html)
-        return True
+    async def fake_deliver(pilot_request: PilotRequest) -> dict[str, bool]:
+        delivered["request"] = pilot_request
+        pilot_request.notification_status = "sent"
+        pilot_request.client_notification_status = "sent"
+        return {"operator": True, "client": True}
 
-    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "deliver_intake_notifications", fake_deliver)
     _configure_pilot(monkeypatch, payment_link_url=configured_url)
     provider = _mock_valid_provider(monkeypatch)
     db, engine = await _isolated_session(tmp_path)
     try:
         response = await contact.contact_form(
-            _body(name="Client <script>alert(1)</script>"),
+            _body(name="Client Pilot"),
             _request(),
             db,
         )
@@ -105,11 +115,14 @@ async def test_contact_persists_request_id_and_escapes_html(monkeypatch, tmp_pat
         assert response["request_id"] == str(stored.id)
         assert response["payment_link_url"] == configured_url
         assert response["notification_sent"] is True
+        assert response["acknowledgement_sent"] is True
         assert stored.notification_status == "sent"
-        assert sent["to"] == contact.settings.CONTACT_RECIPIENT_EMAIL
-        assert "<script>" not in sent["html"]
-        assert "&lt;script&gt;" in sent["html"]
-        assert "127.0.0.1" not in sent["html"]
+        assert stored.client_notification_status == "sent"
+        assert stored.company == "Entreprise Pilot"
+        assert stored.business_type == "Services professionnels"
+        assert stored.repetitive_task.startswith("Répondre aux demandes")
+        assert stored.consented_at is not None
+        assert delivered["request"] is stored
         assert provider["payment_link_id"] == "plink_ABC123"
         assert provider["account"] is not None
         assert provider["payment_link"] is not None
@@ -221,13 +234,15 @@ async def test_contact_log_sanitizes_client_address_and_omits_form_content(
     tmp_path,
     caplog,
 ):
-    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
-        return True
+    async def fake_deliver(pilot_request: PilotRequest) -> dict[str, bool]:
+        pilot_request.notification_status = "sent"
+        pilot_request.client_notification_status = "sent"
+        return {"operator": True, "client": True}
 
     async def no_payment_link() -> None:
         return None
 
-    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "deliver_intake_notifications", fake_deliver)
     monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
     db, engine = await _isolated_session(tmp_path)
     try:
@@ -259,13 +274,13 @@ async def test_contact_log_sanitizes_client_address_and_omits_form_content(
 
 @pytest.mark.asyncio
 async def test_contact_persists_when_delivery_is_unavailable(monkeypatch, tmp_path):
-    async def fake_send_email(*, to: str, subject: str, html: str) -> bool:
+    async def fake_deliver(_pilot_request: PilotRequest) -> dict[str, bool]:
         raise RuntimeError("Resend unavailable")
 
     async def no_payment_link() -> None:
         return None
 
-    monkeypatch.setattr(contact, "send_email", fake_send_email)
+    monkeypatch.setattr(contact, "deliver_intake_notifications", fake_deliver)
     monkeypatch.setattr(contact, "_configured_payment_link_url", no_payment_link)
     db, engine = await _isolated_session(tmp_path)
     try:
@@ -275,7 +290,9 @@ async def test_contact_persists_when_delivery_is_unavailable(monkeypatch, tmp_pa
         assert response["received"] is True
         assert response["request_id"] == str(stored.id)
         assert response["notification_sent"] is False
+        assert response["acknowledgement_sent"] is False
         assert stored.notification_status == "failed"
+        assert stored.client_notification_status == "failed"
     finally:
         await db.close()
         await engine.dispose()

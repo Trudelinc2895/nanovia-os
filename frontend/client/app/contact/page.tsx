@@ -51,6 +51,7 @@ export default function ContactPage() {
   const [status, setStatus] = useState<"idle" | "submitting" | "received" | "error">("idle");
   const [error, setError] = useState("");
   const [paymentLink, setPaymentLink] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const fallbackEmailHref = `mailto:nanovia@duck.com?subject=${encodeURIComponent(
     "Demande Nanovia Pro Pilot — 297 CAD / 30 jours"
   )}`;
@@ -59,6 +60,7 @@ export default function ContactPage() {
     e.preventDefault();
     setError("");
     setPaymentLink(null);
+    setRequestId(null);
 
     if (form.companyUrl.trim()) {
       return;
@@ -87,10 +89,19 @@ export default function ContactPage() {
     try {
       const response = await submitContact({
         name: form.name,
+        company: form.company,
         email: form.email,
         subject: "demo",
         message: buildPilotMessage(form),
+        business_type: form.businessType,
+        repetitive_task: form.repetitiveTask,
+        examples: form.examples,
+        goal: form.goal,
+        urgency: form.urgency as "faible" | "moyen" | "eleve" | "urgent",
+        consent: true,
+        company_url: form.companyUrl,
       });
+      setRequestId(response.request_id);
       try {
         setPaymentLink(
           buildPilotPaymentLink(response.request_id, response.payment_link_url)
@@ -164,6 +175,11 @@ export default function ContactPage() {
           <div className="rounded-xl border border-blue-400/40 bg-blue-950/30 p-8 text-center text-blue-100">
             <div className="text-4xl mb-4">✓</div>
             <h2 className="text-xl font-bold mb-2">Demande reçue</h2>
+            {requestId && (
+              <p className="mb-4 text-sm text-blue-200">
+                Référence : <span className="font-mono">{requestId}</span>
+              </p>
+            )}
             {paymentLink ? (
               <>
                 <p className="text-gray-300 mb-3">
@@ -200,31 +216,33 @@ export default function ContactPage() {
               tabIndex={-1}
               autoComplete="off"
               value={form.companyUrl}
-              onChange={(e) => setForm({ ...form, companyUrl: e.target.value })}
+              onChange={(e) => setForm((current) => ({ ...current, companyUrl: e.target.value }))}
               className="hidden"
               aria-hidden="true"
             />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label className="block text-sm text-gray-400 mb-1.5">Nom complet</label>
+                <label htmlFor="pilot-name" className="block text-sm text-gray-400 mb-1.5">Nom complet</label>
                 <input
+                  id="pilot-name"
                   type="text"
                   required
                   maxLength={100}
                   value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
                   placeholder="Kevin Trudel"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-400 mb-1.5">Entreprise</label>
+                <label htmlFor="pilot-company" className="block text-sm text-gray-400 mb-1.5">Entreprise</label>
                 <input
+                  id="pilot-company"
                   type="text"
                   required
                   maxLength={100}
                   value={form.company}
-                  onChange={(e) => setForm({ ...form, company: e.target.value })}
+                  onChange={(e) => setForm((current) => ({ ...current, company: e.target.value }))}
                   placeholder="Nom de votre entreprise"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
                 />
@@ -233,25 +251,27 @@ export default function ContactPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label className="block text-sm text-gray-400 mb-1.5">Adresse email</label>
+                <label htmlFor="pilot-email" className="block text-sm text-gray-400 mb-1.5">Adresse email</label>
                 <input
+                  id="pilot-email"
                   type="email"
                   required
                   maxLength={254}
                   value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  onChange={(e) => setForm((current) => ({ ...current, email: e.target.value }))}
                   placeholder="vous@entreprise.com"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-400 mb-1.5">Type d&apos;activité</label>
+                <label htmlFor="pilot-business-type" className="block text-sm text-gray-400 mb-1.5">Type d&apos;activité</label>
                 <input
+                  id="pilot-business-type"
                   type="text"
                   required
                   maxLength={120}
                   value={form.businessType}
-                  onChange={(e) => setForm({ ...form, businessType: e.target.value })}
+                  onChange={(e) => setForm((current) => ({ ...current, businessType: e.target.value }))}
                   placeholder="PME locale, service residentiel, consultant..."
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
                 />
@@ -259,50 +279,54 @@ export default function ContactPage() {
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 mb-1.5">Tâche répétitive à automatiser</label>
+              <label htmlFor="pilot-task" className="block text-sm text-gray-400 mb-1.5">Tâche répétitive à automatiser</label>
               <textarea
+                id="pilot-task"
                 required
                 maxLength={700}
                 rows={3}
                 value={form.repetitiveTask}
-                onChange={(e) => setForm({ ...form, repetitiveTask: e.target.value })}
+                onChange={(e) => setForm((current) => ({ ...current, repetitiveTask: e.target.value }))}
                 placeholder="Ex.: repondre aux demandes clients, preparer des suivis, resumer des documents..."
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition resize-none"
               />
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 mb-1.5">Exemples de messages ou documents</label>
+              <label htmlFor="pilot-examples" className="block text-sm text-gray-400 mb-1.5">Exemples de messages ou documents</label>
               <textarea
+                id="pilot-examples"
                 required
                 maxLength={1200}
                 rows={4}
                 value={form.examples}
-                onChange={(e) => setForm({ ...form, examples: e.target.value })}
+                onChange={(e) => setForm((current) => ({ ...current, examples: e.target.value }))}
                 placeholder="Décrivez un exemple anonymisé. Ne collez aucun secret ni renseignement sensible."
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition resize-none"
               />
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 mb-1.5">Objectif souhaité</label>
+              <label htmlFor="pilot-goal" className="block text-sm text-gray-400 mb-1.5">Objectif souhaité</label>
               <textarea
+                id="pilot-goal"
                 required
                 maxLength={700}
                 rows={3}
                 value={form.goal}
-                onChange={(e) => setForm({ ...form, goal: e.target.value })}
+                onChange={(e) => setForm((current) => ({ ...current, goal: e.target.value }))}
                 placeholder="Quel resultat veux-tu obtenir avec Nanovia Pro Pilot?"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition resize-none"
               />
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 mb-1.5">Niveau d&apos;urgence</label>
+              <label htmlFor="pilot-urgency" className="block text-sm text-gray-400 mb-1.5">Niveau d&apos;urgence</label>
               <select
+                id="pilot-urgency"
                 required
                 value={form.urgency}
-                onChange={(e) => setForm({ ...form, urgency: e.target.value })}
+                onChange={(e) => setForm((current) => ({ ...current, urgency: e.target.value }))}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-violet-500 transition"
               >
                 <option value="">Sélectionne un niveau</option>
@@ -318,7 +342,7 @@ export default function ContactPage() {
                 id="consent"
                 type="checkbox"
                 checked={form.consent}
-                onChange={(e) => setForm({ ...form, consent: e.target.checked })}
+                onChange={(e) => setForm((current) => ({ ...current, consent: e.target.checked }))}
                 className="mt-1 accent-violet-500 w-4 h-4 flex-shrink-0 cursor-pointer"
               />
               <label htmlFor="consent" className="text-sm text-gray-300 cursor-pointer">
