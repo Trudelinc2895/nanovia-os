@@ -70,6 +70,7 @@ class PilotStripeConfig:
     payment_link_id: str
     payment_link_url: str
     confirmation_url: str
+    amount_cents: int
     livemode: bool
     is_current: bool = True
 
@@ -185,6 +186,7 @@ def load_pilot_stripe_config(settings_obj: Any = settings) -> PilotStripeConfig:
         payment_link_id=values["STRIPE_PILOT_PAYMENT_LINK_ID"],
         payment_link_url=values["STRIPE_PILOT_PAYMENT_LINK_URL"],
         confirmation_url=confirmation_url,
+        amount_cents=PILOT_AMOUNT_CENTS,
         livemode=livemode,
     )
 
@@ -218,7 +220,13 @@ def _historical_confirmation_url(value: Any, *, production: bool) -> str:
 
 
 _PREVIOUS_CONTRACT_KEYS = frozenset(
-    {"product_id", "price_id", "payment_link_id", "payment_link_url"}
+    {
+        "product_id",
+        "price_id",
+        "payment_link_id",
+        "payment_link_url",
+        "amount_cents",
+    }
 )
 
 
@@ -270,6 +278,7 @@ def load_authorized_pilot_stripe_configs(
         price_id = value.get("price_id")
         payment_link_id = value.get("payment_link_id")
         payment_link_url = value.get("payment_link_url")
+        amount_cents = value.get("amount_cents")
         for field_name, field_value, pattern_name in (
             ("product_id", product_id, "STRIPE_PILOT_PRODUCT_ID"),
             ("price_id", price_id, "STRIPE_PILOT_PRICE_ID"),
@@ -281,6 +290,12 @@ def load_authorized_pilot_stripe_configs(
                 or _ID_PATTERNS[pattern_name].fullmatch(field_value) is None
             ):
                 raise _contract_error(f"{label}.{field_name} has an invalid format")
+        if (
+            isinstance(amount_cents, bool)
+            or not isinstance(amount_cents, int)
+            or amount_cents <= 0
+        ):
+            raise _contract_error(f"{label}.amount_cents must be a positive integer")
         canonical_url = _canonical_payment_link_url(
             payment_link_url,
             error_message=f"{label}.payment_link_url is invalid",
@@ -301,6 +316,7 @@ def load_authorized_pilot_stripe_configs(
                 payment_link_id=payment_link_id,
                 payment_link_url=payment_link_url,
                 confirmation_url=confirmation_url,
+                amount_cents=amount_cents,
                 livemode=current.livemode,
                 is_current=False,
             )
@@ -383,7 +399,7 @@ def _validate_price(price: Any, config: PilotStripeConfig) -> None:
     )
     _require_exact_int(
         stripe_field(price, "unit_amount"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot Price amount mismatch",
     )
     _require(
@@ -483,12 +499,12 @@ def _validate_checkout_line_item(line_item: Any, config: PilotStripeConfig) -> N
     )
     _require_exact_int(
         stripe_field(line_item, "amount_subtotal"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot Checkout line subtotal mismatch",
     )
     _require_exact_int(
         stripe_field(line_item, "amount_total"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot Checkout line total mismatch",
     )
     _validate_price(stripe_field(line_item, "price"), config)
@@ -506,10 +522,14 @@ def _validate_paid_charge(
     _require(stripe_field(charge, "paid") is True, "Pilot Charge is not paid")
     _require(stripe_field(charge, "refunded") is False, "Pilot Charge is refunded")
     _require(stripe_field(charge, "disputed") is False, "Pilot Charge is disputed")
-    _require_exact_int(stripe_field(charge, "amount"), PILOT_AMOUNT_CENTS, "Pilot Charge amount mismatch")
+    _require_exact_int(
+        stripe_field(charge, "amount"),
+        config.amount_cents,
+        "Pilot Charge amount mismatch",
+    )
     _require_exact_int(
         stripe_field(charge, "amount_captured"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot captured amount mismatch",
     )
     _require_exact_int(stripe_field(charge, "amount_refunded", 0), 0, "Pilot refunded amount mismatch")
@@ -523,7 +543,7 @@ def _validate_paid_charge(
     _require(not isinstance(balance, str), "Pilot balance transaction was not expanded")
     _require_exact_int(
         stripe_field(balance, "amount"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot balance gross amount mismatch",
     )
     _require(
@@ -533,7 +553,7 @@ def _validate_paid_charge(
     fee = stripe_field(balance, "fee")
     _require(not isinstance(fee, bool) and isinstance(fee, int) and fee >= 0, "Pilot Stripe fee is unavailable")
     net = stripe_field(balance, "net")
-    _require_exact_int(net, PILOT_AMOUNT_CENTS - fee, "Pilot balance net mismatch")
+    _require_exact_int(net, config.amount_cents - fee, "Pilot balance net mismatch")
     return fee
 
 
@@ -559,12 +579,12 @@ def validate_pilot_checkout(
     )
     _require_exact_int(
         stripe_field(session, "amount_subtotal"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot Session subtotal mismatch",
     )
     _require_exact_int(
         stripe_field(session, "amount_total"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot Session total mismatch",
     )
     total_details = stripe_field(session, "total_details", {}) or {}
@@ -601,7 +621,7 @@ def validate_pilot_checkout(
     _require(bool(stripe_field(payment_intent, "livemode")) == config.livemode, "Pilot PaymentIntent livemode mismatch")
     _require_exact_int(
         stripe_field(payment_intent, "amount"),
-        PILOT_AMOUNT_CENTS,
+        config.amount_cents,
         "Pilot PaymentIntent amount mismatch",
     )
     _require(
@@ -622,7 +642,7 @@ def validate_pilot_checkout(
         _require(stripe_field(payment_intent, "status") == "succeeded", "Pilot PaymentIntent did not succeed")
         _require_exact_int(
             stripe_field(payment_intent, "amount_received"),
-            PILOT_AMOUNT_CENTS,
+            config.amount_cents,
             "Pilot received amount mismatch",
         )
         stripe_fee = _validate_paid_charge(
@@ -635,7 +655,7 @@ def validate_pilot_checkout(
         _require(
             not isinstance(amount_received, bool)
             and isinstance(amount_received, int)
-            and 0 <= amount_received <= PILOT_AMOUNT_CENTS,
+            and 0 <= amount_received <= config.amount_cents,
             "Pilot received amount is invalid",
         )
 
@@ -648,7 +668,7 @@ def validate_pilot_checkout(
         customer_email=customer_email,
         payment_intent_id=payment_intent_id,
         paid=paid,
-        gross_amount=PILOT_AMOUNT_CENTS,
+        gross_amount=config.amount_cents,
         stripe_fee_amount=stripe_fee,
         tax_amount=0,
     )

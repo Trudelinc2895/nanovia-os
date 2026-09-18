@@ -360,7 +360,13 @@ def _validate_previous_pilot_contracts(
         return [f"{key} must be a valid JSON list"]
     if not isinstance(contracts, list):
         return [f"{key} must be a valid JSON list"]
-    expected_keys = {"product_id", "price_id", "payment_link_id", "payment_link_url"}
+    expected_keys = {
+        "product_id",
+        "price_id",
+        "payment_link_id",
+        "payment_link_url",
+        "amount_cents",
+    }
     errors: list[str] = []
     payment_link_ids = {values.get("STRIPE_PILOT_PAYMENT_LINK_ID", "").strip()}
     payment_link_urls = {values.get("STRIPE_PILOT_PAYMENT_LINK_URL", "").strip()}
@@ -384,6 +390,9 @@ def _validate_previous_pilot_contracts(
                 )
             except (TypeError, ValueError):
                 errors.append(f"{label}.confirmation_url is invalid")
+        amount_cents = contract_value.get("amount_cents")
+        if type(amount_cents) is not int or amount_cents <= 0:
+            errors.append(f"{label}.amount_cents must be a positive integer")
         for field_name, pattern in patterns.items():
             field_value = contract_value.get(field_name)
             if not isinstance(field_value, str) or re.fullmatch(pattern, field_value) is None:

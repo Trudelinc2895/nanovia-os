@@ -777,6 +777,7 @@ def test_runtime_env_accepts_explicit_previous_pilot_contract_registry():
                 "price_id": "price_Previous123",
                 "payment_link_id": "plink_Previous123",
                 "payment_link_url": "https://buy.stripe.com/Previous123",
+                "amount_cents": 29700,
             }
         ]
     )
@@ -795,8 +796,31 @@ def test_runtime_env_accepts_explicit_previous_pilot_contract_registry():
                 {
                     "product_id": "prod_Previous123",
                     "price_id": "price_Previous123",
+                    "payment_link_id": "plink_Previous123",
+                    "payment_link_url": "https://buy.stripe.com/Previous123",
+                    "amount_cents": 0,
+                }
+            ]
+        ),
+        json.dumps(
+            [
+                {
+                    "product_id": "prod_Previous123",
+                    "price_id": "price_Previous123",
+                    "payment_link_id": "plink_Previous123",
+                    "payment_link_url": "https://buy.stripe.com/Previous123",
+                    "amount_cents": True,
+                }
+            ]
+        ),
+        json.dumps(
+            [
+                {
+                    "product_id": "prod_Previous123",
+                    "price_id": "price_Previous123",
                     "payment_link_id": "plink_test123",
                     "payment_link_url": "https://buy.stripe.com/Previous123",
+                    "amount_cents": 29700,
                 }
             ]
         ),
@@ -873,12 +897,14 @@ def test_history_configuration_is_accepted_by_preflight_and_runtime(monkeypatch)
         "price_id": "price_Previous123",
         "payment_link_id": "plink_Previous123",
         "payment_link_url": "https://buy.stripe.com/Previous123",
+        "amount_cents": 24700,
         "confirmation_url": confirmation_url,
     }])
     values["STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON"] = '{"prod_Retired123":25}'
     assert validate_runtime_env(values, target_env="production") == []
     configs = load_authorized_pilot_stripe_configs(SimpleNamespace(**values))
     assert configs[1].confirmation_url == confirmation_url
+    assert configs[1].amount_cents == 24700
     assert configs[0].confirmation_url.startswith("https://nanovia.ca/")
     monkeypatch.setattr(
         settings, "STRIPE_CREDIT_PREVIOUS_PRODUCTS_JSON",
@@ -910,6 +936,7 @@ def test_historical_redirect_invalid_values_are_rejected_in_preflight_and_runtim
         "price_id": "price_Previous123",
         "payment_link_id": "plink_Previous123",
         "payment_link_url": "https://buy.stripe.com/Previous123",
+        "amount_cents": 29700,
         "confirmation_url": confirmation_url,
     }])
     errors = validate_runtime_env(values, target_env="production")

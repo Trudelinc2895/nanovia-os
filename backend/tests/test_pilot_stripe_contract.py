@@ -24,6 +24,7 @@ PREVIOUS_PRODUCT_ID = "prod_previousPilot"
 PREVIOUS_PRICE_ID = "price_previousPilot"
 PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
 PREVIOUS_PAYMENT_LINK_URL = "https://buy.stripe.com/previousPilot"
+PREVIOUS_AMOUNT_CENTS = 24_700
 REQUEST_ID = "95d9327d-4580-4569-8c0f-5d2a0946a1be"
 
 
@@ -203,7 +204,11 @@ def _set_path(target: dict, path: str, value) -> None:
         current[final] = value
 
 
-def _previous_contract_json(*, confirmation_url: str | None = None) -> str:
+def _previous_contract_json(
+    *,
+    confirmation_url: str | None = None,
+    amount_cents: int = contract.PILOT_AMOUNT_CENTS,
+) -> str:
     return json.dumps(
         [
             {
@@ -211,6 +216,7 @@ def _previous_contract_json(*, confirmation_url: str | None = None) -> str:
                 "price_id": PREVIOUS_PRICE_ID,
                 "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
                 "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                "amount_cents": amount_cents,
                 **(
                     {"confirmation_url": confirmation_url}
                     if confirmation_url is not None else {}
@@ -313,10 +319,11 @@ def test_authorized_previous_contracts_are_explicit_complete_and_distinct():
         account_id=ACCOUNT_ID,
         product_id=PREVIOUS_PRODUCT_ID,
         price_id=PREVIOUS_PRICE_ID,
-            payment_link_id=PREVIOUS_PAYMENT_LINK_ID,
-            payment_link_url=PREVIOUS_PAYMENT_LINK_URL,
-            confirmation_url=CONFIRMATION_URL,
-            livemode=False,
+        payment_link_id=PREVIOUS_PAYMENT_LINK_ID,
+        payment_link_url=PREVIOUS_PAYMENT_LINK_URL,
+        confirmation_url=CONFIRMATION_URL,
+        amount_cents=contract.PILOT_AMOUNT_CENTS,
+        livemode=False,
         is_current=False,
     )
 
@@ -328,6 +335,27 @@ def test_authorized_previous_contracts_are_explicit_complete_and_distinct():
         pytest.param("not-json", id="invalid-json"),
         pytest.param("{}", id="not-list"),
         pytest.param('[{"payment_link_id":"plink_previousPilot"}]', id="partial"),
+        pytest.param(
+            json.dumps(
+                [
+                    {
+                        "product_id": PREVIOUS_PRODUCT_ID,
+                        "price_id": PREVIOUS_PRICE_ID,
+                        "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
+                        "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                    }
+                ]
+            ),
+            id="missing-amount",
+        ),
+        pytest.param(
+            _previous_contract_json(amount_cents=0),
+            id="zero-amount",
+        ),
+        pytest.param(
+            _previous_contract_json(amount_cents=True),
+            id="boolean-amount",
+        ),
         pytest.param(
             json.dumps(
                 [
@@ -431,6 +459,81 @@ async def test_previous_contract_session_is_fully_verified_after_rotation(
     boundaries["retrieve_pilot_payment_link"].assert_awaited_once_with(
         PREVIOUS_PAYMENT_LINK_ID
     )
+
+
+@pytest.mark.asyncio
+async def test_previous_contract_preserves_historical_amount_after_price_rotation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings,
+        "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
+        _previous_contract_json(amount_cents=PREVIOUS_AMOUNT_CENTS),
+    )
+    session = _session()
+    session["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+    session["amount_subtotal"] = PREVIOUS_AMOUNT_CENTS
+    session["amount_total"] = PREVIOUS_AMOUNT_CENTS
+    payment_intent = session["payment_intent"]
+    payment_intent["amount"] = PREVIOUS_AMOUNT_CENTS
+    payment_intent["amount_received"] = PREVIOUS_AMOUNT_CENTS
+    charge = payment_intent["latest_charge"]
+    charge["amount"] = PREVIOUS_AMOUNT_CENTS
+    charge["amount_captured"] = PREVIOUS_AMOUNT_CENTS
+    balance = charge["balance_transaction"]
+    balance["amount"] = PREVIOUS_AMOUNT_CENTS
+    balance["net"] = PREVIOUS_AMOUNT_CENTS - balance["fee"]
+
+    price = _price()
+    price.update(
+        {
+            "id": PREVIOUS_PRICE_ID,
+            "active": False,
+            "unit_amount": PREVIOUS_AMOUNT_CENTS,
+        }
+    )
+    price["product"].update(
+        {"id": PREVIOUS_PRODUCT_ID, "active": False}
+    )
+    checkout_line = _checkout_line_item()
+    checkout_line.update(
+        {
+            "amount_subtotal": PREVIOUS_AMOUNT_CENTS,
+            "amount_total": PREVIOUS_AMOUNT_CENTS,
+            "price": price,
+        }
+    )
+    catalog_line = _catalog_line_item()
+    catalog_line["price"] = price
+    payment_link = _payment_link()
+    payment_link.update(
+        {
+            "id": PREVIOUS_PAYMENT_LINK_ID,
+            "url": PREVIOUS_PAYMENT_LINK_URL,
+            "active": False,
+            "line_items": {"data": [catalog_line]},
+        }
+    )
+    boundaries = {
+        "retrieve_pilot_event": AsyncMock(return_value=_event(session)),
+        "retrieve_pilot_account": AsyncMock(return_value=_account()),
+        "retrieve_pilot_payment_link": AsyncMock(return_value=payment_link),
+        "retrieve_pilot_checkout_session": AsyncMock(return_value=session),
+        "retrieve_pilot_line_items": AsyncMock(
+            return_value={"data": [checkout_line]}
+        ),
+    }
+    for name, boundary in boundaries.items():
+        monkeypatch.setattr(contract, name, boundary)
+
+    verified = await contract.verify_pilot_checkout_event(
+        "evt_pilot",
+        "checkout.session.completed",
+        session,
+    )
+
+    assert verified.config.amount_cents == PREVIOUS_AMOUNT_CENTS
+    assert verified.gross_amount == PREVIOUS_AMOUNT_CENTS
 
 
 @pytest.mark.asyncio

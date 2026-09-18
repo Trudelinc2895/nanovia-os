@@ -298,6 +298,7 @@ async def test_previous_authorized_contract_confirmation_remains_available(
                     "price_id": PREVIOUS_PRICE_ID,
                     "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
                     "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
+                    "amount_cents": 29_700,
                 }
             ]
         ),

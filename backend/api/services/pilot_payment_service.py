@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.pilot import PilotPayment, PilotRequest
 from api.services.pilot_stripe_contract_service import (
-    PILOT_AMOUNT_CENTS,
     PILOT_CHECKOUT_EVENT_TYPES,
     PILOT_CONTRACT_MARKER,
     PILOT_CURRENCY,
@@ -340,7 +339,7 @@ async def process_pilot_checkout_event(
             stripe_price_id=config.price_id,
             customer_email=verified.customer_email,
             currency=PILOT_CURRENCY,
-            amount_subtotal=PILOT_AMOUNT_CENTS,
+            amount_subtotal=verified.gross_amount,
             payment_status=payment_status,
             status=target_status,
             livemode=config.livemode,
@@ -357,7 +356,7 @@ async def process_pilot_checkout_event(
                 payment.stripe_event_id = event_id
                 payment.stripe_payment_intent_id = payment_intent_id
                 payment.payment_status = payment_status
-                payment.amount_subtotal = PILOT_AMOUNT_CENTS
+                payment.amount_subtotal = verified.gross_amount
                 payment.status = target_status
                 payment.customer_email = verified.customer_email
             request.status = target_status
@@ -457,8 +456,8 @@ def _classify_pilot_reversal_sessions(
         or stripe_field(session, "mode") != "payment"
         or bool(stripe_field(session, "livemode")) != config.livemode
         or str(stripe_field(session, "currency") or "").lower() != PILOT_CURRENCY
-        or stripe_field(session, "amount_subtotal") != PILOT_AMOUNT_CENTS
-        or stripe_field(session, "amount_total") != PILOT_AMOUNT_CENTS
+        or stripe_field(session, "amount_subtotal") != config.amount_cents
+        or stripe_field(session, "amount_total") != config.amount_cents
         or stripe_field(metadata, "nanovia_contract") != PILOT_CONTRACT_MARKER
     ):
         return "rejected", config
@@ -526,7 +525,7 @@ def _validate_stored_payment_contract(
         payment.stripe_payment_link_id != config.payment_link_id
         or payment.stripe_price_id != config.price_id
         or payment.currency.lower() != PILOT_CURRENCY
-        or payment.amount_subtotal != PILOT_AMOUNT_CENTS
+        or payment.amount_subtotal != config.amount_cents
         or payment.livemode != config.livemode
     ):
         raise PilotStripeContractError("Stored Pilot payment contract mismatch")
@@ -545,7 +544,7 @@ def _stored_session_matches_payment(payment: PilotPayment, session: Any) -> bool
         and str(stripe_field(session, "currency") or "").lower()
         == payment.currency.lower()
         and stripe_field(session, "amount_subtotal") == payment.amount_subtotal
-        and stripe_field(session, "amount_total") == PILOT_AMOUNT_CENTS
+        and stripe_field(session, "amount_total") == payment.amount_subtotal
         and stripe_field(metadata, "nanovia_contract") == PILOT_CONTRACT_MARKER
     )
 
@@ -553,6 +552,7 @@ def _stored_session_matches_payment(payment: PilotPayment, session: Any) -> bool
 def _reversal_target_status(
     event_type: str,
     value: Any,
+    contract_amount: int,
 ) -> tuple[str | None, str]:
     if event_type in {"charge.refunded", "refund.created", "refund.updated"}:
         if event_type == "charge.refunded":
@@ -563,13 +563,13 @@ def _reversal_target_status(
             refund_status = str(stripe_field(value, "status") or "")
         if isinstance(amount, bool) or not isinstance(amount, int):
             raise PilotStripeContractError("Pilot refund amount is invalid")
-        if not 0 < amount <= PILOT_AMOUNT_CENTS:
+        if not 0 < amount <= contract_amount:
             raise PilotStripeContractError("Pilot refund amount is outside the contract")
         if event_type == "refund.updated" and refund_status in {"failed", "canceled"}:
             return None, f"refund_{refund_status}"
         if refund_status not in {"pending", "requires_action", "succeeded"}:
             raise PilotStripeContractError("Pilot refund status is invalid")
-        if amount == PILOT_AMOUNT_CENTS and refund_status == "succeeded":
+        if amount == contract_amount and refund_status == "succeeded":
             return "failed", "refunded"
         return "manual_review", "partially_refunded"
 
@@ -638,6 +638,7 @@ async def process_pilot_reversal_event(
     target_status, payment_status = _reversal_target_status(
         event_type,
         provider_object,
+        payment.amount_subtotal,
     )
     if target_status is None:
         effective_status = _monotone_pilot_status(

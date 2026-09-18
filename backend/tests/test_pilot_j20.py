@@ -73,6 +73,7 @@ PREVIOUS_PAYMENT_LINK_ID = "plink_previousPilot"
 PREVIOUS_PAYMENT_LINK_URL = "https://buy.stripe.com/previousPilot"
 PREVIOUS_PRICE_ID = "price_previousPilot"
 PREVIOUS_PRODUCT_ID = "prod_previousPilot"
+PREVIOUS_AMOUNT_CENTS = 24_700
 
 _REAL_VERIFY_CREDIT_CHECKOUT = billing_service.verify_credit_checkout_session
 
@@ -83,6 +84,7 @@ def _previous_pilot_contract_json(
     price_id: str = PREVIOUS_PRICE_ID,
     payment_link_id: str = PREVIOUS_PAYMENT_LINK_ID,
     payment_link_url: str = PREVIOUS_PAYMENT_LINK_URL,
+    amount_cents: int = 29_700,
 ) -> str:
     return json.dumps(
         [
@@ -91,6 +93,7 @@ def _previous_pilot_contract_json(
                 "price_id": price_id,
                 "payment_link_id": payment_link_id,
                 "payment_link_url": payment_link_url,
+                "amount_cents": amount_cents,
             }
         ]
     )
@@ -457,6 +460,7 @@ def _line_items(
     price_type: str = "one_time",
     quantity: int = 1,
     unit_amount: int = 29700,
+    amount_total: int = 29700,
     price_active: bool = True,
     product_active: bool = True,
 ) -> dict:
@@ -464,8 +468,8 @@ def _line_items(
         "data": [
             {
                 "quantity": quantity,
-                "amount_subtotal": 29700,
-                "amount_total": 29700,
+                "amount_subtotal": amount_total,
+                "amount_total": amount_total,
                 "price": {
                     "id": price_id,
                     "active": price_active,
@@ -494,6 +498,7 @@ def _provider_session(signed_session: dict) -> dict:
     paid = payment_status == "paid"
     payment_intent_id = signed_session.get("payment_intent", "pi_pilot")
     customer_id = signed_session.get("customer", "cus_pilot")
+    amount_total = signed_session.get("amount_total", 29700)
     provider = dict(signed_session)
     provider.update(
         {
@@ -511,8 +516,8 @@ def _provider_session(signed_session: dict) -> dict:
             "payment_intent": {
                 "id": payment_intent_id,
                 "livemode": False,
-                "amount": 29700,
-                "amount_received": 29700 if paid else 0,
+                "amount": amount_total,
+                "amount_received": amount_total if paid else 0,
                 "currency": "cad",
                 "customer": customer_id,
                 "status": "succeeded" if paid else "processing",
@@ -522,17 +527,17 @@ def _provider_session(signed_session: dict) -> dict:
                     "paid": paid,
                     "refunded": False,
                     "disputed": False,
-                    "amount": 29700,
-                    "amount_captured": 29700 if paid else 0,
+                    "amount": amount_total,
+                    "amount_captured": amount_total if paid else 0,
                     "amount_refunded": 0,
                     "currency": "cad",
                     "customer": customer_id,
                     "balance_transaction": {
                         "id": "txn_pilot",
-                        "amount": 29700,
+                        "amount": amount_total,
                         "currency": "cad",
                         "fee": 1174,
-                        "net": 28526,
+                        "net": amount_total - 1174,
                     },
                 },
             },
@@ -614,6 +619,7 @@ def _existing_payment(
     payment_intent_id: str,
     status: str = "paid",
     payment_status: str = "paid",
+    amount_subtotal: int = 29_700,
 ) -> PilotPayment:
     return PilotPayment(
         pilot_request_id=request.id,
@@ -624,7 +630,7 @@ def _existing_payment(
         stripe_price_id=PRICE_ID,
         customer_email=request.email,
         currency="cad",
-        amount_subtotal=29700,
+        amount_subtotal=amount_subtotal,
         payment_status=payment_status,
         status=status,
         livemode=False,
@@ -979,7 +985,7 @@ async def test_paid_checkout_from_explicit_previous_contract_replays_once(
     monkeypatch.setattr(
         settings,
         "STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON",
-        _previous_pilot_contract_json(),
+        _previous_pilot_contract_json(amount_cents=PREVIOUS_AMOUNT_CENTS),
     )
 
     async def verify(event_id, event_type, signed_session):
@@ -998,6 +1004,8 @@ async def test_paid_checkout_from_explicit_previous_contract_replays_once(
             _line_items(
                 price_id=PREVIOUS_PRICE_ID,
                 product_id=PREVIOUS_PRODUCT_ID,
+                unit_amount=PREVIOUS_AMOUNT_CENTS,
+                amount_total=PREVIOUS_AMOUNT_CENTS,
                 price_active=False,
                 product_active=False,
             ),
@@ -1020,6 +1028,8 @@ async def test_paid_checkout_from_explicit_previous_contract_replays_once(
                 payment_intent_id="pi_previous_pilot",
             )
             payload["payment_link"] = PREVIOUS_PAYMENT_LINK_ID
+            payload["amount_subtotal"] = PREVIOUS_AMOUNT_CENTS
+            payload["amount_total"] = PREVIOUS_AMOUNT_CENTS
 
             first = await handle_stripe_webhook(
                 "evt_previous_pilot",
@@ -1047,6 +1057,7 @@ async def test_paid_checkout_from_explicit_previous_contract_replays_once(
             assert distinct["status"] == "duplicate"
             assert payment.stripe_payment_link_id == PREVIOUS_PAYMENT_LINK_ID
             assert payment.stripe_price_id == PREVIOUS_PRICE_ID
+            assert payment.amount_subtotal == PREVIOUS_AMOUNT_CENTS
             assert payment.status == "paid"
             assert pilot_request.status == "paid"
             assert len(events) == 2
@@ -1564,7 +1575,12 @@ def _reversal_session(
     }
 
 
-def _install_reversal_verification(monkeypatch, provider_object: dict) -> AsyncMock:
+def _install_reversal_verification(
+    monkeypatch,
+    provider_object: dict,
+    *,
+    session_amount: int = 29_700,
+) -> AsyncMock:
     boundary = AsyncMock(
         return_value=(
             provider_object,
@@ -1579,7 +1595,11 @@ def _install_reversal_verification(monkeypatch, provider_object: dict) -> AsyncM
     monkeypatch.setattr(
         pilot_payment_service,
         "retrieve_pilot_reversal_sessions",
-        AsyncMock(return_value={"data": [_reversal_session()]}),
+        AsyncMock(
+            return_value={
+                "data": [_reversal_session(amount_total=session_amount)]
+            }
+        ),
     )
     return boundary
 
@@ -2196,10 +2216,18 @@ async def test_reversal_after_payment_link_rotation_uses_stored_contract(
             price_id=PRICE_ID,
             payment_link_id=PAYMENT_LINK_ID,
             payment_link_url=PAYMENT_LINK_URL,
+            amount_cents=PREVIOUS_AMOUNT_CENTS,
         ),
     )
-    provider_object = _reversal_object(event_type)
-    _install_reversal_verification(monkeypatch, provider_object)
+    provider_object = _reversal_object(
+        event_type,
+        amount=PREVIOUS_AMOUNT_CENTS,
+    )
+    _install_reversal_verification(
+        monkeypatch,
+        provider_object,
+        session_amount=PREVIOUS_AMOUNT_CENTS,
+    )
 
     async with _isolated_database(tmp_path, f"rotation_{event_type}") as sessions:
         async with sessions() as db:
@@ -2208,6 +2236,7 @@ async def test_reversal_after_payment_link_rotation_uses_stored_contract(
                 request=pilot_request,
                 session_id="cs_reversal",
                 payment_intent_id="pi_reversal",
+                amount_subtotal=PREVIOUS_AMOUNT_CENTS,
             )
             db.add(payment)
             await db.commit()

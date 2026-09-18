@@ -36,10 +36,11 @@ server-verified marker `nanovia_pro_pilot_v1`. The supported Stripe API version
 is explicitly `2024-12-18.acacia` for the currently pinned SDK.
 
 Retired Payment Links remain unauthorized by default. Outstanding Sessions may
-be completed only when their former Product, Price, Payment Link ID, and Payment
-Link URL are listed together in the non-secret
+be completed only when their former Product, Price, Payment Link ID, Payment
+Link URL, and exact historical `amount_cents` are listed together in the non-secret
 `STRIPE_PILOT_PREVIOUS_CONTRACTS_JSON` registry and the complete provider-side
-contract is verified. Before changing `PUBLIC_WEB_URL`, add each retired link's
+contract is verified against that historical amount. Before changing
+`PUBLIC_WEB_URL`, add each retired link's
 exact historical `confirmation_url` to its registry entry, including
 `/pilot/confirmation?session_id={CHECKOUT_SESSION_ID}`. Entries without this
 optional field retain the current-domain behavior for compatibility. The
