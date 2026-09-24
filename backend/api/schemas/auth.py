@@ -65,6 +65,8 @@ class UserPublic(BaseModel):
     plan: str
     is_verified: bool
     is_admin: bool = False
+    is_control_center_owner: bool = False
+    control_center_access: bool = False
     credits: int = 0
     totp_enabled: bool = False
     created_at: datetime
