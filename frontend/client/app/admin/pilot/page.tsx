@@ -47,6 +47,8 @@ function notificationFailed(request: AdminPilotRequest): boolean {
 
 export default function AdminPilotPage() {
   const [requests, setRequests] = useState<AdminPilotRequest[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [report, setReport] = useState<AdminPilotReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,17 +59,18 @@ export default function AdminPilotPage() {
     setError(null);
     try {
       const [requestResult, reportResult] = await Promise.all([
-        getAdminPilotRequests(),
+        getAdminPilotRequests(page),
         getAdminPilotReport(),
       ]);
       setRequests(requestResult.requests);
+      setTotalPages(Math.max(1, Math.ceil(requestResult.total / requestResult.per_page)));
       setReport(reportResult);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Chargement impossible.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     void load();
@@ -156,6 +159,11 @@ export default function AdminPilotPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          <nav aria-label="Pages des demandes Pilot" className="flex items-center justify-between text-sm text-gray-300">
+            <button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)} className="rounded-lg border border-gray-700 px-3 py-2 disabled:opacity-50">Précédent</button>
+            <span>Page {page} sur {totalPages}</span>
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)} className="rounded-lg border border-gray-700 px-3 py-2 disabled:opacity-50">Suivant</button>
+          </nav>
           {orderedRequests.map((request) => (
             <article key={request.id} className="rounded-xl border border-gray-800 bg-gray-900 p-5">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">

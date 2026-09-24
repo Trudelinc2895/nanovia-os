@@ -85,6 +85,11 @@ export default function ContactPage() {
       return;
     }
 
+    if ([form.repetitiveTask, form.examples, form.goal].some((value) => value.trim().length < 10)) {
+      setError("Décrivez la tâche, les exemples et l’objectif avec au moins 10 caractères chacun.");
+      return;
+    }
+
     setStatus("submitting");
     try {
       const response = await submitContact({
@@ -283,6 +288,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-task"
                 required
+                minLength={10}
                 maxLength={700}
                 rows={3}
                 value={form.repetitiveTask}
@@ -297,6 +303,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-examples"
                 required
+                minLength={10}
                 maxLength={1200}
                 rows={4}
                 value={form.examples}
@@ -311,6 +318,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-goal"
                 required
+                minLength={10}
                 maxLength={700}
                 rows={3}
                 value={form.goal}

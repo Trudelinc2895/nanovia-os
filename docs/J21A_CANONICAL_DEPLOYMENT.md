@@ -10,7 +10,7 @@ Canonical public runtime:
 - checkout: `/opt/kt-monetization-os`
 - Docker Compose project: `infra`
 - approved J20 commit: `b85de68277c9f425f7dfe0e488f242c7d6942423`
-- approved Alembic head: `c7e4a91f2b60`
+- approved Alembic head: `d8f5b4c3a210`
 
 The broken `/home/deploy/nanovia-os-production` checkout and its `nanovia-prod`
 project are not deployment sources. No `nanovia-prod_*` volume may be used.
@@ -168,7 +168,7 @@ configuration values or env-file contents:
 13. the merged Compose configuration is valid;
 14. active service and immutable image IDs are inventoried;
 15. the current Alembic revision exists in the target migration history;
-16. the target has the single approved head `c7e4a91f2b60`;
+16. the target has the single approved head `d8f5b4c3a210`;
 17. the custom-format PostgreSQL dump and manifest are both verified.
 
 GitHub concurrency serializes workflow runs. A separate non-blocking `flock` on
@@ -262,7 +262,7 @@ the workflow performs:
 7. temporary stop of `api` and `ai-orchestrator` to freeze application writes;
 8. verified custom-format PostgreSQL dump and manifest under that write freeze;
 9. migration under the GitHub and VPS deployment locks;
-10. confirmation that Alembic reached `c7e4a91f2b60`;
+10. confirmation that Alembic reached `d8f5b4c3a210`;
 11. recreation of stateless application services only;
 12. health, commit, revision, and restart-loop checks.
 

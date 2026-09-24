@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from markupsafe import escape
 from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
-from api.models.pilot import PilotRequest
+from api.models.pilot import PilotPayment, PilotRequest
 from api.services.email_service import _send as send_email
 from api.services.email_service import _wrap as wrap_email
 
@@ -77,12 +77,13 @@ def _operator_payment_html(request: PilotRequest) -> str:
     )
 
 
-def _client_payment_html(request: PilotRequest) -> str:
+def _client_payment_html(request: PilotRequest, amount_cents: int) -> str:
+    amount = f"{amount_cents // 100},{amount_cents % 100:02d}"
     return wrap_email(
         "<h1 style=\"margin:0 0 18px;color:#34D399;font-size:24px\">"
         "Paiement confirmé — démarrage du Pro Pilot</h1>"
         f"<p>Bonjour <strong>{_safe(request.name)}</strong>,</p>"
-        "<p>Votre paiement de 297 $ CAD est confirmé. Votre demande passe dans "
+        f"<p>Votre paiement de {amount} $ CAD est confirmé. Votre demande passe dans "
         "la file de préparation Nanovia.</p>"
         f"<p>Référence : <strong>{_safe(request.id)}</strong></p>"
         "<p>Conservez ce courriel. Nanovia utilisera cette adresse pour les "
@@ -138,10 +139,32 @@ async def deliver_intake_notifications(request: PilotRequest) -> dict[str, bool]
     return results
 
 
-async def deliver_payment_notifications(request: PilotRequest) -> bool:
+async def deliver_payment_notifications(request: PilotRequest, db: AsyncSession) -> bool:
     """Notify both sides once a verified Stripe payment is persisted."""
     if request.status != "paid" or request.payment_notification_status == "sent":
         return request.payment_notification_status == "sent"
+
+    payment = (
+        await db.execute(
+            select(PilotPayment)
+            .where(
+                PilotPayment.pilot_request_id == request.id,
+                PilotPayment.status == "paid",
+                PilotPayment.payment_status == "paid",
+            )
+            .order_by(PilotPayment.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if (
+        payment is None
+        or payment.amount_subtotal is None
+        or payment.amount_subtotal <= 0
+        or payment.currency.lower() != "cad"
+    ):
+        request.payment_notification_status = "failed"
+        request.last_notification_error = "Paiement confirmé introuvable pour la notification."
+        return False
 
     recipient = (request.routed_to or settings.CONTACT_RECIPIENT_EMAIL).strip()
     request.payment_notification_attempts = (request.payment_notification_attempts or 0) + 1
@@ -156,7 +179,7 @@ async def deliver_payment_notifications(request: PilotRequest) -> bool:
         client_sent = await send_email(
             to=request.email,
             subject=f"Paiement Nanovia Pro Pilot confirmé — {request.id}",
-            html=_client_payment_html(request),
+            html=_client_payment_html(request, payment.amount_subtotal),
             reply_to=recipient or None,
             idempotency_key=f"pilot-paid-client/{request.id}",
         )
@@ -215,7 +238,7 @@ async def retry_pending_pilot_notifications(db_factory) -> None:
                 and pilot_request.payment_notification_status != "sent"
                 and pilot_request.payment_notification_attempts < MAX_NOTIFICATION_ATTEMPTS
             ):
-                await deliver_payment_notifications(pilot_request)
+                await deliver_payment_notifications(pilot_request, db)
         if requests:
             await db.commit()
             logger.info("[pilot-notification] Retried %d Pilot request(s)", len(requests))
