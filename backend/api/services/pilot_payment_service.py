@@ -308,23 +308,29 @@ async def process_pilot_checkout_event(
         None,
     )
     if blocking_payment is not None:
-        return await _mark_collision_manual_review(
+        await _mark_collision_manual_review(
             session_payment,
             blocking_payment,
             request,
             db,
         )
+        # A second, independently verified Checkout may have charged the buyer.
+        # Keep its own row for reconciliation while withholding fulfillment.
+        target_status = "manual_review"
 
     is_retry_after_failed_checkout = bool(other_request_payments) and all(
         _is_retryable_failed_checkout(payment)
         for payment in other_request_payments
     )
-    if session_payment is None and request.status not in OPEN_REQUEST_STATES and not (
-        request.status == "failed" and is_retry_after_failed_checkout
+    if (
+        session_payment is None
+        and blocking_payment is None
+        and request.status not in OPEN_REQUEST_STATES
+        and not (request.status == "failed" and is_retry_after_failed_checkout)
     ):
-        request.status = "manual_review"
-        await db.flush()
-        return "manual_review"
+        # A verified Checkout can settle even after an operator changed the
+        # request state. Retain its charge without granting fulfillment.
+        target_status = "manual_review"
 
     payment_status = str(stripe_field(provider_session, "payment_status") or "")
     payment = session_payment
@@ -359,7 +365,11 @@ async def process_pilot_checkout_event(
                 payment.amount_subtotal = verified.gross_amount
                 payment.status = target_status
                 payment.customer_email = verified.customer_email
-            request.status = target_status
+            request.status = (
+                _monotone_pilot_status(request.status, target_status)
+                if target_status == "manual_review"
+                else target_status
+            )
             if target_status == "paid" and request.fulfillment_status == "new":
                 request.fulfillment_status = "qualified"
             await db.flush()

@@ -72,16 +72,16 @@ export default function ContactPage() {
     }
 
     if (
-      !form.name.trim() ||
-      !form.company.trim() ||
-      !form.businessType.trim() ||
+      form.name.trim().length < 2 ||
+      form.company.trim().length < 2 ||
+      form.businessType.trim().length < 2 ||
       !form.repetitiveTask.trim() ||
       !form.examples.trim() ||
       !form.goal.trim() ||
       !form.urgency.trim() ||
       !form.consent
     ) {
-      setError("Remplissez tous les champs requis et confirmez votre consentement.");
+      setError("Remplissez les champs requis (au moins 2 caractères pour le nom, l’entreprise et l’activité) et confirmez votre consentement.");
       return;
     }
 
@@ -232,6 +232,7 @@ export default function ContactPage() {
                   id="pilot-name"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={100}
                   value={form.name}
                   onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
@@ -245,6 +246,7 @@ export default function ContactPage() {
                   id="pilot-company"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={100}
                   value={form.company}
                   onChange={(e) => setForm((current) => ({ ...current, company: e.target.value }))}
@@ -274,6 +276,7 @@ export default function ContactPage() {
                   id="pilot-business-type"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={120}
                   value={form.businessType}
                   onChange={(e) => setForm((current) => ({ ...current, businessType: e.target.value }))}

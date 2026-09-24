@@ -200,7 +200,11 @@ def is_control_center_owner(user: User) -> bool:
     """Return true only for the configured human owner identity."""
     owner_email = settings.CONTROL_CENTER_OWNER_EMAIL.strip().casefold()
     user_email = (getattr(user, "email", "") or "").strip().casefold()
-    return bool(owner_email and user_email and hmac.compare_digest(user_email, owner_email))
+    return bool(
+        owner_email
+        and user_email
+        and hmac.compare_digest(user_email.encode("utf-8"), owner_email.encode("utf-8"))
+    )
 
 
 def has_control_center_access(user: User) -> bool:

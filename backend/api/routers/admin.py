@@ -756,6 +756,18 @@ def _pilot_request_payload(request: PilotRequest) -> dict[str, object]:
             if latest_payment is not None
             else None
         ),
+        "payments": [
+            {
+                "stripe_checkout_session_id": payment.stripe_checkout_session_id,
+                "stripe_payment_intent_id": payment.stripe_payment_intent_id,
+                "status": payment.status,
+                "payment_status": payment.payment_status,
+                "amount_subtotal": payment.amount_subtotal,
+                "currency": payment.currency,
+                "created_at": payment.created_at.isoformat(),
+            }
+            for payment in sorted(request.payments, key=lambda item: item.created_at)
+        ],
         "created_at": request.created_at.isoformat(),
         "updated_at": request.updated_at.isoformat(),
         "last_contacted_at": (

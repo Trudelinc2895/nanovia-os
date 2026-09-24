@@ -15,6 +15,15 @@ def _request(ip: str = "203.0.113.10"):
     )
 
 
+def test_internationalized_email_is_compared_without_crashing(monkeypatch):
+    monkeypatch.setattr(settings, "CONTROL_CENTER_OWNER_EMAIL", "Équipe@nanovia.ca")
+    owner = SimpleNamespace(email="équipe@nanovia.ca")
+    other = SimpleNamespace(email="autre@nanovia.ca")
+
+    assert is_control_center_owner(owner) is True
+    assert is_control_center_owner(other) is False
+
+
 @pytest.mark.asyncio
 async def test_configured_owner_is_the_only_human_with_control_center_access(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "development")

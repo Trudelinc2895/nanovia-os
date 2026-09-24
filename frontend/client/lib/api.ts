@@ -625,6 +625,15 @@ export interface AdminPilotRequest {
     currency: string;
     created_at: string;
   } | null;
+  payments: {
+    stripe_checkout_session_id: string;
+    stripe_payment_intent_id: string | null;
+    status: string;
+    payment_status: string;
+    amount_subtotal: number | null;
+    currency: string;
+    created_at: string;
+  }[];
   created_at: string;
   updated_at: string;
   last_contacted_at: string | null;
