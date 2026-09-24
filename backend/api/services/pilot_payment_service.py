@@ -201,13 +201,16 @@ async def _apply_reversal_request_status(
     request: PilotRequest,
     effective_status: str,
 ) -> None:
-    if request.status == "paid" and effective_status in {"manual_review", "failed"}:
+    if request.status in {"paid", "manual_review"} and effective_status in {
+        "manual_review", "failed",
+    }:
         other_paid_payment = await db.scalar(
             select(PilotPayment.id)
             .where(
                 PilotPayment.pilot_request_id == request.id,
                 PilotPayment.id != payment.id,
-                PilotPayment.status == "paid",
+                PilotPayment.payment_status == "paid",
+                PilotPayment.status.in_(("paid", "manual_review")),
             )
             .limit(1)
         )

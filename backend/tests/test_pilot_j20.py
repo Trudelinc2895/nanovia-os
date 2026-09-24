@@ -1773,6 +1773,43 @@ async def test_refund_dispute_and_cancellation_never_leave_pilot_paid(
 
 
 @pytest.mark.asyncio
+async def test_refunding_one_duplicate_charge_keeps_other_charge_in_review(
+    monkeypatch,
+    tmp_path,
+):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "duplicate_partial_reconciliation") as sessions:
+        async with sessions() as db:
+            request = await _add_request(db)
+            first = _valid_session(
+                session_id="cs_reversal", payment_intent_id="pi_reversal",
+                request_id=request.id,
+            )
+            second = _valid_session(
+                session_id="cs_other_paid", payment_intent_id="pi_other_paid",
+                request_id=request.id,
+            )
+            assert (await handle_stripe_webhook(
+                "evt_first_paid", "checkout.session.completed", first, db,
+            ))["status"] == "paid"
+            assert (await handle_stripe_webhook(
+                "evt_other_paid", "checkout.session.completed", second, db,
+            ))["status"] == "manual_review"
+
+            refund = _reversal_object("charge.refunded")
+            _install_reversal_verification(monkeypatch, refund)
+            assert (await handle_stripe_webhook(
+                "evt_first_refunded", "charge.refunded", refund, db,
+            ))["status"] == "failed"
+
+            await db.refresh(request)
+            payments = (await db.execute(select(PilotPayment))).scalars().all()
+            assert request.status == "manual_review"
+            assert {p.payment_status for p in payments} == {"refunded", "paid"}
+            assert next(p for p in payments if p.payment_status == "paid").status == "manual_review"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider_status", ["failed", "canceled"])
 async def test_terminal_refund_update_is_consumed_once_without_reactivation(
     monkeypatch,
