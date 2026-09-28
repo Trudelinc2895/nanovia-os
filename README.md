@@ -448,8 +448,8 @@ Base URL: `http://127.0.0.1:8010/api/v1`
 | GET | `/billing/upsell` | Bearer | Contextual upsell suggestion |
 | GET | `/billing/addons` | Bearer | Available add-ons |
 | POST | `/billing/addon/checkout` | Bearer | Stripe checkout for add-on |
-| POST | `/billing/checkout` | Bearer | Stripe checkout for plan |
-| POST | `/billing/portal` | Bearer | Stripe customer portal |
+| POST | `/billing/checkout-session` | Bearer | Stripe checkout for plan |
+| POST | `/billing/portal-session` | Bearer | Stripe customer portal |
 | GET | `/billing/credits` | Bearer | Credit balance |
 | POST | `/billing/credits/purchase` | Bearer | Buy credit pack |
 | POST | `/billing/webhook` | Stripe sig | Stripe event handler |
