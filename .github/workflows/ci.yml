@@ -150,26 +150,79 @@ jobs:
               "TARGET_ENV=staging TARGET_REF=main TARGET_SHA='${{ github.sha }}' DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
                REPO_URL='https://github.com/${{ github.repository }}.git' \
                timeout 900 bash -seuo pipefail" <<'ENDSSH'
-            cd "${DEPLOY_PATH}"
-            git fetch --prune origin
-            git cat-file -e "${TARGET_SHA}^{commit}"
-            git checkout --detach "${TARGET_SHA}"
-            COMPOSE_ARGS=(
-              -p nanovia-staging
-              -f infra/docker-compose.prod.yml
-              -f infra/docker-compose.staging.yml
-              --env-file .env.staging
-            )
-            docker compose "${COMPOSE_ARGS[@]}" up -d postgres redis
-            docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic upgrade head
-            docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic heads \
-              | grep -Fq 'd8f5b4c3a210 (head)'
-            docker compose "${COMPOSE_ARGS[@]}" up -d --build --force-recreate \
-              web admin api ai-orchestrator
-            test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
-            curl --fail --silent --show-error http://127.0.0.1:13000/ >/dev/null
-            curl --fail --silent --show-error http://127.0.0.1:13020/ >/dev/null
-            curl --fail --silent --show-error http://127.0.0.1:18010/api/v1/health/ready >/dev/null
-            curl --fail --silent --show-error http://127.0.0.1:18020/health >/dev/null
-            echo "staging deploy ${TARGET_SHA} successful"
+              ensure_clean_worktree() {
+                if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+                  echo "ERROR: staging checkout contains local modifications" >&2
+                  exit 1
+                fi
+              }
+
+              wait_for_healthy() {
+                local service="$1"
+                local attempts=60
+                local container_id
+                local health
+                while [ "${attempts}" -gt 0 ]; do
+                  container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q "${service}")"
+                  if [ -n "${container_id}" ]; then
+                    health="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+                    if [ "${health}" = "healthy" ]; then
+                      return 0
+                    fi
+                  fi
+                  sleep 5
+                  attempts=$((attempts - 1))
+                done
+                echo "ERROR: ${service} did not become healthy within 300 seconds" >&2
+                docker compose "${COMPOSE_ARGS[@]}" ps "${service}" >&2 || true
+                return 1
+              }
+
+              retry_curl() {
+                local url="$1"
+                local attempts=60
+                while [ "${attempts}" -gt 0 ]; do
+                  if curl --fail --silent --show-error --max-time 5 "${url}" >/dev/null; then
+                    return 0
+                  fi
+                  sleep 5
+                  attempts=$((attempts - 1))
+                done
+                echo "ERROR: health probe failed after 300 seconds: ${url}" >&2
+                return 1
+              }
+
+              cd "${DEPLOY_PATH}"
+              ensure_clean_worktree
+              git fetch --prune origin
+              git cat-file -e "${TARGET_SHA}^{commit}"
+              git checkout --detach "${TARGET_SHA}"
+              ensure_clean_worktree
+              COMPOSE_ARGS=(
+                -p nanovia-staging
+                -f infra/docker-compose.prod.yml
+                -f infra/docker-compose.staging.yml
+                --env-file .env.staging
+              )
+              docker compose "${COMPOSE_ARGS[@]}" up -d postgres redis
+              wait_for_healthy postgres
+              wait_for_healthy redis
+              docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic upgrade head
+              docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic heads \
+                | grep -Fq 'd8f5b4c3a210 (head)'
+              docker compose "${COMPOSE_ARGS[@]}" up -d --build --force-recreate \
+                web admin api ai-orchestrator
+              WEB_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port web 3000 | tail -n 1)"
+              ADMIN_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port admin 3020 | tail -n 1)"
+              API_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port api 8010 | tail -n 1)"
+              AI_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port ai-orchestrator 8020 | tail -n 1)"
+              [ -n "${WEB_ADDR}" ] && [ -n "${ADMIN_ADDR}" ] \
+                && [ -n "${API_ADDR}" ] && [ -n "${AI_ADDR}" ]
+              test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+              ensure_clean_worktree
+              retry_curl "http://${WEB_ADDR}/"
+              retry_curl "http://${ADMIN_ADDR}/"
+              retry_curl "http://${API_ADDR}/api/v1/health/ready"
+              retry_curl "http://${AI_ADDR}/health"
+              echo "staging deploy ${TARGET_SHA} successful"
           ENDSSH
