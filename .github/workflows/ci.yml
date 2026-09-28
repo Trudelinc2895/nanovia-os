@@ -112,7 +112,7 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [docker-build-scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     environment: staging
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -123,18 +123,18 @@ jobs:
       - name: Check deploy secrets
         id: secrets-check
         run: |
-          if [ -n "${{ secrets.VPS_HOST }}" ] && [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ] && [ -n "${{ secrets.DEPLOY_PATH }}" ]; then
+          if [ -n "${{ secrets.VPS_HOST }}" ] && [ -n "${{ secrets.VPS_SSH_PRIVATE_KEY }}" ] && [ -n "${{ secrets.DEPLOY_PATH }}" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Staging deploy skipped — configure VPS_HOST, SSH_PRIVATE_KEY and DEPLOY_PATH"
+            echo "::warning::Staging deploy skipped — configure VPS_HOST, VPS_SSH_PRIVATE_KEY and DEPLOY_PATH"
           fi
 
       - name: Setup SSH agent
         if: steps.secrets-check.outputs.configured == 'true'
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
 
       - name: Add VPS to known_hosts
         if: steps.secrets-check.outputs.configured == 'true'
@@ -147,7 +147,7 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=60 \
               "deploy@${{ secrets.VPS_HOST }}" \
-              "TARGET_ENV=staging TARGET_REF=main TARGET_SHA='${{ github.sha }}' DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
+              "TARGET_ENV=staging TARGET_REF='${{ github.ref_name }}' TARGET_SHA='${{ github.sha }}' DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
                REPO_URL='https://github.com/${{ github.repository }}.git' \
                timeout 900 bash -seuo pipefail" <<'ENDSSH'
               ensure_clean_worktree() {
