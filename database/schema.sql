@@ -1,5 +1,6 @@
--- KT Monetization OS — PostgreSQL Schema v1.0
--- Production-grade: RLS, indexes, triggers, audit
+-- Nanovia OS — LEGACY SQL REFERENCE (DO NOT APPLY DIRECTLY)
+-- Runtime source of truth: backend/api/models + backend/alembic migrations.
+-- This file predates the current ORM/Alembic schema and is retained only for historical reference.
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
