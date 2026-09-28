@@ -72,7 +72,6 @@ class ModulePublic(BaseModel):
     description: str
     available: bool  # True only if stripe_price_id is configured
     included_in_plans: list[str]
-    included_in_plans: list[str]
 
 
 class CheckoutResponse(BaseModel):
