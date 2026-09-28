@@ -4,7 +4,7 @@ on:
   push:
     branches: [staging, main]
   pull_request:
-    branches: [staging, main]
+    branches: [staging, main, integrate/nanovia-j21-main]
 
 # Required to publish Trivy SARIF results to GitHub Code Scanning.
 # Keep every other workflow permission read-only by default.
