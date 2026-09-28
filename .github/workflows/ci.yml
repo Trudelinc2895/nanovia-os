@@ -30,7 +30,7 @@ jobs:
         ports: ["6379:6379"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - uses: actions/setup-python@v5
         with:
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - uses: actions/setup-node@v4
         with:
@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-build]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -118,7 +118,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Check deploy secrets
         id: secrets-check
@@ -147,17 +147,29 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=60 \
               "deploy@${{ secrets.VPS_HOST }}" \
-              "TARGET_ENV=staging TARGET_REF=main DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
+              "TARGET_ENV=staging TARGET_REF=main TARGET_SHA='${{ github.sha }}' DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' \
                REPO_URL='https://github.com/${{ github.repository }}.git' \
                timeout 900 bash -seuo pipefail" <<'ENDSSH'
             cd "${DEPLOY_PATH}"
             git fetch --prune origin
-            git checkout main
-            git pull --ff-only origin main
-            docker compose -p nanovia-staging \
-              -f infra/docker-compose.prod.yml \
-              -f infra/docker-compose.staging.yml \
-              --env-file .env.staging \
-              up -d --build --force-recreate api ai-orchestrator
-            echo "✅ staging deploy $(git rev-parse --short HEAD) successful"
+            git cat-file -e "${TARGET_SHA}^{commit}"
+            git checkout --detach "${TARGET_SHA}"
+            COMPOSE_ARGS=(
+              -p nanovia-staging
+              -f infra/docker-compose.prod.yml
+              -f infra/docker-compose.staging.yml
+              --env-file .env.staging
+            )
+            docker compose "${COMPOSE_ARGS[@]}" up -d postgres redis
+            docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic upgrade head
+            docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic heads \
+              | grep -Fq 'd8f5b4c3a210 (head)'
+            docker compose "${COMPOSE_ARGS[@]}" up -d --build --force-recreate \
+              web admin api ai-orchestrator
+            test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+            curl --fail --silent --show-error http://127.0.0.1:13000/ >/dev/null
+            curl --fail --silent --show-error http://127.0.0.1:13020/ >/dev/null
+            curl --fail --silent --show-error http://127.0.0.1:18010/api/v1/health/ready >/dev/null
+            curl --fail --silent --show-error http://127.0.0.1:18020/health >/dev/null
+            echo "staging deploy ${TARGET_SHA} successful"
           ENDSSH

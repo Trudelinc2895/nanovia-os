@@ -159,7 +159,7 @@ jobs:
           fi
 
       - name: Check out the exact requested commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           fetch-depth: 0
           ref: ${{ inputs.deploy_sha }}
