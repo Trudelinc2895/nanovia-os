@@ -47,6 +47,13 @@ async def _log_system_health() -> None:
         pass  # psutil optional
 
 
+async def _retry_pilot_notifications(db_factory) -> None:
+    """Retry durable Pilot notifications without coupling startup to email code."""
+    from api.services.pilot_notification_service import retry_pending_pilot_notifications
+
+    await retry_pending_pilot_notifications(db_factory)
+
+
 async def _run_periodic(coro_factory, interval_seconds: int, name: str) -> None:
     """Run a coroutine factory on a schedule, handling errors gracefully."""
     while True:
@@ -74,6 +81,14 @@ def start_scheduler(db_factory) -> list[asyncio.Task]:
         asyncio.create_task(
             _run_periodic(_log_system_health, 300, "health_snapshot"),
             name="health_snapshot"
+        ),
+        asyncio.create_task(
+            _run_periodic(
+                lambda: _retry_pilot_notifications(db_factory),
+                300,
+                "pilot_notification_retry",
+            ),
+            name="pilot_notification_retry",
         ),
     ]
     logger.info("[scheduler] Started %d background tasks", len(tasks))

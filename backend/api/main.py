@@ -38,6 +38,7 @@ from api.routers import team
 from api.routers import scrape
 from api.scraping.worker import run_worker_forever
 from api.middleware.body_limit import BodySizeLimitMiddleware
+from api.middleware.client_ip import rate_limit_client_ip
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -368,6 +369,7 @@ def _get_load_multiplier() -> float:
 
 
 _RATE_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
+_RATE_SKIP_EXACT_PATHS = frozenset({"/api/v1/billing/webhook"})
 _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
     "/api/v1/auth/login": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
     "/api/v1/auth/register": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
@@ -375,6 +377,13 @@ _RATE_LIMIT_RULES: dict[str, dict[str, object]] = {
     "/api/v1/auth/reset-password": {"scope": "ip", "limit": 10, "window": 60, "bucket": "auth"},
     "/api/v1/auth/refresh": {"scope": "ip", "limit": 20, "window": 60, "bucket": "refresh"},
     "/api/v1/auth/resend-verification": {"scope": "ip", "limit": 5, "window": 300, "bucket": "verify"},
+    "/api/v1/contact": {
+        "scope": "ip",
+        "limit": 5,
+        "window": 600,
+        "bucket": "pilot-contact",
+        "detail": "Trop de demandes. Réessaie dans 10 minutes.",
+    },
     # Stricter limits for 2FA — prevents TOTP brute force (6-digit = 1M combos)
     "/api/v1/auth/2fa/verify-login": {
         "scope": "ip",
@@ -451,10 +460,12 @@ def _rate_limit_key(scope: str, bucket: str, ip: str, user_id: str | None) -> st
 @app.middleware("http")
 async def rate_limit(request: Request, call_next) -> Response:
     path = request.url.path
-    if any(path.startswith(p) for p in _RATE_SKIP_PREFIXES):
+    if path in _RATE_SKIP_EXACT_PATHS or any(
+        path.startswith(prefix) for prefix in _RATE_SKIP_PREFIXES
+    ):
         return await call_next(request)
 
-    ip = (request.client.host if request.client else "unknown").replace(":", "_")
+    ip = (await rate_limit_client_ip(request)).replace(":", "_")
     user_id = _extract_sub(request.headers.get("authorization"))
 
     # Shadow-ban check

@@ -88,6 +88,101 @@ async def test_add_credits_idempotency(mock_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("amount", [0, -1, -100])
+async def test_add_credits_rejects_non_positive_amount(amount, mock_db):
+    """No zero or negative credit grant can enter the ledger."""
+    from api.services.credit_service import add_credits
+
+    with pytest.raises(ValueError, match="amount must be positive"):
+        await add_credits(uuid.uuid4(), amount, source="stripe", db=mock_db)
+
+    mock_db.execute.assert_not_called()
+    mock_db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_credits_commit_true_records_metric_immediately(mock_user, mock_db):
+    """When add_credits owns its own commit, the metric is safe to record right away."""
+    from api.services import credit_service
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute.return_value = execute_result
+
+    with (
+        patch("api.services.credit_service._realign_credit_projections", new=AsyncMock(return_value=0)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()),
+        patch("api.services.credit_service.record_credits_added_metric") as metric_mock,
+    ):
+        await credit_service.add_credits(mock_user.id, 50, source="stripe", db=mock_db)
+
+    mock_db.commit.assert_awaited_once()
+    metric_mock.assert_called_once_with("stripe", 50)
+
+
+@pytest.mark.asyncio
+async def test_add_credits_commit_false_defers_metric_to_post_commit_actions(mock_user, mock_db):
+    """commit=False must never record the metric before the outer transaction commits.
+
+    Regression test: previously the counter was incremented unconditionally inside
+    add_credits even when commit=False, so a later rollback in the caller's
+    transaction (e.g. webhook fulfillment) left the metric overcounting credits
+    that were never actually persisted.
+    """
+    from api.services import credit_service
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute.return_value = execute_result
+
+    post_commit_actions: list = []
+    with (
+        patch("api.services.credit_service._realign_credit_projections", new=AsyncMock(return_value=0)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()),
+        patch("api.services.credit_service.record_credits_added_metric") as metric_mock,
+    ):
+        await credit_service.add_credits(
+            mock_user.id,
+            50,
+            source="stripe_checkout",
+            db=mock_db,
+            commit=False,
+            post_commit_actions=post_commit_actions,
+        )
+
+        # Not recorded yet: the outer transaction has not committed.
+        mock_db.commit.assert_not_awaited()
+        mock_db.flush.assert_awaited_once()
+        metric_mock.assert_not_called()
+
+        assert len(post_commit_actions) == 1
+        await post_commit_actions[0]()
+
+    metric_mock.assert_called_once_with("stripe_checkout", 50)
+
+
+@pytest.mark.asyncio
+async def test_add_credits_commit_false_without_post_commit_actions_skips_metric(mock_user, mock_db):
+    """Without a place to defer to, never guess: skip rather than risk overcounting."""
+    from api.services import credit_service
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute.return_value = execute_result
+
+    with (
+        patch("api.services.credit_service._realign_credit_projections", new=AsyncMock(return_value=0)),
+        patch("api.services.credit_service._sync_workspace_credit_projection", new=AsyncMock()),
+        patch("api.services.credit_service.record_credits_added_metric") as metric_mock,
+    ):
+        await credit_service.add_credits(
+            mock_user.id, 50, source="stripe_checkout", db=mock_db, commit=False,
+        )
+
+    metric_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_realign_credit_projections_uses_ledger_as_authority(mock_user, mock_db):
     """Ledger wins over stale projections and triggers projection sync."""
     from api.services.credit_service import _realign_credit_projections

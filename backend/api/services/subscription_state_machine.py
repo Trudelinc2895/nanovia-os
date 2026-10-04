@@ -23,7 +23,6 @@ RULES:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from enum import Enum
 from typing import Any
@@ -119,20 +118,11 @@ async def handle_trial_will_end(
     """
     Called when Stripe fires customer.subscription.trial_will_end (3 days before).
 
-    Actions:
-    1. Send trial-ending email (non-blocking)
-    2. Write audit log entry
+    The webhook transaction queues its email only after this audit succeeds.
     """
     from api.services.billing_service import _write_audit  # type: ignore[attr-defined]
-    from api.services.email_service import send_trial_ending
-
     logger.info(
         f"[fsm] trial_will_end user={user.id} plan={sub.plan} days_remaining={days_remaining}"
-    )
-
-    # Fire email asynchronously — never block on it
-    asyncio.create_task(
-        send_trial_ending(user.email, user.full_name or user.email, days_remaining)
     )
 
     await _write_audit(
@@ -172,22 +162,15 @@ async def handle_payment_failed(
     Called when Stripe fires invoice.payment_failed.
 
     Actions:
-    1. Send payment-failed email (non-blocking)
-    2. Write audit log
-    3. Does NOT degrade plan — Stripe retries and we keep past_due grace period.
+    1. Write audit log; the webhook transaction queues email after this succeeds.
+    2. Does NOT degrade plan — Stripe retries and we keep past_due grace period.
        Plan degradation only happens on subscription.deleted / unpaid.
     """
     from api.services.billing_service import _write_audit  # type: ignore[attr-defined]
-    from api.services.email_service import send_payment_failed
-
     plan = sub.plan if sub else user.plan
     logger.warning(
         f"[fsm] payment_failed user={user.id} plan={plan} "
         f"sub={sub.stripe_subscription_id if sub else 'none'}"
-    )
-
-    asyncio.create_task(
-        send_payment_failed(user.email, plan)
     )
 
     await _write_audit(

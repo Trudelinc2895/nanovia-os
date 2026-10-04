@@ -69,19 +69,31 @@ def _wrap(body: str) -> str:
 </html>"""
 
 
-async def _send(to: str, subject: str, html: str) -> bool:
+async def _send(
+    to: str,
+    subject: str,
+    html: str,
+    *,
+    reply_to: str | None = None,
+    idempotency_key: str | None = None,
+) -> bool:
     """POST to Resend API. Returns True on success, False on any failure."""
     if not settings.RESEND_API_KEY:
         logger.info("[email] RESEND_API_KEY not set — skipping send to %s | %s", to, subject)
         return False
 
     payload = {"from": settings.RESEND_FROM, "to": [to], "subject": subject, "html": html}
+    if reply_to:
+        payload["reply_to"] = reply_to
+    headers = {"Authorization": f"Bearer {settings.RESEND_API_KEY}"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 _RESEND_URL,
                 json=payload,
-                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                headers=headers,
             )
         if resp.is_success:
             logger.info("[email] Sent '%s' to %s (id=%s)", subject, to, resp.json().get("id"))

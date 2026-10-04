@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 class PrivateOrchestratorAccessBoundary(BaseModel):
     admin_only: bool = True
+    owner_only: bool = True
+    owner_approval_required_for_mutations: bool = True
     feature_flagged: bool = True
     public_saas_exposure: bool = False
     destructive_merge_with_my_agent_hub: bool = False
@@ -20,6 +22,9 @@ class PrivateOrchestratorCapabilityMatrix(BaseModel):
     agent_routing: bool = True
     conversation_memory: bool = True
     result_scoring: bool = True
+    pilot_operations_read: bool = True
+    pilot_action_proposals: bool = True
+    pilot_mutation: bool = False
     prompt_execution: bool = False
     terminal_access: bool = False
     filesystem_access: bool = False

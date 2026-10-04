@@ -1,23 +1,81 @@
 """
 backend/api/routers/contact.py
 
-Contact form endpoint.
-- Validates input
-- Sends notification email via Resend
-- Falls back gracefully if email not configured
-- Always returns 200 to prevent enumeration
+Pilot request endpoint.
+- Validates and persists the request before any notification
+- Sends a best-effort notification via Resend
+- Returns an opaque request_id from canonical storage
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+from datetime import datetime, timezone
+from typing import Literal
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from api.services.email_service import _send as send_email
+from api.config import settings
+from api.core.deps import DB
+from api.models.pilot import PilotRequest
+from api.services.pilot_notification_service import deliver_intake_notifications
+from api.services.pilot_stripe_contract_service import (
+    PilotStripeContractError,
+    PilotStripeProviderUnavailable,
+    load_pilot_stripe_config,
+    retrieve_pilot_account,
+    retrieve_pilot_payment_link,
+    validate_pilot_provider_contract,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_PAYMENT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_]+$")
+
+
+def _sanitize_log_value(value: str | None) -> str:
+    """Keep untrusted values on a single physical log line."""
+    return (value or "").replace("\n", " ").replace("\r", " ")
+
+
+async def _configured_payment_link_url() -> str | None:
+    """Expose the current Payment Link only after live provider validation."""
+    raw_value = settings.STRIPE_PILOT_PAYMENT_LINK_URL
+    value = raw_value.strip()
+    if not value or raw_value != value:
+        return None
+    try:
+        config = load_pilot_stripe_config(settings)
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (PilotStripeContractError, ValueError):
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "buy.stripe.com"
+        or parsed.netloc not in {"buy.stripe.com", "buy.stripe.com:443"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or _PAYMENT_LINK_PATH.fullmatch(parsed.path) is None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+
+    try:
+        account, payment_link = await asyncio.gather(
+            retrieve_pilot_account(),
+            retrieve_pilot_payment_link(config.payment_link_id),
+        )
+        validate_pilot_provider_contract(account, payment_link, config)
+    except (PilotStripeContractError, PilotStripeProviderUnavailable):
+        return None
+    return config.payment_link_url
+
 
 SUBJECTS = {
     "general": "Message général",
@@ -31,20 +89,25 @@ SUBJECTS = {
 
 
 class ContactRequest(BaseModel):
-    name: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=2, max_length=100)
+    company: str = Field(min_length=2, max_length=100)
     email: EmailStr
     subject: str
-    message: str
+    message: str = Field(min_length=10, max_length=4000)
+    business_type: str = Field(min_length=2, max_length=120)
+    repetitive_task: str = Field(min_length=10, max_length=700)
+    examples: str = Field(min_length=10, max_length=1200)
+    goal: str = Field(min_length=10, max_length=700)
+    urgency: Literal["faible", "moyen", "eleve", "urgent"]
+    consent: bool
+    company_url: str = Field(default="", max_length=200)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        v = v.strip()
-        if not v or len(v) < 2:
-            raise ValueError("Le nom doit faire au moins 2 caractères.")
-        if len(v) > 100:
-            raise ValueError("Le nom est trop long.")
-        return v
+        return " ".join(v.split())
 
     @field_validator("subject")
     @classmethod
@@ -53,57 +116,85 @@ class ContactRequest(BaseModel):
             raise ValueError(f"Sujet invalide. Valeurs acceptées: {list(SUBJECTS)}")
         return v
 
-    @field_validator("message")
+    @field_validator("consent")
     @classmethod
-    def validate_message(cls, v: str) -> str:
-        v = v.strip()
-        if not v or len(v) < 10:
-            raise ValueError("Le message doit faire au moins 10 caractères.")
-        if len(v) > 4000:
-            raise ValueError("Le message est trop long (max 4000 chars).")
-        return v
+    def validate_consent(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Le consentement est requis.")
+        return value
+
+    @field_validator("company_url")
+    @classmethod
+    def validate_honeypot(cls, value: str) -> str:
+        if value:
+            raise ValueError("Soumission invalide.")
+        return value
 
 
 @router.post("/contact")
-async def contact_form(body: ContactRequest, request: Request):
+async def contact_form(body: ContactRequest, request: Request, db: DB):
     """
-    Process contact form submission.
-    Always returns 200 to avoid enumeration.
-    Logs submission regardless of email delivery.
+    Persist a Pilot request, then send a non-canonical notification.
     """
     ip = request.client.host if request.client else "unknown"
-    subject_label = SUBJECTS.get(body.subject, body.subject)
-
     logger.info(
-        f"[contact] New message from {body.email} | subject={body.subject} | ip={ip}"
+        "[contact] New message | subject=%s | ip=%s",
+        _sanitize_log_value(body.subject),
+        _sanitize_log_value(ip),
     )
 
-    # Build admin notification email
-    html = f"""
-    <div style="font-family:sans-serif;max-width:600px">
-      <h2>Nouveau message de contact — Nanovia OS</h2>
-      <table style="width:100%;border-collapse:collapse">
-        <tr><td style="padding:8px;font-weight:bold">Nom</td><td style="padding:8px">{body.name}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Email</td><td style="padding:8px">{body.email}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">Sujet</td><td style="padding:8px">{subject_label}</td></tr>
-        <tr><td style="padding:8px;font-weight:bold">IP</td><td style="padding:8px">{ip}</td></tr>
-      </table>
-      <h3>Message:</h3>
-      <div style="background:#f5f5f5;padding:16px;border-radius:6px;white-space:pre-wrap">{body.message}</div>
-    </div>
-    """
+    pilot_request = PilotRequest(
+        name=body.name,
+        email=str(body.email).strip().lower(),
+        subject=body.subject,
+        message=body.message,
+        company=body.company,
+        business_type=body.business_type,
+        repetitive_task=body.repetitive_task,
+        examples=body.examples,
+        goal=body.goal,
+        urgency=body.urgency,
+        consented_at=datetime.now(timezone.utc),
+        status="pending",
+        fulfillment_status="new",
+        notification_status="pending",
+        client_notification_status="pending",
+        payment_notification_status="pending",
+    )
+    try:
+        db.add(pilot_request)
+        await db.commit()
+        request_id = str(pilot_request.id)
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("[contact] Pilot request persistence failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La demande ne peut pas être enregistrée pour le moment.",
+        ) from exc
+
+    # Payment remains disabled unless the live Stripe Account -> Payment Link ->
+    # Price -> Product contract is valid at the moment we would expose checkout.
+    payment_link_url = await _configured_payment_link_url()
 
     try:
-        from api.config import settings
-        admin_email = settings.RESEND_FROM_EMAIL
-        await send_email(
-            to=admin_email,
-            subject=f"[Nanovia Contact] {subject_label} — {body.name}",
-            html=html,
-        )
+        notification_result = await deliver_intake_notifications(pilot_request)
     except Exception as exc:
-        # Email delivery failure — still logged above, not a fatal error
-        logger.warning(f"[contact] Email delivery failed: {exc}")
+        logger.warning("[contact] Notification delivery failed: %s", exc)
+        notification_result = {"operator": False, "client": False}
+        pilot_request.notification_status = "failed"
+        pilot_request.client_notification_status = "failed"
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("[contact] Notification status update failed: %s", exc)
 
-    # Always return success — never reveal delivery status
-    return {"received": True, "message": "Ton message a été reçu. Nous te répondrons bientôt."}
+    return {
+        "received": True,
+        "request_id": request_id,
+        "payment_link_url": payment_link_url,
+        "notification_sent": notification_result["operator"],
+        "acknowledgement_sent": notification_result["client"],
+        "message": "Votre demande a été enregistrée.",
+    }

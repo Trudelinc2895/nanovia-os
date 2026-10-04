@@ -73,14 +73,25 @@ CREDIT_PACK = {
     "description": "Pack de 100 crédits IA — valable sans expiration",
 }
 
+# Keep this bootstrap contract aligned with the event types the runtime actually
+# knows how to process. Regression tests compare these entries with the canonical
+# Pilot contract constants in backend/api/services/pilot_stripe_contract_service.py.
 WEBHOOK_EVENTS = [
     "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
     "customer.subscription.created",
     "customer.subscription.updated",
     "customer.subscription.deleted",
     "invoice.payment_succeeded",
     "invoice.payment_failed",
     "customer.subscription.trial_will_end",
+    "charge.refunded",
+    "charge.dispute.created",
+    "charge.dispute.closed",
+    "payment_intent.canceled",
+    "refund.created",
+    "refund.updated",
 ]
 
 
@@ -205,10 +216,32 @@ def upsert_credit_pack(pack: dict) -> str:
 
 
 def setup_webhook() -> stripe.WebhookEndpoint:
+    """Create or reconcile the canonical Nanovia webhook endpoint.
+
+    Reusing an existing endpoint must not silently leave it on an obsolete event
+    contract. Preserve any operator-added events, but ensure every event required
+    by the current Nanovia runtime is subscribed. A wildcard endpoint already
+    covers the complete contract and is left untouched.
+    """
     url = f"https://{DOMAIN}/api/v1/billing/webhook"
     existing = [w for w in stripe.WebhookEndpoint.list().data if w.url == url]
     if existing:
         wh = existing[0]
+        current_events = set(getattr(wh, "enabled_events", None) or [])
+        required_events = set(WEBHOOK_EVENTS)
+        if "*" not in current_events:
+            missing_events = required_events - current_events
+            if missing_events:
+                target_events = sorted(current_events | required_events)
+                wh = stripe.WebhookEndpoint.modify(
+                    wh.id,
+                    enabled_events=target_events,
+                )
+                print(
+                    f"  [updated] webhook {wh.id} -> {url} "
+                    f"(+{len(missing_events)} required event(s))"
+                )
+                return wh
         print(f"  [exists] webhook {wh.id} -> {url}")
         return wh
     wh = stripe.WebhookEndpoint.create(

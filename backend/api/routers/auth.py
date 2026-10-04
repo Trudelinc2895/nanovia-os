@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
-from api.core.deps import CurrentUser, DB
+from api.core.deps import CurrentUser, DB, has_control_center_access, is_control_center_owner
 from api.core.data_protection import lookup_token_matches, protect_lookup_token
 from api.core.monetization._workspace import ensure_owner_workspace
 from api.core.security import (
@@ -203,7 +203,13 @@ async def refresh(request: Request, response: FastAPIResponse, db: DB, body: Ref
 
 @router.get("/me", response_model=UserPublic)
 async def me(current_user: CurrentUser):
-    return UserPublic.model_validate(current_user)
+    public = UserPublic.model_validate(current_user)
+    return public.model_copy(
+        update={
+            "is_control_center_owner": is_control_center_owner(current_user),
+            "control_center_access": has_control_center_access(current_user),
+        }
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
