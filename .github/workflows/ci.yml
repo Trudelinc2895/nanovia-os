@@ -201,6 +201,7 @@ jobs:
               git cat-file -e "${TARGET_SHA}^{commit}"
               git checkout --detach "${TARGET_SHA}"
               ensure_clean_worktree
+              export STAGING_DEPLOY_SHA="${TARGET_SHA}"
               COMPOSE_ARGS=(
                 -p nanovia-staging
                 -f infra/docker-compose.prod.yml

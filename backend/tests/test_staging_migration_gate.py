@@ -16,7 +16,7 @@ SHA = "a" * 40
 
 @pytest.mark.parametrize("failure", [
     "", "build", "multiple-heads", "wrong-image", "wrong-volume", "empty-dump",
-    "invalid-dump", "unknown-current", "upgrade",
+    "invalid-dump", "unknown-current", "upgrade", "image-changed",
 ])
 def test_staging_gate_requires_exact_image_head_and_backup_before_upgrade(tmp_path, failure):
     checkout = tmp_path / "checkout"
@@ -30,7 +30,10 @@ def test_staging_gate_requires_exact_image_head_and_backup_before_upgrade(tmp_pa
         "docker": r'''
 echo "$*" >> "$CALL_LOG"
 if [ "$1" = image ]; then
-  if [ "$FAILURE" = wrong-image ]; then echo wrong; else echo "$TARGET_SHA"; fi
+  if [ "$4" = '{{.Id}}' ]; then
+    if [ "$FAILURE" = image-changed ] && [ -f "$IMAGE_READ" ]; then echo sha256:changed; else echo sha256:test; fi
+    touch "$IMAGE_READ"
+  elif [ "$FAILURE" = wrong-image ]; then echo wrong; else echo "$TARGET_SHA"; fi
   exit 0
 fi
 if [ "$1" = inspect ]; then
@@ -41,7 +44,7 @@ while [ "$1" != .env.staging ]; do shift; done
 shift
 case "$1" in
   build) [ "$FAILURE" != build ];;
-  images) echo sha256:test;;
+  images) echo sha256:old-created-container;;
   ps) echo test-db;;
   run)
     case "${@: -1}" in
@@ -71,7 +74,7 @@ esac
         command.chmod(0o755)
     env = dict(os.environ, PATH=f"{binaries}:{os.environ['PATH']}", TARGET_ENV="staging",
                TARGET_SHA=SHA, DEPLOY_PATH=str(checkout), FAILURE=failure,
-               CALL_LOG=str(log), UPGRADED=str(tmp_path / "upgraded"))
+               CALL_LOG=str(log), UPGRADED=str(tmp_path / "upgraded"), IMAGE_READ=str(tmp_path / "image-read"))
     result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
     calls = log.read_text()
     if failure:
@@ -83,6 +86,8 @@ esac
         assert calls.index(" build ") < calls.index("alembic heads")
         assert calls.index("pg_dump") < calls.index("pg_restore --list") < calls.index("alembic upgrade")
         assert "alembic upgrade d8f5b4c3a210" in calls
+        assert " images " not in calls
+        assert f"nanovia-api-staging:{SHA}" in calls
         snapshots = list((tmp_path / ".nanovia-staging-backups").glob("*/postgres.dump"))
         assert len(snapshots) == 1
         assert snapshots[0].stat().st_mode & 0o077 == 0

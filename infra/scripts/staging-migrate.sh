@@ -8,6 +8,8 @@ umask 077
 cd "${DEPLOY_PATH}"
 [ "$(git rev-parse HEAD)" = "${TARGET_SHA}" ]
 [ -z "$(git status --porcelain --untracked-files=all)" ]
+export STAGING_DEPLOY_SHA="${TARGET_SHA}"
+IMAGE_REF="nanovia-api-staging:${TARGET_SHA}"
 COMPOSE_ARGS=(
   -p nanovia-staging
   -f infra/docker-compose.prod.yml
@@ -18,7 +20,7 @@ compose() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
 python3 scripts/validate_runtime_env.py --env-file .env.staging --target-env staging
 compose config --quiet
 compose build --build-arg "DEPLOY_SHA=${TARGET_SHA}" api
-IMAGE_ID="$(compose images -q api)"
+IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
 [ -n "${IMAGE_ID}" ] || { echo 'ERROR: missing built API image' >&2; exit 1; }
 [ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE_ID}")" = "${TARGET_SHA}" ]
 EXPECTED_ALEMBIC_HEAD=d8f5b4c3a210
@@ -48,7 +50,7 @@ printf 'commit=%s\nimage=%s\ncurrent=%s\nhead=%s\nvolume=%s\n' \
 (cd "${BACKUP_DIR}" && sha256sum manifest.txt > manifest.txt.sha256)
 # Recheck the build context and image immediately before the write.
 [ -z "$(git status --porcelain --untracked-files=all)" ]
-[ "$(compose images -q api)" = "${IMAGE_ID}" ]
+[ "$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")" = "${IMAGE_ID}" ]
 compose run --rm --no-deps api python -m alembic upgrade "${EXPECTED_ALEMBIC_HEAD}"
 CURRENT="$(compose run --rm --no-deps api python -m alembic current)"
 [ "${CURRENT}" = "${EXPECTED_ALEMBIC_HEAD} (head)" ]

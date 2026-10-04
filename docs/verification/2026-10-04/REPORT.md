@@ -15,15 +15,15 @@ Decision: NO-GO for production. Code corrections and staging synchronization are
 3. Rate limiting accepts exactly one validated forwarded IP only from the configured Caddy DNS peer. Direct callers, other containers, invalid/multiple headers and DNS failures cannot assert an identity. Uvicorn proxy-header rewriting is disabled so the TCP peer remains verifiable.
 4. Canonical Caddy replaces X-Forwarded-For with its resolved client IP. Only the official Cloudflare peer ranges may supply CF-Connecting-IP (snapshot checked against https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6 on 2026-10-04). Ranges must be rechecked during production preflight.
 5. Combined PR49 with all three missing PR46 commits and both P1 corrections without conflicts.
-6. Staging migration gate: validates runtime env, builds API with SHA label, verifies label and exactly one Alembic head, verifies isolated staging DB volume, writes private custom-format dump/checksums/manifest, validates pg_restore listing, then upgrades the explicit head and verifies current revision. API is not rebuilt after the migration. Deployment is serialized.
+6. Staging migration gate: validates runtime env, builds API with a SHA-specific staging image tag and SHA label, verifies label and exactly one Alembic head, verifies isolated staging DB volume, writes private custom-format dump/checksums/manifest, validates pg_restore listing, then upgrades the explicit head and verifies current revision. API is not rebuilt after the migration. Deployment is serialized.
 7. CI/security PR triggers now include integrate/nanovia-j21-main, allowing PR49 to validate against its actual target. Push deployment conditions remain main/staging only.
 
 ## Executed verification
 
-- Backend: `PYTHONPATH=backend python -m pytest backend/tests/ -q --tb=short` with real Docker Compose CLI available: **724 passed**, no skips, one upstream deprecation warning.
+- Backend: `PYTHONPATH=backend python -m pytest backend/tests/ -q --tb=short` with real Docker Compose CLI available: **725 passed**, no skips, one upstream deprecation warning.
 - Frontend: `npm ci`, `npm run build`: PASS (compile/types/static page generation).
 - Frontend payment-link/confirmation: `node --test tests/*.test.mts`: **7 passed**.
-- Staging gate: **9 executable simulated failure scenarios**, included in backend total. These are failure-order tests, not evidence of a real Docker build/database restore.
+- Staging gate: **10 executable simulated failure scenarios**, included in backend total. These are failure-order tests, not evidence of a real Docker build/database restore.
 - Caddy **2.8.4**: canonical config adaptation PASS. Three local runtime proxy cases PASS using a trusted loopback peer fixture: independent visitors, spoofed XFF ignored, untrusted peer cannot supply CF-Connecting-IP. This does not attest the deployed Cloudflare configuration.
 - Migration tests exercise J20 and d8f5b4c3a210 upgrade/downgrade and preservation of existing records on isolated **SQLite**. They do not prove PostgreSQL restoration or the VPS's migration graph.
 - Production backup script self-tests: 5 PASS (simulated artifacts).

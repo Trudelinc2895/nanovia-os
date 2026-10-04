@@ -8,6 +8,7 @@ services:
       - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_ADMIN_PORT:-13020}:3020"
 
   api:
+    image: nanovia-api-staging:${STAGING_DEPLOY_SHA:-development}
     ports:
       - "${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_API_PORT:-18010}:8010"
 
