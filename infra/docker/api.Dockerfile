@@ -16,6 +16,9 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+ARG DEPLOY_SHA=unknown
+LABEL org.opencontainers.image.revision=$DEPLOY_SHA
+
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends libpq5 \
     && rm -rf /var/lib/apt/lists/* \
