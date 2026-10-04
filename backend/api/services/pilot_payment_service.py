@@ -277,11 +277,19 @@ async def process_pilot_checkout_event(
         # unusual enough to require a human review before granting delivery.
         target_status = "manual_review"
     if session_payment is not None:
-        if session_payment.status in {"manual_review", "failed"} and target_status in {
-            "processing",
-            "paid",
+        if session_payment.status == "failed" and target_status in {
+            "processing", "paid", "manual_review",
         }:
-            return session_payment.status
+            return "failed"
+        if session_payment.status == "manual_review" and target_status in {
+            "processing", "paid", "manual_review",
+        }:
+            # Reconciliation must see an unpaid duplicate that later settles.
+            # Never reactivate fulfillment or overwrite a paid/refunded/disputed
+            # provider state with an older Checkout event.
+            if session_payment.payment_status != "unpaid":
+                return "manual_review"
+            target_status = "manual_review"
         if session_payment.status == "paid" and target_status in {
             "paid",
             "processing",

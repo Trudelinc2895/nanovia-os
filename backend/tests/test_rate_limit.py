@@ -288,3 +288,85 @@ async def test_live_endpoint_returns_200():
         response = await client.get("/live")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_contact_clients_behind_caddy_have_separate_rate_buckets(monkeypatch):
+    import asyncio
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from api import main as main_module
+    from api.config import settings
+
+    monkeypatch.setitem(settings.__dict__, "TRUSTED_PROXY_HOSTS_RAW", "caddy")
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(
+        return_value=[(2, 1, 6, "", ("172.19.0.2", 0))],
+    ))
+    fake_redis = MagicMock()
+    fake_redis.incr = AsyncMock(return_value=1)
+    fake_redis.expire = AsyncMock()
+    monkeypatch.setattr(main_module, "_get_redis", AsyncMock(return_value=fake_redis))
+    monkeypatch.setattr(main_module, "_shadow_banned", {})
+    monkeypatch.setattr(main_module, "_get_load_multiplier", lambda: 1.0)
+    for client_ip in ("198.51.100.10", "198.51.100.11"):
+        request = Request({
+            "type": "http", "method": "POST", "scheme": "http",
+            "server": ("test", 80), "client": ("172.19.0.2", 12345),
+            "path": "/api/v1/contact", "query_string": b"",
+            "headers": [(b"x-forwarded-for", client_ip.encode())],
+        })
+        assert (await main_module.rate_limit(
+            request, AsyncMock(return_value=Response(status_code=200)),
+        )).status_code == 200
+    keys = [call.args[0] for call in fake_redis.incr.await_args_list]
+    assert keys == [
+        "ratelimit:ip:198.51.100.10:pilot-contact",
+        "ratelimit:ip:198.51.100.11:pilot-contact",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("peer", "headers", "expected"),
+    [
+        ("172.19.0.3", [(b"x-forwarded-for", b"198.51.100.10")], "172.19.0.3"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"198.51.100.10, 198.51.100.11")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"bad-address")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"0.0.0.0")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"224.0.0.1")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"fe80::1%eth0")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"198.51.100.10"), (b"x-forwarded-for", b"198.51.100.11")], "172.19.0.2"),
+        ("172.19.0.2", [(b"x-forwarded-for", b"2001:db8::10")], "2001:db8::10"),
+    ],
+)
+async def test_forwarded_ip_requires_actual_trusted_peer_and_one_valid_address(
+    monkeypatch, peer, headers, expected,
+):
+    import asyncio
+    from starlette.requests import Request
+    from api.config import settings
+    from api.middleware.client_ip import rate_limit_client_ip
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS_RAW", "caddy")
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(
+        return_value=[(2, 1, 6, "", ("172.19.0.2", 0))],
+    ))
+    request = Request({"type": "http", "client": (peer, 12345), "headers": headers})
+    assert await rate_limit_client_ip(request) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("DNS unavailable"), TimeoutError()])
+async def test_proxy_dns_failure_never_trusts_forwarding_headers(monkeypatch, error):
+    import asyncio
+    from starlette.requests import Request
+    from api.config import settings
+    from api.middleware.client_ip import rate_limit_client_ip
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS_RAW", "caddy")
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(side_effect=error))
+    request = Request({
+        "type": "http", "client": ("172.19.0.2", 12345),
+        "headers": [(b"x-forwarded-for", b"198.51.100.10")],
+    })
+    assert await rate_limit_client_ip(request) == "172.19.0.2"

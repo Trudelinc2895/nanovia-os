@@ -96,6 +96,7 @@ services:
     expose: ["8010"]
     env_file: ${APP_RUNTIME_ENV_FILE:-../.env}
     environment:
+      TRUSTED_PROXY_HOSTS_RAW: "caddy"
       API_HOST: "0.0.0.0"
       API_PORT: "8010"
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
