@@ -201,13 +201,16 @@ async def _apply_reversal_request_status(
     request: PilotRequest,
     effective_status: str,
 ) -> None:
-    if request.status == "paid" and effective_status in {"manual_review", "failed"}:
+    if request.status in {"paid", "manual_review"} and effective_status in {
+        "manual_review", "failed",
+    }:
         other_paid_payment = await db.scalar(
             select(PilotPayment.id)
             .where(
                 PilotPayment.pilot_request_id == request.id,
                 PilotPayment.id != payment.id,
-                PilotPayment.status == "paid",
+                PilotPayment.payment_status == "paid",
+                PilotPayment.status.in_(("paid", "manual_review")),
             )
             .limit(1)
         )
@@ -274,11 +277,19 @@ async def process_pilot_checkout_event(
         # unusual enough to require a human review before granting delivery.
         target_status = "manual_review"
     if session_payment is not None:
-        if session_payment.status in {"manual_review", "failed"} and target_status in {
-            "processing",
-            "paid",
+        if session_payment.status == "failed" and target_status in {
+            "processing", "paid", "manual_review",
         }:
-            return session_payment.status
+            return "failed"
+        if session_payment.status == "manual_review" and target_status in {
+            "processing", "paid", "manual_review",
+        }:
+            # Reconciliation must see an unpaid duplicate that later settles.
+            # Never reactivate fulfillment or overwrite a paid/refunded/disputed
+            # provider state with an older Checkout event.
+            if session_payment.payment_status != "unpaid":
+                return "manual_review"
+            target_status = "manual_review"
         if session_payment.status == "paid" and target_status in {
             "paid",
             "processing",
@@ -308,23 +319,29 @@ async def process_pilot_checkout_event(
         None,
     )
     if blocking_payment is not None:
-        return await _mark_collision_manual_review(
+        await _mark_collision_manual_review(
             session_payment,
             blocking_payment,
             request,
             db,
         )
+        # A second, independently verified Checkout may have charged the buyer.
+        # Keep its own row for reconciliation while withholding fulfillment.
+        target_status = "manual_review"
 
     is_retry_after_failed_checkout = bool(other_request_payments) and all(
         _is_retryable_failed_checkout(payment)
         for payment in other_request_payments
     )
-    if session_payment is None and request.status not in OPEN_REQUEST_STATES and not (
-        request.status == "failed" and is_retry_after_failed_checkout
+    if (
+        session_payment is None
+        and blocking_payment is None
+        and request.status not in OPEN_REQUEST_STATES
+        and not (request.status == "failed" and is_retry_after_failed_checkout)
     ):
-        request.status = "manual_review"
-        await db.flush()
-        return "manual_review"
+        # A verified Checkout can settle even after an operator changed the
+        # request state. Retain its charge without granting fulfillment.
+        target_status = "manual_review"
 
     payment_status = str(stripe_field(provider_session, "payment_status") or "")
     payment = session_payment
@@ -359,7 +376,11 @@ async def process_pilot_checkout_event(
                 payment.amount_subtotal = verified.gross_amount
                 payment.status = target_status
                 payment.customer_email = verified.customer_email
-            request.status = target_status
+            request.status = (
+                _monotone_pilot_status(request.status, target_status)
+                if target_status == "manual_review"
+                else target_status
+            )
             if target_status == "paid" and request.fulfillment_status == "new":
                 request.fulfillment_status = "qualified"
             await db.flush()

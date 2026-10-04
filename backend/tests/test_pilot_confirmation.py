@@ -298,7 +298,7 @@ async def test_previous_authorized_contract_confirmation_remains_available(
                     "price_id": PREVIOUS_PRICE_ID,
                     "payment_link_id": PREVIOUS_PAYMENT_LINK_ID,
                     "payment_link_url": PREVIOUS_PAYMENT_LINK_URL,
-                    "amount_cents": 29_700,
+                    "amount_cents": 35_000,
                 }
             ]
         ),
@@ -310,6 +310,7 @@ async def test_previous_authorized_contract_confirmation_remains_available(
             payment = _payment(request=request, session_id=session_id, status="paid")
             payment.stripe_payment_link_id = PREVIOUS_PAYMENT_LINK_ID
             payment.stripe_price_id = PREVIOUS_PRICE_ID
+            payment.amount_subtotal = 35_000
             db.add_all([request, payment])
             await db.commit()
             provider_session = _stripe_session(
@@ -334,7 +335,7 @@ async def test_previous_authorized_contract_confirmation_remains_available(
                         customer_email="client@example.com",
                         payment_intent_id=f"pi_{session_id}",
                         paid=True,
-                        gross_amount=29_700,
+                        gross_amount=35_000,
                         stripe_fee_amount=1_174,
                         tax_amount=0,
                     )

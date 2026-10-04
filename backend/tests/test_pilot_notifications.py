@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from api.models.pilot import PilotRequest
+from api.models.pilot import PilotPayment, PilotRequest
 from api.services import pilot_notification_service as notifications
 
 
@@ -100,9 +101,12 @@ async def test_failed_intake_can_retry_without_changing_idempotency_keys(monkeyp
 @pytest.mark.asyncio
 async def test_paid_request_is_qualified_and_notifies_both_sides(monkeypatch):
     sent: list[str] = []
+    client_html: list[str] = []
 
     async def fake_send_email(**kwargs) -> bool:
         sent.append(str(kwargs["idempotency_key"]))
+        if kwargs["to"] == "client@example.com":
+            client_html.append(kwargs["html"])
         return True
 
     monkeypatch.setattr(notifications, "send_email", fake_send_email)
@@ -112,14 +116,38 @@ async def test_paid_request_is_qualified_and_notifies_both_sides(monkeypatch):
         "operations@nanovia.ca",
     )
     request = _request(status="paid")
+    payment = PilotPayment(
+        pilot_request_id=request.id,
+        amount_subtotal=35_000,
+        currency="cad",
+        status="paid",
+        payment_status="paid",
+    )
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(scalar_one_or_none=lambda: payment)
 
-    delivered = await notifications.deliver_payment_notifications(request)
+    delivered = await notifications.deliver_payment_notifications(request, db)
 
     assert delivered is True
     assert request.payment_notification_status == "sent"
     assert request.payment_notification_attempts == 1
     assert request.fulfillment_status == "qualified"
+    assert "350,00 $ CAD" in client_html[0]
+    assert "297" not in client_html[0]
     assert sent == [
         f"pilot-paid-operator/{request.id}",
         f"pilot-paid-client/{request.id}",
     ]
+
+
+@pytest.mark.asyncio
+async def test_payment_notification_without_a_paid_record_does_not_claim_delivery(monkeypatch):
+    send = AsyncMock(side_effect=AssertionError("No verified payment to announce"))
+    monkeypatch.setattr(notifications, "send_email", send)
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(scalar_one_or_none=lambda: None)
+    request = _request(status="paid")
+
+    assert await notifications.deliver_payment_notifications(request, db) is False
+    assert request.payment_notification_status == "failed"
+    send.assert_not_awaited()

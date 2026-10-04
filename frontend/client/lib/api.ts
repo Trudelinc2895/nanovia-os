@@ -625,6 +625,15 @@ export interface AdminPilotRequest {
     currency: string;
     created_at: string;
   } | null;
+  payments: {
+    stripe_checkout_session_id: string;
+    stripe_payment_intent_id: string | null;
+    status: string;
+    payment_status: string;
+    amount_subtotal: number | null;
+    currency: string;
+    created_at: string;
+  }[];
   created_at: string;
   updated_at: string;
   last_contacted_at: string | null;
@@ -751,13 +760,13 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>("/api/v1/admin/metrics");
 }
 
-export async function getAdminPilotRequests(): Promise<{
+export async function getAdminPilotRequests(page = 1): Promise<{
   total: number;
   page: number;
   per_page: number;
   requests: AdminPilotRequest[];
 }> {
-  return apiFetch("/api/v1/admin/pilot-requests?per_page=100");
+  return apiFetch(`/api/v1/admin/pilot-requests?page=${page}&per_page=100`);
 }
 
 export async function getAdminPilotReport(): Promise<AdminPilotReport> {
@@ -884,4 +893,3 @@ export async function createCustomModule(data: { name: string; description?: str
 export async function deleteCustomModule(id: string): Promise<void> {
   return apiFetch(`/api/v1/modules/custom/${id}`, { method: "DELETE" });
 }
-

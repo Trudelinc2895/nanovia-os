@@ -565,6 +565,11 @@ async def admin_reprocess_webhook(
     stored_event_type = stored_event.event_type
     stored_event_status = stored_event.status
     stored_event_attempt_count = stored_event.attempt_count
+    # A rolled-back replay may restore an old failure state. Never let its
+    # marker turn a concurrently completed final state back into a failure.
+    retry_marker_statuses = ("processing", "retryable_failure") + (
+        (stored_event_status,) if stored_event_status in {"failed", "pending"} else ()
+    )
 
     force = body.force if body else False
     if stored_event.status == "processing":
@@ -646,11 +651,7 @@ async def admin_reprocess_webhook(
                 stored_event_type,
                 str(exc),
                 db,
-                expected_statuses=(
-                    stored_event_status,
-                    "processing",
-                    "retryable_failure",
-                ),
+                expected_statuses=retry_marker_statuses,
                 expected_attempt_count=stored_event_attempt_count,
             )
         except Exception:
@@ -692,11 +693,7 @@ async def admin_reprocess_webhook(
                 stored_event_type,
                 str(exc),
                 db,
-                expected_statuses=(
-                    stored_event_status,
-                    "processing",
-                    "retryable_failure",
-                ),
+                expected_statuses=retry_marker_statuses,
                 expected_attempt_count=stored_event_attempt_count,
             )
         except Exception:
@@ -759,6 +756,18 @@ def _pilot_request_payload(request: PilotRequest) -> dict[str, object]:
             if latest_payment is not None
             else None
         ),
+        "payments": [
+            {
+                "stripe_checkout_session_id": payment.stripe_checkout_session_id,
+                "stripe_payment_intent_id": payment.stripe_payment_intent_id,
+                "status": payment.status,
+                "payment_status": payment.payment_status,
+                "amount_subtotal": payment.amount_subtotal,
+                "currency": payment.currency,
+                "created_at": payment.created_at.isoformat(),
+            }
+            for payment in sorted(request.payments, key=lambda item: item.created_at)
+        ],
         "created_at": request.created_at.isoformat(),
         "updated_at": request.updated_at.isoformat(),
         "last_contacted_at": (
@@ -909,7 +918,7 @@ async def admin_retry_pilot_notifications(
     pilot_request.notification_attempts = 0
     pilot_request.payment_notification_attempts = 0
     intake = await deliver_intake_notifications(pilot_request)
-    payment = await deliver_payment_notifications(pilot_request)
+    payment = await deliver_payment_notifications(pilot_request, db)
     db.add(
         AuditLog(
             user_id=admin.id,

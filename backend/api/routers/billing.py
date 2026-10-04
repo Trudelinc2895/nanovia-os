@@ -67,7 +67,6 @@ from api.services.billing_service import (
 from api.services.entitlements_service import get_effective_plan
 from api.services.module_registry import canonicalize_module_slug
 from api.services.pilot_stripe_contract_service import (
-    PILOT_AMOUNT_CENTS,
     PILOT_CURRENCY,
     PILOT_WEBHOOK_TOLERANCE_SECONDS,
     PilotStripeContractError,
@@ -176,7 +175,7 @@ async def get_pilot_confirmation(
         or payment.pilot_request_id is None
         or payment.stripe_price_id != config.price_id
         or payment.currency.lower() != PILOT_CURRENCY
-        or payment.amount_subtotal != PILOT_AMOUNT_CENTS
+        or payment.amount_subtotal != config.amount_cents
         or payment.livemode != config.livemode
     ):
         return PilotConfirmationResponse(status="manual_review")

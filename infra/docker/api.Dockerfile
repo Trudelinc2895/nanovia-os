@@ -16,6 +16,9 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+ARG DEPLOY_SHA=unknown
+LABEL org.opencontainers.image.revision=$DEPLOY_SHA
+
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends libpq5 \
     && rm -rf /var/lib/apt/lists/* \
@@ -34,4 +37,4 @@ USER appuser
 
 EXPOSE 8010
 
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "2"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "2", "--no-proxy-headers"]

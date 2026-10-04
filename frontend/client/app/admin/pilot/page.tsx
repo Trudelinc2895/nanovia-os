@@ -47,6 +47,8 @@ function notificationFailed(request: AdminPilotRequest): boolean {
 
 export default function AdminPilotPage() {
   const [requests, setRequests] = useState<AdminPilotRequest[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [report, setReport] = useState<AdminPilotReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,17 +59,18 @@ export default function AdminPilotPage() {
     setError(null);
     try {
       const [requestResult, reportResult] = await Promise.all([
-        getAdminPilotRequests(),
+        getAdminPilotRequests(page),
         getAdminPilotReport(),
       ]);
       setRequests(requestResult.requests);
+      setTotalPages(Math.max(1, Math.ceil(requestResult.total / requestResult.per_page)));
       setReport(reportResult);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Chargement impossible.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     void load();
@@ -156,6 +159,11 @@ export default function AdminPilotPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          <nav aria-label="Pages des demandes Pilot" className="flex items-center justify-between text-sm text-gray-300">
+            <button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)} className="rounded-lg border border-gray-700 px-3 py-2 disabled:opacity-50">Précédent</button>
+            <span>Page {page} sur {totalPages}</span>
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)} className="rounded-lg border border-gray-700 px-3 py-2 disabled:opacity-50">Suivant</button>
+          </nav>
           {orderedRequests.map((request) => (
             <article key={request.id} className="rounded-xl border border-gray-800 bg-gray-900 p-5">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -170,6 +178,11 @@ export default function AdminPilotPage() {
                     <span className="rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-300">
                       Paiement : {request.status}
                     </span>
+                    {request.payments.length > 1 && (
+                      <span className="rounded-full bg-amber-950 px-2.5 py-1 text-xs text-amber-200">
+                        {request.payments.length} tentatives — rapprochement requis
+                      </span>
+                    )}
                     {notificationFailed(request) && (
                       <span className="rounded-full bg-red-950 px-2.5 py-1 text-xs text-red-300">
                         Notification à reprendre
@@ -218,6 +231,18 @@ export default function AdminPilotPage() {
                   <div><dt className="text-gray-500">Exemples</dt><dd className="whitespace-pre-wrap text-gray-200">{request.examples || "—"}</dd></div>
                   <div><dt className="text-gray-500">Notification opérateur</dt><dd className="text-gray-200">{request.notification_status}</dd></div>
                   <div><dt className="text-gray-500">Accusé client</dt><dd className="text-gray-200">{request.client_notification_status}</dd></div>
+                  <div className="md:col-span-2">
+                    <dt className="text-gray-500">Paiements Stripe ({request.payments.length})</dt>
+                    <dd className="mt-2 space-y-2">
+                      {request.payments.map((payment) => (
+                        <div key={payment.stripe_checkout_session_id} className="break-all rounded-lg border border-gray-700 bg-gray-800 p-3 text-gray-200">
+                          <p>{payment.status} · Stripe : {payment.payment_status} · {payment.amount_subtotal === null ? "Montant inconnu" : `${(payment.amount_subtotal / 100).toFixed(2)} ${payment.currency.toUpperCase()}`}</p>
+                          <p className="font-mono text-xs">Session : {payment.stripe_checkout_session_id}</p>
+                          <p className="font-mono text-xs">Intention : {payment.stripe_payment_intent_id || "en attente"}</p>
+                        </div>
+                      ))}
+                    </dd>
+                  </div>
                 </dl>
               </details>
             </article>

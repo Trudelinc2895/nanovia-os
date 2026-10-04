@@ -1444,8 +1444,11 @@ async def test_paid_retry_does_not_supersede_non_retryable_attempt(
                 "failed" if existing_status == "failed" else "manual_review"
             )
             assert result == "manual_review"
-            assert len(payments) == 1
-            assert payments[0].stripe_checkout_session_id == "cs_existing_attempt"
+            assert len(payments) == 2
+            assert {p.stripe_checkout_session_id for p in payments} == {
+                "cs_existing_attempt", "cs_blocked_retry",
+            }
+            assert next(p for p in payments if p.stripe_checkout_session_id == "cs_blocked_retry").status == "manual_review"
             assert original_payment.status == expected_status
             assert pilot_request.status == expected_status
 
@@ -1525,6 +1528,64 @@ async def test_two_event_ids_for_same_session_keep_one_payment(
             assert payment_count == 1
             assert len(events) == 2
             assert all(event.status == "processed" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_second_paid_session_is_persisted_for_manual_reconciliation(
+    monkeypatch,
+    tmp_path,
+):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "two_paid_sessions") as sessions:
+        async with sessions() as db:
+            request = await _add_request(db)
+            first = _valid_session(
+                session_id="cs_first_charge",
+                payment_intent_id="pi_first_charge",
+                request_id=request.id,
+            )
+            second = _valid_session(
+                session_id="cs_second_charge",
+                payment_intent_id="pi_second_charge",
+                request_id=request.id,
+            )
+
+            assert (await handle_stripe_webhook(
+                "evt_first_charge", "checkout.session.completed", first, db,
+            ))["status"] == "paid"
+            assert (await handle_stripe_webhook(
+                "evt_second_charge", "checkout.session.completed", second, db,
+            ))["status"] == "manual_review"
+
+            payments = (await db.execute(
+                select(PilotPayment).order_by(PilotPayment.stripe_checkout_session_id)
+            )).scalars().all()
+            event = await db.scalar(select(WebhookEvent).where(
+                WebhookEvent.stripe_event_id == "evt_second_charge"
+            ))
+            await db.refresh(request)
+            assert len(payments) == 2
+            assert {p.stripe_checkout_session_id for p in payments} == {
+                "cs_first_charge", "cs_second_charge",
+            }
+            assert {p.stripe_payment_intent_id for p in payments} == {
+                "pi_first_charge", "pi_second_charge",
+            }
+            assert all(p.status == "manual_review" for p in payments)
+            assert all(p.payment_status == "paid" for p in payments)
+            assert request.status == "manual_review"
+            assert event is not None and event.status == "processed"
+            operations = await admin_router.admin_list_pilot_requests(
+                SimpleNamespace(id=uuid.uuid4()), db,
+            )
+            assert {p["stripe_checkout_session_id"] for p in operations["requests"][0]["payments"]} == {
+                "cs_first_charge", "cs_second_charge",
+            }
+
+            assert (await handle_stripe_webhook(
+                "evt_second_charge", "checkout.session.completed", second, db,
+            ))["status"] == "duplicate"
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 2
 
 
 def _reversal_object(
@@ -1709,6 +1770,43 @@ async def test_refund_dispute_and_cancellation_never_leave_pilot_paid(
             assert persisted_request.status == expected_status
             assert persisted_payment.status != "paid"
             verifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refunding_one_duplicate_charge_keeps_other_charge_in_review(
+    monkeypatch,
+    tmp_path,
+):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "duplicate_partial_reconciliation") as sessions:
+        async with sessions() as db:
+            request = await _add_request(db)
+            first = _valid_session(
+                session_id="cs_reversal", payment_intent_id="pi_reversal",
+                request_id=request.id,
+            )
+            second = _valid_session(
+                session_id="cs_other_paid", payment_intent_id="pi_other_paid",
+                request_id=request.id,
+            )
+            assert (await handle_stripe_webhook(
+                "evt_first_paid", "checkout.session.completed", first, db,
+            ))["status"] == "paid"
+            assert (await handle_stripe_webhook(
+                "evt_other_paid", "checkout.session.completed", second, db,
+            ))["status"] == "manual_review"
+
+            refund = _reversal_object("charge.refunded")
+            _install_reversal_verification(monkeypatch, refund)
+            assert (await handle_stripe_webhook(
+                "evt_first_refunded", "charge.refunded", refund, db,
+            ))["status"] == "failed"
+
+            await db.refresh(request)
+            payments = (await db.execute(select(PilotPayment))).scalars().all()
+            assert request.status == "manual_review"
+            assert {p.payment_status for p in payments} == {"refunded", "paid"}
+            assert next(p for p in payments if p.payment_status == "paid").status == "manual_review"
 
 
 @pytest.mark.asyncio
@@ -4702,3 +4800,52 @@ async def test_atomic_claim_prevents_second_worker_from_processing(
         assert first_claim == WEBHOOK_CLAIMED
         assert second_claim == WEBHOOK_IN_PROGRESS
         assert event_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_email", ["client@example.com", "billing@example.com"])
+async def test_delayed_second_checkout_updates_provider_state_without_fulfillment(
+    monkeypatch, tmp_path, billing_email,
+):
+    _install_line_items(monkeypatch)
+    async with _isolated_database(tmp_path, "delayed_duplicate") as sessions:
+        async with sessions() as db:
+            request = await _add_request(db)
+            first = _valid_session(
+                request_id=request.id, session_id="cs_first_delayed_duplicate",
+                payment_intent_id="pi_first_delayed_duplicate",
+            )
+            second = _valid_session(
+                request_id=request.id, session_id="cs_second_delayed_duplicate",
+                payment_intent_id="pi_second_delayed_duplicate",
+                payment_status="unpaid", email=billing_email,
+            )
+            assert (await handle_stripe_webhook(
+                "evt_first_delayed_duplicate", "checkout.session.completed", first, db,
+            ))["status"] == "paid"
+            assert (await handle_stripe_webhook(
+                "evt_second_pending", "checkout.session.completed", second, db,
+            ))["status"] == "manual_review"
+            before_fulfillment = request.fulfillment_status
+            second["payment_status"] = "paid"
+            assert (await handle_stripe_webhook(
+                "evt_second_settled", "checkout.session.async_payment_succeeded", second, db,
+            ))["status"] == "manual_review"
+            payment = await db.scalar(select(PilotPayment).where(
+                PilotPayment.stripe_checkout_session_id == second["id"]
+            ))
+            assert payment.payment_status == "paid"
+            assert payment.stripe_event_id == "evt_second_settled"
+            assert payment.status == request.status == "manual_review"
+            assert request.fulfillment_status == before_fulfillment
+            # An older completed event must not revert the settled charge to unpaid.
+            stale = dict(second, payment_status="unpaid")
+            await handle_stripe_webhook(
+                "evt_second_stale", "checkout.session.completed", stale, db,
+            )
+            assert payment.payment_status == "paid"
+            assert payment.stripe_event_id == "evt_second_settled"
+            assert await db.scalar(select(func.count()).select_from(PilotPayment)) == 2
+            assert (await handle_stripe_webhook(
+                "evt_second_settled", "checkout.session.async_payment_succeeded", second, db,
+            ))["status"] == "duplicate"

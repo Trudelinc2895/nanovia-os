@@ -72,16 +72,21 @@ export default function ContactPage() {
     }
 
     if (
-      !form.name.trim() ||
-      !form.company.trim() ||
-      !form.businessType.trim() ||
+      form.name.trim().length < 2 ||
+      form.company.trim().length < 2 ||
+      form.businessType.trim().length < 2 ||
       !form.repetitiveTask.trim() ||
       !form.examples.trim() ||
       !form.goal.trim() ||
       !form.urgency.trim() ||
       !form.consent
     ) {
-      setError("Remplissez tous les champs requis et confirmez votre consentement.");
+      setError("Remplissez les champs requis (au moins 2 caractères pour le nom, l’entreprise et l’activité) et confirmez votre consentement.");
+      return;
+    }
+
+    if ([form.repetitiveTask, form.examples, form.goal].some((value) => value.trim().length < 10)) {
+      setError("Décrivez la tâche, les exemples et l’objectif avec au moins 10 caractères chacun.");
       return;
     }
 
@@ -227,6 +232,7 @@ export default function ContactPage() {
                   id="pilot-name"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={100}
                   value={form.name}
                   onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
@@ -240,6 +246,7 @@ export default function ContactPage() {
                   id="pilot-company"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={100}
                   value={form.company}
                   onChange={(e) => setForm((current) => ({ ...current, company: e.target.value }))}
@@ -269,6 +276,7 @@ export default function ContactPage() {
                   id="pilot-business-type"
                   type="text"
                   required
+                  minLength={2}
                   maxLength={120}
                   value={form.businessType}
                   onChange={(e) => setForm((current) => ({ ...current, businessType: e.target.value }))}
@@ -283,6 +291,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-task"
                 required
+                minLength={10}
                 maxLength={700}
                 rows={3}
                 value={form.repetitiveTask}
@@ -297,6 +306,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-examples"
                 required
+                minLength={10}
                 maxLength={1200}
                 rows={4}
                 value={form.examples}
@@ -311,6 +321,7 @@ export default function ContactPage() {
               <textarea
                 id="pilot-goal"
                 required
+                minLength={10}
                 maxLength={700}
                 rows={3}
                 value={form.goal}

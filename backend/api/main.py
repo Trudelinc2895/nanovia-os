@@ -38,6 +38,7 @@ from api.routers import team
 from api.routers import scrape
 from api.scraping.worker import run_worker_forever
 from api.middleware.body_limit import BodySizeLimitMiddleware
+from api.middleware.client_ip import rate_limit_client_ip
 # Import models so Base knows about them before create_all
 import api.models  # noqa: F401
 
@@ -464,7 +465,7 @@ async def rate_limit(request: Request, call_next) -> Response:
     ):
         return await call_next(request)
 
-    ip = (request.client.host if request.client else "unknown").replace(":", "_")
+    ip = (await rate_limit_client_ip(request)).replace(":", "_")
     user_id = _extract_sub(request.headers.get("authorization"))
 
     # Shadow-ban check

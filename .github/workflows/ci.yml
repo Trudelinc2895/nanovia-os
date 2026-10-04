@@ -114,6 +114,9 @@ jobs:
     needs: [docker-build-scan]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     environment: staging
+    concurrency:
+      group: nanovia-staging-deploy
+      cancel-in-progress: false
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
@@ -207,10 +210,9 @@ jobs:
               docker compose "${COMPOSE_ARGS[@]}" up -d postgres redis
               wait_for_healthy postgres
               wait_for_healthy redis
-              docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic upgrade head
-              docker compose "${COMPOSE_ARGS[@]}" run --rm api python -m alembic heads \
-                | grep -Fq 'd8f5b4c3a210 (head)'
-              docker compose "${COMPOSE_ARGS[@]}" up -d --build --force-recreate \
+              bash infra/scripts/staging-migrate.sh
+              docker compose "${COMPOSE_ARGS[@]}" build web admin ai-orchestrator
+              docker compose "${COMPOSE_ARGS[@]}" up -d --no-build --force-recreate \
                 web admin api ai-orchestrator
               WEB_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port web 3000 | tail -n 1)"
               ADMIN_ADDR="$(docker compose "${COMPOSE_ARGS[@]}" port admin 3020 | tail -n 1)"

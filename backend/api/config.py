@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     ACME_EMAIL: str = "admin@nanovia.ca"
     PUBLIC_IP: str = ""
 
+    # Only these explicitly configured proxy hosts may assert a client IP.
+    TRUSTED_PROXY_HOSTS_RAW: str = ""
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8010
     ADMIN_PORT: int = 3020
